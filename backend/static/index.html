@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radar de Licitações</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
+    --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--txt);font-size:14px}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:14px;background:var(--panel)}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
+    padding:2px 8px;border-radius:20px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .kpi .n{font-size:24px;font-weight:700}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
+  nav{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+  nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
+    padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
+  nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  select,input,textarea{background:var(--panel2);border:1px solid var(--line);
+    color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
+  .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
+    border-radius:7px;cursor:pointer;font-size:13px}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px;margin-bottom:12px}
+  .ed-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase}
+  .pill.forte{background:rgba(34,197,94,.15);color:var(--forte)}
+  .pill.medio{background:rgba(234,179,8,.15);color:var(--medio)}
+  .pill.fraco{background:rgba(100,116,139,.15);color:var(--fraco)}
+  .ed-meta{color:var(--muted);font-size:12px;margin:8px 0;display:flex;gap:14px;flex-wrap:wrap}
+  .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
+  .prazo{font-weight:600}
+  .prazo.urg{color:#f87171}
+  .acoes{display:flex;gap:8px;margin-top:10px;align-items:center}
+  .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  .muted{color:var(--muted)}
+  .hidden{display:none}
+  .det{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .field{margin-bottom:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>📡 Radar de Licitações</h1>
+  <span class="badge">PNCP + Lei 14.133/2021</span>
+  <span style="flex:1"></span>
+  <button class="btn" onclick="coletar()">▶ Coletar agora</button>
+</header>
+
+<div class="wrap">
+  <div class="kpis" id="kpis"></div>
+
+  <nav>
+    <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
+    <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+    <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+    <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+  </nav>
+
+  <!-- EDITAIS -->
+  <section id="t-editais">
+    <div class="toolbar">
+      <select id="f-nivel" onchange="loadEditais()">
+        <option value="">Todos os níveis</option>
+        <option value="forte">Forte</option>
+        <option value="medio">Médio</option>
+        <option value="fraco">Fraco</option>
+      </select>
+      <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
+             oninput="this.value=this.value.toUpperCase()">
+      <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
+        <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
+      </label>
+      <span style="flex:1"></span>
+      <a class="btn ghost" href="/api/export.csv" download>⬇ Exportar CSV</a>
+    </div>
+    <div id="lista-editais"></div>
+  </section>
+
+  <!-- CATALOGO -->
+  <section id="t-catalogo" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Cadastrar produto/serviço</h3>
+      <div class="field"><label>Descrição</label>
+        <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
+      <div class="grid2">
+        <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
+        <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
+        <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%"></div>
+        <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%"></div>
+      </div>
+
+      <div class="field" style="background:var(--panel2);padding:12px;border-radius:8px">
+        <label>🔍 Buscar código no catálogo oficial (Compras.gov.br)</label>
+        <div class="toolbar" style="margin-bottom:8px">
+          <input id="cat-termo" placeholder="ex: papel A4 75g branco" style="flex:1;min-width:200px">
+          <select id="cat-tipo">
+            <option value="material">CATMAT (material)</option>
+            <option value="servico">CATSER (serviço)</option>
+          </select>
+          <button class="btn ghost" onclick="buscarCatmat()">Buscar</button>
+        </div>
+        <div id="cat-resultados" class="muted" style="font-size:12px">Digite uma descrição e clique em Buscar para encontrar o código oficial.</div>
+      </div>
+
+      <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
+        <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
+      <button class="btn" onclick="salvarProduto()">Salvar produto</button>
+    </div>
+    <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
+      <th>Palavras-chave</th><th></th></tr></thead>
+      <tbody id="lista-produtos"></tbody></table>
+  </section>
+
+  <!-- REGRAS -->
+  <section id="t-regras" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Nova regra de exclusão</h3>
+      <div class="toolbar">
+        <select id="r-tipo">
+          <option value="termo">Termo no objeto/item</option>
+          <option value="categoria">Categoria PNCP (código)</option>
+        </select>
+        <input id="r-valor" placeholder="ex: engenharia  (ou 9 p/ Serv. Engenharia)" style="width:320px">
+        <button class="btn" onclick="salvarRegra()">Adicionar</button>
+      </div>
+      <p class="muted">Editais que contenham o termo, ou cuja categoria PNCP esteja na lista, são ignorados na coleta.</p>
+    </div>
+    <table><thead><tr><th>Tipo</th><th>Valor</th><th></th></tr></thead>
+      <tbody id="lista-regras"></tbody></table>
+  </section>
+
+  <!-- LOGS -->
+  <section id="t-logs" class="hidden">
+    <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
+      <th>Vistos</th><th>Novos</th><th>Fortes</th><th>Erro</th></tr></thead>
+      <tbody id="lista-logs"></tbody></table>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (u,o)=>fetch(u,o).then(r=>r.json());
+
+function tab(name){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  ['editais','catalogo','regras','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  if(name==='catalogo') loadProdutos();
+  if(name==='regras') loadRegras();
+  if(name==='logs') loadLogs();
+}
+
+async function loadResumo(){
+  const r = await api('/api/resumo');
+  $('#kpis').innerHTML = [
+    ['Editais',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
+    ['Não lidos',r.nao_lidos],['Produtos',r.produtos]
+  ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+}
+
+function fmtMoeda(v){ if(v==null) return '—';
+  return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
+
+async function loadEditais(){
+  const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
+        nl=$('#f-naolidos').checked;
+  const qs=new URLSearchParams();
+  if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
+  if(nl)qs.set('apenas_nao_lidos','true');
+  const eds = await api('/api/editais?'+qs);
+  if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
+  $('#lista-editais').innerHTML = eds.map(e=>{
+    const urg = e.dias_restantes!=null && e.dias_restantes<=5;
+    const prazo = e.dias_restantes==null?'prazo n/d':
+      (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+    const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
+      `• [${d.score_item}] ${d.descricao_item} → ${d.produto||'?'} (${d.motivo})`).join('<br>');
+    return `<div class="card">
+      <div class="ed-top">
+        <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
+        <span class="pill ${e.nivel}">${e.nivel} · ${e.score}</span>
+      </div>
+      <div class="ed-obj">${e.objeto||''}</div>
+      <div class="ed-meta">
+        <span>${e.modalidade||''}</span>
+        <span>${e.municipio||''}/${e.uf||''}</span>
+        <span>${fmtMoeda(e.valor_estimado)}</span>
+        <span>${e.itens_compativeis} item(ns) compatível(eis)</span>
+        <span class="prazo ${urg?'urg':''}">${prazo}</span>
+      </div>
+      ${det?`<div class="det">${det}</div>`:''}
+      <div class="acoes">
+        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ↗</a>`:''}
+        <span style="flex:1"></span>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?'✓ lido':'marcar lido'}</button>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?'★ interessante':'☆ interessante'}</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function marcar(id,campo,val){
+  await api(`/api/editais/${id}/marcar`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[campo]:val})});
+  loadEditais(); loadResumo();
+}
+
+async function loadProdutos(){
+  const ps=await api('/api/produtos');
+  $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
+    <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
+    <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
+    <td><button class="btn ghost" onclick="delProduto(${p.id})">excluir</button></td></tr>`).join('');
+}
+async function salvarProduto(){
+  const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
+    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value};
+  if(!body.descricao){alert('Informe a descrição');return;}
+  await api('/api/produtos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw'].forEach(i=>$('#'+i).value='');
+  loadProdutos(); loadResumo();
+}
+async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
+
+async function buscarCatmat(){
+  const termo=$('#cat-termo').value.trim(), tipo=$('#cat-tipo').value;
+  const box=$('#cat-resultados');
+  if(termo.length<2){ box.textContent='Digite ao menos 2 caracteres.'; return; }
+  box.textContent='Buscando no catálogo oficial...';
+  try{
+    const r=await api('/api/catmat?'+new URLSearchParams({descricao:termo,tipo:tipo}));
+    if(!r.resultados || !r.resultados.length){
+      box.innerHTML='Nenhum item encontrado. Tente termos mais genéricos (ex.: só "papel A4").';
+      return;
+    }
+    const campo = tipo==='material' ? 'p-catmat' : 'p-catser';
+    box.innerHTML = r.resultados.slice(0,15).map(it=>{
+      const inativo = it.ativo===false ? ' <span style="color:#f87171">(inativo)</span>' : '';
+      const desc = (it.descricao||'').replace(/'/g,'’');
+      return `<div style="padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start">
+        <button class="btn ghost" style="padding:3px 9px;white-space:nowrap"
+          onclick="aplicarCodigo('${campo}','${it.codigo}','${desc}')">usar ${it.codigo}</button>
+        <span style="flex:1;color:var(--txt)">${it.descricao}${inativo}
+          <span class="muted"> · ${it.classe||''} · un: ${it.unidade||'—'} · rel ${it.relevancia}</span></span>
+      </div>`;
+    }).join('');
+  }catch(e){ box.textContent='Erro ao consultar o catálogo. Verifique a conexão.'; }
+}
+
+function aplicarCodigo(campo, codigo, descricao){
+  $('#'+campo).value=codigo;
+  if(!$('#p-desc').value) $('#p-desc').value=descricao;
+  $('#cat-resultados').innerHTML=`✓ Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
+}
+
+async function loadRegras(){
+  const rs=await api('/api/regras');
+  $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${r.tipo}</td><td>${r.valor}</td>
+    <td><button class="btn ghost" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
+    ||'<tr><td colspan=3 class="muted">Nenhuma regra.</td></tr>';
+}
+async function salvarRegra(){
+  const body={tipo:$('#r-tipo').value,valor:$('#r-valor').value};
+  if(!body.valor){alert('Informe o valor');return;}
+  await api('/api/regras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#r-valor').value=''; loadRegras();
+}
+async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras(); }
+
+async function loadLogs(){
+  const ls=await api('/api/logs');
+  $('#lista-logs').innerHTML=ls.map(l=>`<tr>
+    <td>${l.fonte}</td><td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
+    <td>${(l.finalizado_em||'—').replace('T',' ').slice(0,16)}</td>
+    <td>${l.editais_vistos}</td><td>${l.editais_novos}</td><td>${l.matches_fortes}</td>
+    <td class="muted">${l.erro||''}</td></tr>`).join('')
+    ||'<tr><td colspan=7 class="muted">Sem coletas ainda.</td></tr>';
+}
+
+async function coletar(){
+  await api('/api/coletar',{method:'POST'});
+  alert('Coleta iniciada em segundo plano. Atualize em alguns minutos.');
+}
+
+loadResumo(); loadEditais();
+setInterval(loadResumo, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+name: Coleta diária de licitações
+
+# Roda todo dia às 09:00 UTC = 06:00 no horário de Brasília.
+# Também pode ser disparada manualmente pelo botão "Run workflow".
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  coleta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r backend/requirements.txt
+
+      - name: Rodar coleta
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PNCP_MODALIDADES: "6,8,9,4"
+          PNCP_UFS: "PR,SP"
+          PNCP_HORIZONTE_DIAS: "30"
+          NOTIFICAR_NIVEL_MINIMO: "forte"
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          NOTIFICAR_EMAIL: ${{ secrets.NOTIFICAR_EMAIL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m scripts.primeira_coleta
