@@ -10,7 +10,7 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: free                      # free dorme após 15 min ocioso (cold start ~30s)
-    dockerCommand: sh -c "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    # O comando de start vem do CMD do Dockerfile (já lê a porta do Render via $PORT).
     envVars:
       # cole a string de conexão do Supabase no painel (Environment) — fica secreta
       - key: DATABASE_URL
