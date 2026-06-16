@@ -152,7 +152,7 @@
   <!-- CATALOGO -->
   <section id="t-catalogo" class="hidden">
     <div class="card">
-      <h3 style="margin-top:0">Cadastrar produto/serviço</h3>
+      <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
       <div class="field"><label>Descrição</label>
         <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
       <div class="grid2">
@@ -193,7 +193,8 @@
       <div class="field"><label>Site do fornecedor</label>
         <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
 
-      <button class="btn" onclick="salvarProduto()">Salvar produto</button>
+      <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
+      <button class="btn ghost hidden" onclick="cancelarEdicao()" id="btn-cancelar-prod">Cancelar edição</button>
     </div>
     <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
       <th>Palavras-chave</th><th></th></tr></thead>
@@ -299,8 +300,13 @@ async function loadProdutos(){
   $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
     <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
     <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
-    <td><button class="btn ghost" onclick="delProduto(${p.id})">excluir</button></td></tr>`).join('');
+    <td style="white-space:nowrap">
+      <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
+      <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
+    </td></tr>`).join('');
 }
+let editandoId = null;
+
 async function salvarProduto(){
   const num = id => { const v=$('#'+id).value.trim(); return v===''?null:parseFloat(v.replace(',','.')); };
   const txt = id => $('#'+id).value.trim()||null;
@@ -309,9 +315,34 @@ async function salvarProduto(){
     preco_custo:num('p-custo'), preco_venda:num('p-venda'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site')};
   if(!body.descricao){alert('Informe a descrição');return;}
-  await api('/api/produtos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
+  const metodo = editandoId ? 'PUT' : 'POST';
+  await api(url,{method:metodo,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  cancelarEdicao();
   loadProdutos(); loadResumo();
+}
+
+async function editarProduto(id){
+  const p = await api('/api/produtos/'+id);
+  const set=(campo,val)=>$('#'+campo).value = (val==null?'':val);
+  set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
+  set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
+  set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
+  set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
+  editandoId = id;
+  $('#form-titulo').textContent = 'Editar produto';
+  $('#btn-salvar-prod').textContent = 'Salvar alterações';
+  $('#btn-cancelar-prod').classList.remove('hidden');
+  $('#cat-resultados').innerHTML='Digite uma descrição e clique em Buscar para encontrar o código oficial.';
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function cancelarEdicao(){
+  editandoId = null;
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  $('#form-titulo').textContent = 'Cadastrar produto/serviço';
+  $('#btn-salvar-prod').textContent = 'Salvar produto';
+  $('#btn-cancelar-prod').classList.add('hidden');
 }
 async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
 

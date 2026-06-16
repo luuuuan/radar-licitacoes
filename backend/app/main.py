@@ -81,17 +81,29 @@ class MarcarIn(BaseModel):
 
 
 # --------------------------- Produtos --------------------------------- #
-@app.get("/api/produtos")
-def listar_produtos(db: Session = Depends(get_session)):
-    produtos = db.execute(select(Produto).order_by(Produto.id.desc())).scalars().all()
-    return [{
+def _produto_dict(p: Produto) -> dict:
+    return {
         "id": p.id, "descricao": p.descricao, "ncm": p.ncm, "cest": p.cest,
         "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
         "palavras_chave": p.palavras_chave, "ativo": p.ativo,
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
         "fornecedor_site": p.fornecedor_site,
-    } for p in produtos]
+    }
+
+
+@app.get("/api/produtos")
+def listar_produtos(db: Session = Depends(get_session)):
+    produtos = db.execute(select(Produto).order_by(Produto.id.desc())).scalars().all()
+    return [_produto_dict(p) for p in produtos]
+
+
+@app.get("/api/produtos/{produto_id}")
+def obter_produto(produto_id: int, db: Session = Depends(get_session)):
+    p = db.get(Produto, produto_id)
+    if not p:
+        raise HTTPException(404, "Produto não encontrado")
+    return _produto_dict(p)
 
 
 @app.post("/api/produtos")
@@ -101,6 +113,17 @@ def criar_produto(dados: ProdutoIn, db: Session = Depends(get_session)):
     db.commit()
     db.refresh(p)
     return {"id": p.id}
+
+
+@app.put("/api/produtos/{produto_id}")
+def atualizar_produto(produto_id: int, dados: ProdutoIn, db: Session = Depends(get_session)):
+    p = db.get(Produto, produto_id)
+    if not p:
+        raise HTTPException(404, "Produto não encontrado")
+    for campo, valor in dados.model_dump().items():
+        setattr(p, campo, valor)
+    db.commit()
+    return {"ok": True, "id": p.id}
 
 
 @app.delete("/api/produtos/{produto_id}")
