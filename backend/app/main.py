@@ -18,7 +18,7 @@ Rotas principais:
 import csv
 import io
 import os
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
@@ -180,6 +180,42 @@ def _rodar_coleta_bg():
 def coletar_agora(bg: BackgroundTasks):
     bg.add_task(_rodar_coleta_bg)
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
+
+
+@app.get("/api/coleta/status")
+def coleta_status(db: Session = Depends(get_session)):
+    """Estado da coleta para o indicador do dashboard."""
+    ultimo = db.execute(
+        select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
+    ).scalar_one_or_none()
+    if not ultimo:
+        return {"estado": "nunca"}
+
+    agora = datetime.utcnow()
+    em_andamento = ultimo.finalizado_em is None
+    travado = False
+    if em_andamento and ultimo.iniciado_em:
+        if (agora - ultimo.iniciado_em).total_seconds() > 1800:  # >30 min sem terminar
+            em_andamento, travado = False, True
+
+    # última coleta concluída (pode ser anterior à que está rodando)
+    ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
+        select(LogColeta).where(LogColeta.finalizado_em.is_not(None))
+        .order_by(LogColeta.id.desc()).limit(1)
+    ).scalar_one_or_none()
+
+    estado = "em_andamento" if em_andamento else ("travado" if travado else "ocioso")
+    return {
+        "estado": estado,
+        "iniciada_ha_seg": int((agora - ultimo.iniciado_em).total_seconds())
+            if em_andamento and ultimo.iniciado_em else None,
+        "ultima_fim_seg": int((agora - ultima_ok.finalizado_em).total_seconds())
+            if ultima_ok and ultima_ok.finalizado_em else None,
+        "novos": ultima_ok.editais_novos if ultima_ok else None,
+        "vistos": ultima_ok.editais_vistos if ultima_ok else None,
+        "fortes": ultima_ok.matches_fortes if ultima_ok else None,
+        "erro": ultima_ok.erro if ultima_ok else None,
+    }
 
 
 @app.get("/api/logs")

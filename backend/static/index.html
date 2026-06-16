@@ -62,6 +62,7 @@
   <h1>📡 Radar de Licitações</h1>
   <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
+  <span id="coleta-status" class="badge">—</span>
   <button class="btn" onclick="coletar()">▶ Coletar agora</button>
 </header>
 
@@ -307,13 +308,48 @@ async function loadLogs(){
     ||'<tr><td colspan=7 class="muted">Sem coletas ainda.</td></tr>';
 }
 
-async function coletar(){
-  await api('/api/coletar',{method:'POST'});
-  alert('Coleta iniciada em segundo plano. Atualize em alguns minutos.');
+function haTempo(seg){
+  if(seg==null) return '';
+  if(seg<60) return 'há instantes';
+  if(seg<3600) return `há ${Math.floor(seg/60)} min`;
+  if(seg<86400) return `há ${Math.floor(seg/3600)} h`;
+  return `há ${Math.floor(seg/86400)} d`;
 }
 
-loadResumo(); loadEditais();
-setInterval(loadResumo, 60000);
+async function loadColetaStatus(){
+  const el=$('#coleta-status');
+  try{
+    const s=await api('/api/coleta/status');
+    if(s.estado==='em_andamento'){
+      el.innerHTML='⏳ Coletando agora...'; el.style.color='var(--medio)';
+    } else if(s.estado==='nunca'){
+      el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
+    } else if(s.estado==='travado'){
+      el.textContent='⚠ Última coleta não finalizou'; el.style.color='#f87171';
+    } else if(s.erro){
+      el.textContent='⚠ Erro na última coleta'; el.style.color='#f87171';
+    } else {
+      const r = s.novos!=null ? ` · ${s.novos} novos` : '';
+      el.textContent=`Última coleta ${haTempo(s.ultima_fim_seg)}${r}`;
+      el.style.color='var(--muted)';
+    }
+  }catch(e){}
+}
+
+async function coletar(){
+  await api('/api/coletar',{method:'POST'});
+  const el=$('#coleta-status');
+  el.innerHTML='⏳ Coletando agora...'; el.style.color='var(--medio)';
+  // acompanha de perto por alguns minutos, depois volta ao ritmo normal
+  let n=0;
+  const t=setInterval(async()=>{
+    await loadColetaStatus(); loadResumo();
+    if(++n>45) clearInterval(t);     // ~6 min
+  }, 8000);
+}
+
+loadResumo(); loadEditais(); loadColetaStatus();
+setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
 </script>
 </body>
 </html>
