@@ -112,11 +112,11 @@
 <body>
 <div id="splash">
   <div class="radar"></div>
-  <div class="t">📡 Carregando o Radar de Licitações…</div>
+  <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Carregando o Radar de Licitações…</div>
 </div>
 <div id="modal-mount"></div>
 <header>
-  <h1>📡 Radar de Licitações</h1>
+  <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Radar de Licitações</h1>
   <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
@@ -176,22 +176,9 @@
         <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
         <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
         <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%">
-          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗</button></div>
+          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button></div>
         <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%">
-          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗</button></div>
-      </div>
-
-      <div class="field" style="background:var(--panel2);padding:12px;border-radius:8px">
-        <label><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Buscar código no catálogo oficial (Compras.gov.br)</label>
-        <div class="toolbar" style="margin-bottom:8px">
-          <input id="cat-termo" placeholder="ex: papel A4 75g branco" style="flex:1;min-width:200px">
-          <select id="cat-tipo">
-            <option value="material">CATMAT (material)</option>
-            <option value="servico">CATSER (serviço)</option>
-          </select>
-          <button class="btn ghost" onclick="buscarCatmat()">Buscar</button>
-        </div>
-        <div id="cat-resultados" class="muted" style="font-size:12px">Digite uma descrição e clique em Buscar para encontrar o código oficial.</div>
+          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
       </div>
 
       <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
@@ -354,7 +341,7 @@ async function loadEditais(resetPagina=true){
     const prazo = e.dias_restantes==null?'prazo n/d':
       (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
     const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
-      `• [${d.score_item}] ${d.descricao_item} → ${d.produto||'?'} (${d.motivo})`).join('<br>');
+      `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
     return `<div class="card">
       <div class="ed-top">
         <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
@@ -445,7 +432,6 @@ async function editarProduto(id){
   $('#form-titulo').textContent = 'Editar produto';
   $('#btn-salvar-prod').textContent = 'Salvar alterações';
   $('#btn-cancelar-prod').classList.remove('hidden');
-  $('#cat-resultados').innerHTML='Digite uma descrição e clique em Buscar para encontrar o código oficial.';
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
@@ -459,49 +445,11 @@ function cancelarEdicao(){
 async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
 
 function abrirCatalogoOficial(tipo){
-  // usa a descrição do produto (ou o termo da busca) como pesquisa no site oficial
-  const termo = ($('#p-desc').value || $('#cat-termo').value || '').trim();
+  // abre o catálogo oficial já com a descrição do produto como termo de busca
+  const termo = ($('#p-desc').value || '').trim();
   const base = 'https://catalogo.compras.gov.br/cnbs-web/busca';
   const url = termo ? `${base}?pesquisa=${encodeURIComponent(termo)}` : base;
   window.open(url, '_blank');
-}
-
-async function buscarCatmat(){
-  const termo=$('#cat-termo').value.trim(), tipo=$('#cat-tipo').value;
-  const box=$('#cat-resultados');
-  const urlOficial=`https://catalogo.compras.gov.br/cnbs-web/busca?pesquisa=${encodeURIComponent(termo)}`;
-  const botaoOficial=`<a class="btn" href="${urlOficial}" target="_blank" style="display:inline-block;margin-top:6px">Buscar “${termo}” no catálogo oficial ↗</a>`;
-  if(termo.length<2){ box.textContent='Digite o nome do produto (ex.: papel, caneta).'; return; }
-  box.textContent='Tentando busca automática...';
-  try{
-    const r=await api('/api/catmat?'+new URLSearchParams({descricao:termo,tipo:tipo}));
-    if(r.status==='ok' && r.resultados.length){
-      const campo = tipo==='material' ? 'p-catmat' : 'p-catser';
-      box.innerHTML = r.resultados.slice(0,15).map(it=>{
-        const inativo = it.ativo===false ? ' <span style="color:#f87171">(inativo)</span>' : '';
-        const desc = (it.descricao||'').replace(/'/g,'’');
-        return `<div style="padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start">
-          <button class="btn ghost" style="padding:3px 9px;white-space:nowrap"
-            onclick="aplicarCodigo('${campo}','${it.codigo}','${desc}')">usar ${it.codigo}</button>
-          <span style="flex:1;color:var(--txt)">${it.descricao}${inativo}
-            <span class="muted"> · ${it.classe||''} · un: ${it.unidade||'—'}</span></span>
-        </div>`;
-      }).join('');
-      return;
-    }
-    // A API pública de busca por TEXTO foi descontinuada pelo governo, então
-    // o caminho confiável é o catálogo oficial (abre já com o termo).
-    box.innerHTML = `<div style="line-height:1.5">A busca automática por texto depende de uma API do governo que foi descontinuada, então o jeito garantido é pelo catálogo oficial:</div>${botaoOficial}
-      <div class="muted" style="margin-top:8px;font-size:11px">No site, busque pelo nome (ex.: papel, caneta), copie o código CATMAT/CATSER e cole no campo do produto aqui.</div>`;
-  }catch(e){
-    box.innerHTML=`Não consegui consultar agora.${botaoOficial}`;
-  }
-}
-
-function aplicarCodigo(campo, codigo, descricao){
-  $('#'+campo).value=codigo;
-  if(!$('#p-desc').value) $('#p-desc').value=descricao;
-  $('#cat-resultados').innerHTML=`${ICN.check} Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
 }
 
 async function loadRegras(){
@@ -626,13 +574,13 @@ async function loadColetaStatus(){
   try{
     const s=await api('/api/coleta/status');
     if(s.estado==='em_andamento'){
-      el.innerHTML='⏳ Coletando agora...'; el.style.color='var(--medio)';
+      el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
     } else if(s.estado==='nunca'){
       el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
     } else if(s.estado==='travado'){
-      el.textContent='⚠ Última coleta não finalizou'; el.style.color='#f87171';
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Última coleta não finalizou'; el.style.color='#f87171';
     } else if(s.erro){
-      el.textContent='⚠ Erro na última coleta'; el.style.color='#f87171';
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Erro na última coleta'; el.style.color='#f87171';
     } else {
       const r = s.novos!=null ? ` · ${s.novos} novos` : '';
       el.textContent=`Última coleta ${haTempo(s.ultima_fim_seg)}${r}`;
@@ -644,7 +592,7 @@ async function loadColetaStatus(){
 async function coletar(){
   await api('/api/coletar',{method:'POST'});
   const el=$('#coleta-status');
-  el.innerHTML='⏳ Coletando agora...'; el.style.color='var(--medio)';
+  el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
   // acompanha de perto por alguns minutos, depois volta ao ritmo normal
   let n=0;
   const t=setInterval(async()=>{
