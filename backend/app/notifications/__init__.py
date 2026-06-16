@@ -1,20 +1,26 @@
-"""Notificações por e-mail (SMTP) e Telegram."""
+"""
+Notificações multi-canal.
+
+Para adicionar um canal novo (WhatsApp, Slack, etc.), basta criar uma classe
+que herda de BaseNotifier e registrá-la em NOTIFIERS abaixo. O notificar()
+percorre todos os canais configurados.
+"""
 import logging
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from datetime import date
 
-import requests
-
-from ..config import settings
+from .base import BaseNotifier
+from .email import EmailNotifier
+from .telegram import TelegramNotifier
 
 log = logging.getLogger("notificacoes")
+
+# Canais disponíveis. Adicione novos aqui (ex.: WhatsAppNotifier()).
+NOTIFIERS: list[BaseNotifier] = [EmailNotifier(), TelegramNotifier()]
 
 
 def _dias_restantes(data_enc) -> str:
     if not data_enc:
         return "prazo não informado"
-    from datetime import date
     dias = (data_enc - date.today()).days
     if dias < 0:
         return "encerrado"
@@ -23,8 +29,10 @@ def _dias_restantes(data_enc) -> str:
 
 def montar_mensagem(edital, match) -> tuple[str, str]:
     titulo = f"[{match.nivel.upper()}] {edital.orgao or 'Órgão'} — {edital.uf or ''}"
-    valor = f"R$ {edital.valor_estimado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") \
-        if edital.valor_estimado else "não informado"
+    if edital.valor_estimado:
+        valor = f"R$ {edital.valor_estimado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    else:
+        valor = "não informado"
     corpo = (
         f"Edital compatível encontrado ({edital.fonte})\n\n"
         f"Órgão: {edital.orgao}\n"
@@ -40,46 +48,11 @@ def montar_mensagem(edital, match) -> tuple[str, str]:
     return titulo, corpo
 
 
-def enviar_email(assunto: str, corpo: str) -> bool:
-    if not (settings.SMTP_HOST and settings.NOTIFICAR_EMAIL):
-        log.info("E-mail não configurado; pulando.")
-        return False
-    try:
-        msg = MIMEMultipart()
-        msg["Subject"] = assunto
-        msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
-        msg["To"] = settings.NOTIFICAR_EMAIL
-        msg.attach(MIMEText(corpo, "plain", "utf-8"))
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as s:
-            s.starttls()
-            if settings.SMTP_USER:
-                s.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            s.send_message(msg)
-        return True
-    except Exception as e:
-        log.warning("Falha ao enviar e-mail: %s", e)
-        return False
-
-
-def enviar_telegram(texto: str) -> bool:
-    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID):
-        return False
-    try:
-        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-        r = requests.post(url, json={
-            "chat_id": settings.TELEGRAM_CHAT_ID,
-            "text": texto,
-            "disable_web_page_preview": False,
-        }, timeout=20)
-        return r.status_code == 200
-    except Exception as e:
-        log.warning("Falha ao enviar Telegram: %s", e)
-        return False
-
-
 def notificar(edital, match) -> bool:
-    """Dispara e-mail e Telegram. Retorna True se ao menos um foi enviado."""
+    """Envia por todos os canais configurados. True se ao menos um enviou."""
     titulo, corpo = montar_mensagem(edital, match)
-    ok_email = enviar_email(titulo, corpo)
-    ok_tg = enviar_telegram(f"{titulo}\n\n{corpo}")
-    return ok_email or ok_tg
+    enviou = False
+    for canal in NOTIFIERS:
+        if canal.disponivel() and canal.enviar(titulo, corpo):
+            enviou = True
+    return enviou

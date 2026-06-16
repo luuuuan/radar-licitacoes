@@ -19,6 +19,7 @@ Eletrônico, 8=Dispensa, 9=Inexigibilidade, etc.
 from __future__ import annotations
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta, datetime
 
 import requests
@@ -76,8 +77,26 @@ class PNCPConnector(BaseConnector):
             for uf in alvos_uf:
                 self._coletar_modalidade_uf(modalidade, uf, data_final, editais)
 
-        log.info("PNCP: %d editais coletados", len(editais))
-        return list(editais.values())
+        lista = list(editais.values())
+        self._coletar_itens_paralelo(lista)
+        log.info("PNCP: %d editais coletados", len(lista))
+        return lista
+
+    def _coletar_itens_paralelo(self, editais: list[EditalColetado]) -> None:
+        """Busca os itens de todos os editais em paralelo (muito mais rápido
+        que serial). max_workers moderado para não sobrecarregar o portal."""
+        alvos = [e for e in editais if e.raw and e.raw.get("_ref_itens")]
+        if alvos:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(self._preencher_itens, alvos))
+        # não persistimos nada do raw (evita inflar o banco)
+        for e in editais:
+            e.raw = None
+
+    def _preencher_itens(self, ed: EditalColetado) -> None:
+        ref = ed.raw.get("_ref_itens") if ed.raw else None
+        if ref:
+            ed.itens = self._coletar_itens(*ref)
 
     def _coletar_modalidade_uf(self, modalidade: int, uf: str | None,
                                data_final: str, acc: dict) -> None:
@@ -143,11 +162,11 @@ class PNCPConnector(BaseConnector):
             data_encerramento=_parse_data(reg.get("dataEncerramentoProposta")),
             link=self._montar_link(reg),
             categoria_pncp=str(reg.get("codigoCategoriaProcesso") or reg.get("categoriaProcesso") or ""),
-            raw=reg,
+            # NÃO guardamos o JSON inteiro do PNCP (inflaria o banco com milhares
+            # de editais). Só uma referência temporária para buscar os itens.
+            raw={"_ref_itens": (orgao_ent.get("cnpj"), reg.get("anoCompra"),
+                                reg.get("sequencialCompra"))},
         )
-        ed.itens = self._coletar_itens(orgao_ent.get("cnpj"),
-                                       reg.get("anoCompra"),
-                                       reg.get("sequencialCompra"))
         return ed
 
     def _montar_link(self, reg: dict) -> str | None:

@@ -18,22 +18,60 @@ Rotas principais:
 import csv
 import io
 import os
+import base64
+import secrets
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .database import get_session, init_db, SessionLocal
 from .models import Produto, Edital, Match, RegraExclusao, LogColeta
 from .service import processar_coleta
 from .catalogo import catmat
 
-app = FastAPI(title="Radar de Licitações", version="1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Radar de Licitações", version="1.1", lifespan=lifespan)
+
+# Caminhos liberados sem autenticação (health check / keep-alive)
+_ROTAS_PUBLICAS = {"/health"}
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    """Protege tudo com HTTP Basic quando BASIC_AUTH_USER/PASS estão definidos."""
+    async def dispatch(self, request, call_next):
+        if not (settings.BASIC_AUTH_USER and settings.BASIC_AUTH_PASS):
+            return await call_next(request)
+        if request.url.path in _ROTAS_PUBLICAS:
+            return await call_next(request)
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                user, _, pwd = base64.b64decode(header[6:]).decode().partition(":")
+                if (secrets.compare_digest(user, settings.BASIC_AUTH_USER) and
+                        secrets.compare_digest(pwd, settings.BASIC_AUTH_PASS)):
+                    return await call_next(request)
+            except Exception:
+                pass
+        return Response("Autenticação necessária", status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="Radar de Licitacoes"'})
+
+
+app.add_middleware(BasicAuthMiddleware)
 
 BASE_DIR = os.path.dirname(__file__)
 # A pasta static fica em backend/static (um nível acima de backend/app)
@@ -49,9 +87,9 @@ def _brt(dt: datetime | None) -> str | None:
     return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(BR_TZ).isoformat()
 
 
-@app.on_event("startup")
-def _startup():
-    init_db()
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 
 # --------------------------- Schemas ---------------------------------- #
@@ -93,9 +131,21 @@ def _produto_dict(p: Produto) -> dict:
 
 
 @app.get("/api/produtos")
-def listar_produtos(db: Session = Depends(get_session)):
-    produtos = db.execute(select(Produto).order_by(Produto.id.desc())).scalars().all()
-    return [_produto_dict(p) for p in produtos]
+def listar_produtos(
+    pagina: int = Query(1, ge=1),
+    por_pagina: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_session),
+):
+    total = db.scalar(select(func.count(Produto.id))) or 0
+    produtos = db.execute(
+        select(Produto).order_by(Produto.id.desc())
+        .limit(por_pagina).offset((pagina - 1) * por_pagina)
+    ).scalars().all()
+    return {
+        "total": total, "pagina": pagina, "por_pagina": por_pagina,
+        "paginas": (total + por_pagina - 1) // por_pagina,
+        "resultados": [_produto_dict(p) for p in produtos],
+    }
 
 
 @app.get("/api/produtos/{produto_id}")
@@ -142,16 +192,27 @@ def listar_editais(
     nivel: str | None = Query(None),
     uf: str | None = Query(None),
     apenas_nao_lidos: bool = Query(False),
+    pagina: int = Query(1, ge=1),
+    por_pagina: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_session),
 ):
-    q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+    base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+    filtro = []
     if nivel:
-        q = q.where(Match.nivel == nivel)
+        filtro.append(Match.nivel == nivel)
     if uf:
-        q = q.where(Edital.uf == uf.upper())
+        filtro.append(Edital.uf == uf.upper())
     if apenas_nao_lidos:
-        q = q.where(Match.lido == False)  # noqa: E712
-    q = q.order_by(Match.score.desc(), Edital.data_encerramento.asc())
+        filtro.append(Match.lido == False)  # noqa: E712
+    for f in filtro:
+        base = base.where(f)
+
+    total = db.scalar(
+        select(func.count()).select_from(base.subquery())
+    ) or 0
+
+    q = base.order_by(Match.score.desc(), Edital.data_encerramento.asc())
+    q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
     out = []
     for match, ed in db.execute(q).all():
@@ -168,7 +229,11 @@ def listar_editais(
             "lido": match.lido, "interessante": match.interessante,
             "detalhe": match.detalhe,
         })
-    return out
+    return {
+        "total": total, "pagina": pagina, "por_pagina": por_pagina,
+        "paginas": (total + por_pagina - 1) // por_pagina,
+        "resultados": out,
+    }
 
 
 @app.post("/api/editais/{match_id}/marcar")

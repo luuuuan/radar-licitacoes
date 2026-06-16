@@ -250,15 +250,19 @@ async function loadResumo(){
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
-async function loadEditais(){
+let paginaEditais = 1;
+
+async function loadEditais(resetPagina=true){
+  if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
         nl=$('#f-naolidos').checked;
-  const qs=new URLSearchParams();
+  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:50});
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
   if(nl)qs.set('apenas_nao_lidos','true');
-  const eds = await api('/api/editais?'+qs);
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
   if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
-  $('#lista-editais').innerHTML = eds.map(e=>{
+  const cards = eds.map(e=>{
     const urg = e.dias_restantes!=null && e.dias_restantes<=5;
     const prazo = e.dias_restantes==null?'prazo n/d':
       (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
@@ -287,6 +291,18 @@ async function loadEditais(){
       </div>
     </div>`;
   }).join('');
+  const nav = r.paginas>1 ? `<div class="toolbar" style="justify-content:center;margin-top:6px">
+      <button class="btn ghost" ${paginaEditais<=1?'disabled':''} onclick="mudarPagina(-1)">‹ anterior</button>
+      <span class="muted">página ${r.pagina} de ${r.paginas} · ${r.total} editais</span>
+      <button class="btn ghost" ${paginaEditais>=r.paginas?'disabled':''} onclick="mudarPagina(1)">próxima ›</button>
+    </div>` : '';
+  $('#lista-editais').innerHTML = cards + nav;
+}
+
+function mudarPagina(delta){
+  paginaEditais = Math.max(1, paginaEditais + delta);
+  loadEditais(false);
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 
 async function marcar(id,campo,val){
@@ -296,7 +312,8 @@ async function marcar(id,campo,val){
 }
 
 async function loadProdutos(){
-  const ps=await api('/api/produtos');
+  const r=await api('/api/produtos?por_pagina=500');
+  const ps=r.resultados||[];
   $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
     <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
     <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>

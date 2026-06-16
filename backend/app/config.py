@@ -9,6 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Autenticação (HTTP Basic). Se ambos vazios, a API fica aberta (dev local).
+    BASIC_AUTH_USER: str = ""
+    BASIC_AUTH_PASS: str = ""
+
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
 
@@ -34,6 +38,10 @@ class Settings(BaseSettings):
     LIMIAR_MEDIO: float = 0.40
     # Acima desse score textual o item é considerado compatível
     LIMIAR_ITEM: float = 0.35
+    # Exige cobertura mínima de itens para classificar como "forte", MAS só
+    # para matches fuzzy/textuais — um casamento por código exato (NCM/CATMAT)
+    # continua forte mesmo sendo 1 item. 0 = desliga. 0.05 = 5% dos itens.
+    FRACAO_MINIMA_FORTE: float = 0.05
 
     # Notificações por e-mail (SMTP)
     SMTP_HOST: str = ""

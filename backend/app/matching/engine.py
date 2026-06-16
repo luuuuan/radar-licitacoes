@@ -193,10 +193,14 @@ class MatchingEngine:
             return ResultadoMatch(0.0, "fraco", 0, [])
 
         melhor_item = max(scores_itens)
-        # Score do edital: pondera o melhor item com a fração de itens compatíveis,
-        # dando um pequeno bônus quando há vários itens batendo.
+        comp = [s for s in scores_itens if s >= settings.LIMIAR_ITEM]
+        media_comp = sum(comp) / len(comp) if comp else 0.0
         fracao = compativeis / len(scores_itens)
-        score = melhor_item * 0.7 + min(fracao, 1.0) * 0.3
+        # O melhor item domina (é o lead mais forte), reforçado pela QUALIDADE
+        # MÉDIA dos itens compatíveis; a fração entra com peso pequeno. Isso
+        # evita que 1 item fraco num edital gigante infle o score, mas mantém
+        # um casamento exato como lead forte (o que interessa a um fornecedor).
+        score = melhor_item * 0.65 + media_comp * 0.25 + min(fracao, 1.0) * 0.10
         score = round(min(score, 1.0), 4)
 
         if score >= settings.LIMIAR_FORTE:
@@ -205,6 +209,13 @@ class MatchingEngine:
             nivel = "medio"
         else:
             nivel = "fraco"
+
+        # só é "forte" se cobrir uma fração mínima do edital — exceto quando o
+        # melhor item é um casamento (quase) exato, que é lead forte por si só
+        if (nivel == "forte" and melhor_item < 0.9
+                and settings.FRACAO_MINIMA_FORTE > 0
+                and fracao < settings.FRACAO_MINIMA_FORTE):
+            nivel = "medio"
 
         detalhe.sort(key=lambda d: d["score_item"], reverse=True)
         return ResultadoMatch(score, nivel, compativeis, detalhe)

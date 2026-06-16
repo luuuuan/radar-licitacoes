@@ -1,10 +1,13 @@
 """Conexão com o banco e criação de tabelas."""
+import logging
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from .config import settings
 from .models import Base
+
+log = logging.getLogger("database")
 
 
 def _sanitizar_url(url: str) -> str:
@@ -55,21 +58,29 @@ _COLUNAS_NOVAS = {
 
 
 def _migrar_colunas_novas() -> None:
+    """Migração leve: garante que colunas adicionadas após a 1ª versão existam.
+    Não substitui um Alembic completo, mas é rastreável (loga o que adiciona) e
+    suficiente para um projeto single-tenant. Se o schema crescer muito, migrar
+    para Alembic é o próximo passo natural."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     with engine.connect() as conn:
         for tabela, colunas in _COLUNAS_NOVAS.items():
             for nome, tipo in colunas:
                 try:
                     if eh_sqlite:
-                        # SQLite não tem IF NOT EXISTS para coluna; ignora se já existe
                         conn.execute(text(f'ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}'))
                     else:
                         conn.execute(text(
                             f'ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {nome} {tipo}'
                         ))
                     conn.commit()
-                except Exception:
-                    conn.rollback()  # coluna já existe ou banco não suporta
+                    log.info("Migração: coluna %s.%s garantida", tabela, nome)
+                except Exception as e:
+                    conn.rollback()
+                    msg = str(e).lower()
+                    # silencioso só quando a coluna já existe; o resto é logado
+                    if "exist" not in msg and "duplicate" not in msg:
+                        log.warning("Migração %s.%s falhou: %s", tabela, nome, e)
 
 
 def get_session():

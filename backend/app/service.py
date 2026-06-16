@@ -82,7 +82,8 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
     for conector in conectores:
         log_coleta = LogColeta(fonte=conector.nome, iniciado_em=datetime.utcnow())
         db.add(log_coleta)
-        db.flush()
+        db.commit()
+        base = {"novos": resumo["novos"], "vistos": resumo["vistos"], "fortes": resumo["fortes"]}
         try:
             coletados = conector.coletar()
         except Exception as e:  # não derruba os outros conectores
@@ -92,50 +93,63 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
             db.commit()
             continue
 
-        for ec in coletados:
-            resumo["vistos"] += 1
-
-            # regras de exclusão (antes de persistir)
-            itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
-                                 ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
-                         for i in ec.itens]
-            if aplicar_regras_exclusao(ec.objeto or "", itens_edt,
-                                       termos_excl, ec.categoria_pncp, categorias_excl):
-                continue
-
-            ed = _persistir_edital(db, ec)
-            if ed is None:
-                continue  # já existia
-            resumo["novos"] += 1
-
-            if not catalogo:
-                continue
-
-            resultado = engine.avaliar(ec.objeto or "", itens_edt)
-            match = Match(
-                edital_id=ed.id, score=resultado.score, nivel=resultado.nivel,
-                itens_compativeis=resultado.itens_compativeis,
-                detalhe={"itens": resultado.detalhe},
-            )
-            db.add(match)
-            db.flush()
-
-            if resultado.nivel == "forte":
-                resumo["fortes"] += 1
-
-            # notificação
-            if NIVEIS_ORDEM[resultado.nivel] >= nivel_min:
-                if notifications.notificar(ed, match):
-                    match.notificado = True
-                    resumo["notificados"] += 1
-
+        try:
+            for ec in coletados:
+                resumo["vistos"] += 1
+                try:
+                    _processar_edital(db, ec, engine, catalogo, engine and True,
+                                      termos_excl, categorias_excl, nivel_min, resumo)
+                except Exception:
+                    # um edital problemático não interrompe os demais
+                    log.exception("Falha ao processar edital %s", getattr(ec, "id_externo", "?"))
+                    db.rollback()
+        finally:
+            # o log é sempre escrito com os números reais, mesmo se algo falhar
+            log_coleta.editais_vistos = resumo["vistos"] - base["vistos"]
+            log_coleta.editais_novos = resumo["novos"] - base["novos"]
+            log_coleta.matches_fortes = resumo["fortes"] - base["fortes"]
+            log_coleta.finalizado_em = datetime.utcnow()
             db.commit()
-
-        log_coleta.finalizado_em = datetime.utcnow()
-        log_coleta.editais_novos = resumo["novos"]
-        log_coleta.editais_vistos = resumo["vistos"]
-        log_coleta.matches_fortes = resumo["fortes"]
-        db.commit()
 
     log.info("Coleta concluída: %s", resumo)
     return resumo
+
+
+def _processar_edital(db, ec, engine, catalogo, tem_catalogo,
+                      termos_excl, categorias_excl, nivel_min, resumo):
+    """Processa um único edital: exclusão -> persistência -> match -> notificação.
+    Commit por edital (resiliência: o que já entrou permanece se algo falhar depois)."""
+    itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
+                         ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
+                 for i in ec.itens]
+    if aplicar_regras_exclusao(ec.objeto or "", itens_edt,
+                               termos_excl, ec.categoria_pncp, categorias_excl):
+        return
+
+    ed = _persistir_edital(db, ec)
+    if ed is None:
+        return  # já existia
+    resumo["novos"] += 1
+
+    if not catalogo:
+        db.commit()
+        return
+
+    resultado = engine.avaliar(ec.objeto or "", itens_edt)
+    match = Match(
+        edital_id=ed.id, score=resultado.score, nivel=resultado.nivel,
+        itens_compativeis=resultado.itens_compativeis,
+        detalhe={"itens": resultado.detalhe},
+    )
+    db.add(match)
+    db.flush()
+
+    if resultado.nivel == "forte":
+        resumo["fortes"] += 1
+
+    if NIVEIS_ORDEM[resultado.nivel] >= nivel_min:
+        if notifications.notificar(ed, match):
+            match.notificado = True
+            resumo["notificados"] += 1
+
+    db.commit()
