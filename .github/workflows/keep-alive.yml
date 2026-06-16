@@ -20,5 +20,5 @@ jobs:
             echo "  Nome: RENDER_URL   Valor: https://seu-app.onrender.com"
             exit 1
           fi
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$URL")
-          echo "Ping em $URL -> HTTP $code"
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "${URL%/}/health")
+          echo "Ping em ${URL%/}/health -> HTTP $code"

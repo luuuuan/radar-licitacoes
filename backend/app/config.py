@@ -3,6 +3,7 @@ Configurações centrais do Radar de Licitações.
 Tudo é lido de variáveis de ambiente (arquivo .env). Veja .env.example.
 """
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +58,14 @@ class Settings(BaseSettings):
 
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"
+
+    @field_validator("SMTP_PORT", mode="before")
+    @classmethod
+    def _porta_vazia_vira_padrao(cls, v):
+        # No GitHub Actions, um secret não definido chega como "" e quebraria o int.
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return 587
+        return v
 
 
 @lru_cache
