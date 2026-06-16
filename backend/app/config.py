@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     PNCP_TAMANHO_PAGINA: int = 50
     # Atraso entre requisições para não sobrecarregar o portal (segundos)
     PNCP_DELAY: float = 0.3
+    # Re-tentativas quando o PNCP falha/instabiliza (timeout, 5xx, 429)
+    PNCP_TENTATIVAS: int = 3
 
     # Matching / pontuação
     LIMIAR_FORTE: float = 0.62

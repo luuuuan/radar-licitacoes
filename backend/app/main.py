@@ -198,6 +198,7 @@ def remover_produto(produto_id: int, db: Session = Depends(get_session)):
 def listar_editais(
     nivel: str | None = Query(None),
     uf: str | None = Query(None),
+    status: str | None = Query(None),
     apenas_nao_lidos: bool = Query(False),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
@@ -209,6 +210,8 @@ def listar_editais(
         filtro.append(Match.nivel == nivel)
     if uf:
         filtro.append(Edital.uf == uf.upper())
+    if status:
+        filtro.append(Match.status == status)
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
     for f in filtro:
@@ -234,6 +237,7 @@ def listar_editais(
             "score": match.score, "nivel": match.nivel,
             "itens_compativeis": match.itens_compativeis,
             "lido": match.lido, "interessante": match.interessante,
+            "status": match.status,
             "detalhe": match.detalhe,
         })
     return {
@@ -256,7 +260,23 @@ def marcar(match_id: int, dados: MarcarIn, db: Session = Depends(get_session)):
     return {"ok": True}
 
 
-@app.get("/api/editais/{edital_id}/detalhe")
+STATUS_VALIDOS = {"novo", "vou_participar", "proposta_enviada", "ganho", "perdido", "descartado"}
+
+
+class StatusIn(BaseModel):
+    status: str
+
+
+@app.post("/api/editais/{match_id}/status")
+def mudar_status(match_id: int, dados: StatusIn, db: Session = Depends(get_session)):
+    if dados.status not in STATUS_VALIDOS:
+        raise HTTPException(400, f"Status inválido. Use um de: {', '.join(sorted(STATUS_VALIDOS))}")
+    m = db.get(Match, match_id)
+    if not m:
+        raise HTTPException(404, "Match não encontrado")
+    m.status = dados.status
+    db.commit()
+    return {"ok": True}
 def edital_detalhe(edital_id: int, db: Session = Depends(get_session)):
     """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
     compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
@@ -524,10 +544,74 @@ def verificar_lembretes(bg: BackgroundTasks):
     return {"ok": True, "mensagem": "Verificação de lembretes iniciada."}
 
 
+# --------------------------- Configurações ---------------------------- #
+class ConfigIn(BaseModel):
+    PNCP_UFS: str | None = None
+    PNCP_MODALIDADES: str | None = None
+    PNCP_HORIZONTE_DIAS: str | None = None
+
+
+@app.get("/api/config")
+def obter_config(db: Session = Depends(get_session)):
+    from . import configuracoes
+    return configuracoes.todas(db)
+
+
+@app.post("/api/config")
+def salvar_config(dados: ConfigIn, db: Session = Depends(get_session)):
+    from . import configuracoes
+    for chave, valor in dados.model_dump().items():
+        if valor is not None:
+            configuracoes.definir(db, chave, valor.strip())
+    return {"ok": True, "config": configuracoes.todas(db)}
+
+
+# --------------------------- Inteligência de preço -------------------- #
+@app.get("/api/inteligencia-preco")
+def inteligencia_preco(db: Session = Depends(get_session)):
+    """Para cada produto, estatísticas dos valores estimados dos editais já
+    coletados em que ele apareceu como compatível. Dá uma referência de mercado
+    com base no histórico que o próprio sistema acumulou.
+
+    Obs.: usa o valor ESTIMADO do edital (não o preço homologado do vencedor —
+    isso exigiria puxar os resultados/atas do PNCP, um passo futuro)."""
+    produtos = db.execute(select(Produto)).scalars().all()
+    saida = []
+    for p in produtos:
+        # editais cujos matches citam este produto no detalhe
+        q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+        valores = []
+        for match, ed in db.execute(q).all():
+            if ed.valor_estimado is None:
+                continue
+            itens = (match.detalhe or {}).get("itens", []) if match.detalhe else []
+            if any(it.get("produto_id") == p.id for it in itens):
+                valores.append(ed.valor_estimado)
+        if not valores:
+            continue
+        valores.sort()
+        n = len(valores)
+        mediana = valores[n // 2] if n % 2 else (valores[n // 2 - 1] + valores[n // 2]) / 2
+        saida.append({
+            "produto_id": p.id, "descricao": p.descricao,
+            "ocorrencias": n,
+            "minimo": round(min(valores), 2),
+            "mediana": round(mediana, 2),
+            "media": round(sum(valores) / n, 2),
+            "maximo": round(max(valores), 2),
+            "preco_venda": p.preco_venda,
+        })
+    saida.sort(key=lambda x: x["ocorrencias"], reverse=True)
+    return saida
+
+
 # --------------------------- Dashboard estático ----------------------- #
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(STATIC_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -86,6 +86,11 @@
   .preco-box .v{font-size:16px;font-weight:700}
   .preco-box .l{font-size:11px;color:var(--muted)}
   .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .status-sel{font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer}
+  .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
+  .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
+  .status-sel.st-ganho{border-color:var(--forte);color:var(--forte)}
+  .status-sel.st-perdido,.status-sel.st-descartado{border-color:#f87171;color:#f87171}
   .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
   .forn a{color:var(--accent);text-decoration:none}
 
@@ -124,8 +129,10 @@
   <nav>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+    <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+    <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
   </nav>
 
@@ -140,12 +147,21 @@
       </select>
       <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
              oninput="this.value=this.value.toUpperCase()">
+      <select id="f-status" onchange="loadEditais()">
+        <option value="">Qualquer situação</option>
+        <option value="novo">Novo</option>
+        <option value="vou_participar">Vou participar</option>
+        <option value="proposta_enviada">Proposta enviada</option>
+        <option value="ganho">Ganho</option>
+        <option value="perdido">Perdido</option>
+        <option value="descartado">Descartado</option>
+      </select>
       <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
       <span style="flex:1"></span>
-      <a class="btn ghost" href="/api/export.csv" download>⬇ Exportar CSV</a>
+      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
     </div>
     <div id="lista-editais"></div>
   </section>
@@ -164,7 +180,7 @@
       </div>
 
       <div class="field" style="background:var(--panel2);padding:12px;border-radius:8px">
-        <label>🔍 Buscar código no catálogo oficial (Compras.gov.br)</label>
+        <label><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Buscar código no catálogo oficial (Compras.gov.br)</label>
         <div class="toolbar" style="margin-bottom:8px">
           <input id="cat-termo" placeholder="ex: papel A4 75g branco" style="flex:1;min-width:200px">
           <select id="cat-tipo">
@@ -242,6 +258,33 @@
       <tbody id="lista-documentos"></tbody></table>
   </section>
 
+  <!-- INTELIGÊNCIA DE PREÇO -->
+  <section id="t-precos" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Inteligência de preço</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor estimado</strong> dos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
+    </div>
+    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th></tr></thead>
+      <tbody id="lista-precos"></tbody></table>
+  </section>
+
+  <!-- CONFIGURAÇÕES -->
+  <section id="t-config" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Configurações de monitoramento</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora, sem precisar mexer no servidor. Vazio em UFs = todas.</p>
+      <div class="field"><label>UFs (siglas separadas por vírgula)</label>
+        <input id="c-ufs" style="width:100%" placeholder="ex: PR,SP  (vazio = todas)"></div>
+      <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
+        <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
+        <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
+      <div class="field"><label>Horizonte de busca (dias à frente)</label>
+        <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+      <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
+      <span id="config-msg" class="muted" style="margin-left:10px"></span>
+    </div>
+  </section>
+
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
@@ -254,12 +297,29 @@
 const $ = s => document.querySelector(s);
 const api = (u,o)=>fetch(u,o).then(r=>r.json());
 
+// Ícones SVG inline (herdam a cor do texto via currentColor)
+const _svg = p => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">${p}</svg>`;
+const ICN = {
+  detalhe:    _svg('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/>'),
+  check:      _svg('<polyline points="20 6 9 17 4 12"/>'),
+  estrela:    `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="currentColor" stroke-width="1" style="vertical-align:-2px"><polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/></svg>`,
+  estrelaVazia:_svg('<polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/>'),
+  busca:      _svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),
+  fornecedor: _svg('<path d="M3 21V8l6-3 6 3v13"/><path d="M9 21v-5h2v5"/><path d="M21 21V11l-6-3"/>'),
+  externo:    _svg('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  baixar:     _svg('<path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/>'),
+  relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
+};
+
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','catalogo','regras','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   if(name==='catalogo') loadProdutos();
+  if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
   if(name==='documentos') loadDocumentos();
+  if(name==='config') loadConfig();
   if(name==='logs') loadLogs();
 }
 
@@ -279,9 +339,10 @@ let paginaEditais = 1;
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
-        nl=$('#f-naolidos').checked;
+        st=$('#f-status').value, nl=$('#f-naolidos').checked;
   const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:50});
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
+  if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
@@ -307,11 +368,19 @@ async function loadEditais(resetPagina=true){
       </div>
       ${det?`<div class="det">${det}</div>`:''}
       <div class="acoes">
-        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ↗</a>`:''}
-        <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">📋 detalhes / margem</button>
+        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+        <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
+        <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
+          <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+          <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+          <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+          <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+          <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+          <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+        </select>
         <span style="flex:1"></span>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?'✓ lido':'marcar lido'}</button>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?'★ interessante':'☆ interessante'}</button>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
       </div>
     </div>`;
   }).join('');
@@ -426,7 +495,7 @@ async function buscarCatmat(){
 function aplicarCodigo(campo, codigo, descricao){
   $('#'+campo).value=codigo;
   if(!$('#p-desc').value) $('#p-desc').value=descricao;
-  $('#cat-resultados').innerHTML=`✓ Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
+  $('#cat-resultados').innerHTML=`${ICN.check} Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
 }
 
 async function loadRegras(){
@@ -491,6 +560,42 @@ function cancelarEdicaoDoc(){
 }
 
 async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
+
+async function mudarStatus(matchId, status){
+  await api(`/api/editais/${matchId}/status`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadResumo();
+}
+
+const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+async function loadPrecos(){
+  const ps=await api('/api/inteligencia-preco');
+  if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
+  $('#lista-precos').innerHTML=ps.map(p=>`<tr>
+    <td>${p.descricao}</td><td>${p.ocorrencias}</td>
+    <td>${fmtR(p.minimo)}</td><td><strong>${fmtR(p.mediana)}</strong></td>
+    <td>${fmtR(p.maximo)}</td><td class="muted">${fmtR(p.preco_venda)}</td>
+  </tr>`).join('');
+}
+
+async function loadConfig(){
+  const c=await api('/api/config');
+  $('#c-ufs').value=c.PNCP_UFS||'';
+  $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
+  $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
+}
+
+async function salvarConfig(){
+  const body={
+    PNCP_UFS:$('#c-ufs').value.trim(),
+    PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
+    PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
+  };
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#config-msg').innerHTML=ICN.check+' salvo — vale na próxima coleta';
+  setTimeout(()=>{$('#config-msg').textContent='';},4000);
+}
 
 async function loadLogs(){
   const ls=await api('/api/logs');
@@ -564,7 +669,7 @@ async function abrirDetalhe(id){
           </div>
           <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
         if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
-          bloco+=`<div class="forn">🏭 ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
+          bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
         } else {
           bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
         }
@@ -572,7 +677,7 @@ async function abrirDetalhe(id){
         bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${it.quantidade}`:''} · (sem produto seu compatível)</div>`;
       }
       return `<div class="item-row ${it.compativel?'match':''}">
-        <strong>${it.compativel?'✓ ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
+        <strong>${it.compativel?ICN.check+' ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
     }).join('');
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card">

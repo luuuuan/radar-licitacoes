@@ -68,7 +68,12 @@ def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None) -> dict:
     """Executa a coleta completa e retorna um resumo."""
     if conectores is None:
-        conectores = [PNCPConnector()]
+        from . import configuracoes as cfg
+        conectores = [PNCPConnector(
+            ufs=cfg.obter(db, "PNCP_UFS"),
+            modalidades=cfg.obter(db, "PNCP_MODALIDADES"),
+            horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS),
+        )]
 
     catalogo = _carregar_catalogo(db)
     if not catalogo:

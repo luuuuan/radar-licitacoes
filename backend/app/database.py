@@ -56,6 +56,7 @@ _COLUNAS_NOVAS = {
     ],
     "matches": [
         ("prazo_avisado", "BOOLEAN DEFAULT FALSE"),
+        ("status", "VARCHAR(20) DEFAULT 'novo'"),
     ],
 }
 

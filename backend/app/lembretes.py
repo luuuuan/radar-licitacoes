@@ -33,7 +33,7 @@ def verificar_prazos(db: Session) -> int:
             continue  # já encerrou
         if dias > settings.LEMBRETE_PRAZO_DIAS:
             continue  # ainda longe
-        titulo = f"⏰ Prazo encerrando: {ed.orgao or 'Edital'} ({dias} dia(s))"
+        titulo = f"[PRAZO] Encerrando: {ed.orgao or 'Edital'} ({dias} dia(s))"
         corpo = (
             f"O prazo de propostas está acabando.\n\n"
             f"Órgão: {ed.orgao}\n"
@@ -69,7 +69,7 @@ def verificar_documentos(db: Session) -> int:
             situacao = f"VENCIDO há {abs(dias)} dia(s)"
         else:
             situacao = f"vence em {dias} dia(s)"
-        titulo = f"📄 Documento {situacao}: {doc.nome}"
+        titulo = f"[DOCUMENTO] {doc.nome} — {situacao}"
         corpo = (
             f"Atenção a um documento de habilitação.\n\n"
             f"Documento: {doc.nome}\n"

@@ -102,6 +102,8 @@ class Match(Base):
     interessante: Mapped[bool] = mapped_column(Boolean, default=False)
     notificado: Mapped[bool] = mapped_column(Boolean, default=False)
     prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
+    # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
+    status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
@@ -128,6 +130,15 @@ class LogColeta(Base):
     editais_vistos: Mapped[int] = mapped_column(Integer, default=0)
     matches_fortes: Mapped[int] = mapped_column(Integer, default=0)
     erro: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Configuracao(Base):
+    """Configurações editáveis pelo painel (UFs, modalidades, etc.).
+    Sobrepõem os valores das variáveis de ambiente quando definidas."""
+    __tablename__ = "configuracoes"
+
+    chave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[str] = mapped_column(Text, default="")
 
 
 class Documento(Base):
