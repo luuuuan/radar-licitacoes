@@ -44,7 +44,7 @@
   .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
   .prazo{font-weight:600}
   .prazo.urg{color:#f87171}
-  .acoes{display:flex;gap:8px;margin-top:10px;align-items:center}
+  .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
   .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
   table{width:100%;border-collapse:collapse}
   th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
@@ -95,17 +95,41 @@
   .forn a{color:var(--accent);text-decoration:none}
 
   /* ---- Responsivo ---- */
+  /* Tablet */
+  @media (max-width:1024px){
+    .wrap{padding:18px}
+    .kpis{grid-template-columns:repeat(3,1fr)}
+    .modal-card{max-width:92vw}
+  }
+  /* Celular */
   @media (max-width:680px){
     header{flex-wrap:wrap;padding:12px 16px;gap:8px}
     header h1{font-size:16px}
-    .wrap{padding:14px}
-    .kpis{grid-template-columns:repeat(2,1fr)}
+    .wrap{padding:12px}
+    .kpis{grid-template-columns:repeat(2,1fr);gap:8px}
+    .kpi{padding:11px}
+    .kpi .n{font-size:20px}
     .grid2{grid-template-columns:1fr}
     .precos{grid-template-columns:1fr}
-    nav button{padding:7px 12px;font-size:12px}
+    /* menu vira uma faixa rolável na horizontal (uma linha só) */
+    nav{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+    nav button{padding:7px 12px;font-size:12px;white-space:nowrap;flex:0 0 auto}
     .ed-top{flex-direction:column;gap:6px}
     .toolbar{gap:8px}
-    .toolbar input,.toolbar select{flex:1;min-width:0}
+    .toolbar input,.toolbar select{flex:1 1 auto;min-width:0}
+    .toolbar .btn,.toolbar a.btn{flex:1 1 auto;text-align:center}
+    /* tabelas rolam na horizontal em vez de estourar a tela */
+    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+    .modal{padding:14px 8px}
+    .modal-card{padding:16px;max-width:100%}
+    .acoes .btn,.acoes .status-sel{flex:1 1 auto}
+    .acoes a{flex-basis:100%}
+  }
+  /* Celular pequeno */
+  @media (max-width:400px){
+    body{font-size:13px}
+    .kpi .n{font-size:18px}
+    nav button{padding:6px 10px}
   }
 </style>
 </head>
