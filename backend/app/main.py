@@ -239,8 +239,8 @@ def buscar_catmat(
 ):
     """Busca códigos CATMAT (material) ou CATSER (serviço) na API oficial
     de dados abertos do Compras.gov.br, ranqueados por relevância."""
-    resultados = catmat.buscar(descricao, tipo=tipo)
-    return {"total": len(resultados), "resultados": resultados}
+    r = catmat.buscar(descricao, tipo=tipo)
+    return {"status": r["status"], "total": len(r["itens"]), "resultados": r["itens"]}
 
 
 # --------------------------- Dashboard estático ----------------------- #

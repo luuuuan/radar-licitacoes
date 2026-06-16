@@ -244,26 +244,37 @@ async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}
 async function buscarCatmat(){
   const termo=$('#cat-termo').value.trim(), tipo=$('#cat-tipo').value;
   const box=$('#cat-resultados');
-  if(termo.length<2){ box.textContent='Digite ao menos 2 caracteres.'; return; }
+  const linkOficial=`<a href="https://catalogo.compras.gov.br/cnbs-web/busca" target="_blank" style="color:var(--accent)">abrir catálogo oficial ↗</a>`;
+  if(termo.length<2){ box.textContent='Digite o nome do produto (ex.: papel, caneta).'; return; }
   box.textContent='Buscando no catálogo oficial...';
   try{
     const r=await api('/api/catmat?'+new URLSearchParams({descricao:termo,tipo:tipo}));
-    if(!r.resultados || !r.resultados.length){
-      box.innerHTML='Nenhum item encontrado. Tente termos mais genéricos (ex.: só "papel A4").';
+    if(r.status==='ok' && r.resultados.length){
+      const campo = tipo==='material' ? 'p-catmat' : 'p-catser';
+      box.innerHTML = r.resultados.slice(0,15).map(it=>{
+        const inativo = it.ativo===false ? ' <span style="color:#f87171">(inativo)</span>' : '';
+        const desc = (it.descricao||'').replace(/'/g,'’');
+        return `<div style="padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start">
+          <button class="btn ghost" style="padding:3px 9px;white-space:nowrap"
+            onclick="aplicarCodigo('${campo}','${it.codigo}','${desc}')">usar ${it.codigo}</button>
+          <span style="flex:1;color:var(--txt)">${it.descricao}${inativo}
+            <span class="muted"> · ${it.classe||''} · un: ${it.unidade||'—'}</span></span>
+        </div>`;
+      }).join('');
       return;
     }
-    const campo = tipo==='material' ? 'p-catmat' : 'p-catser';
-    box.innerHTML = r.resultados.slice(0,15).map(it=>{
-      const inativo = it.ativo===false ? ' <span style="color:#f87171">(inativo)</span>' : '';
-      const desc = (it.descricao||'').replace(/'/g,'’');
-      return `<div style="padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start">
-        <button class="btn ghost" style="padding:3px 9px;white-space:nowrap"
-          onclick="aplicarCodigo('${campo}','${it.codigo}','${desc}')">usar ${it.codigo}</button>
-        <span style="flex:1;color:var(--txt)">${it.descricao}${inativo}
-          <span class="muted"> · ${it.classe||''} · un: ${it.unidade||'—'} · rel ${it.relevancia}</span></span>
-      </div>`;
-    }).join('');
-  }catch(e){ box.textContent='Erro ao consultar o catálogo. Verifique a conexão.'; }
+    // mensagens conforme o motivo
+    let msg;
+    if(r.status==='vazio')
+      msg=`Nenhum item para “${termo}”. Tente o <b>nome</b> do produto (ex.: papel, caneta, álcool) em vez de códigos ou medidas. Ou ${linkOficial} e copie o código manualmente.`;
+    else if(r.status==='erro_rede' || (r.status||'').startsWith('http') || r.status==='resposta_invalida')
+      msg=`A API do catálogo do governo não respondeu agora (costuma ficar instável). Tente de novo em instantes, ou ${linkOficial} e copie o código.`;
+    else
+      msg=`Digite o nome do produto. Você também pode ${linkOficial}.`;
+    box.innerHTML=msg;
+  }catch(e){
+    box.innerHTML=`Não consegui consultar agora. Tente de novo, ou ${linkOficial}.`;
+  }
 }
 
 function aplicarCodigo(campo, codigo, descricao){

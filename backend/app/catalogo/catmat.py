@@ -64,47 +64,61 @@ def _normalizar_item(item: dict, tipo: str) -> dict:
 
 
 def buscar(descricao: str, tipo: str = "material",
-           tamanho: int = 30, timeout: int = 30) -> list[dict]:
+           tamanho: int = 500, timeout: int = 45) -> dict:
     """
-    Busca itens do catálogo por descrição e devolve candidatos ranqueados.
-    tipo: "material" (CATMAT) ou "servico" (CATSER).
+    Busca itens do catálogo e devolve {"status": ..., "itens": [...]}.
+
+    A API de dados abertos às vezes ignora o filtro por descrição e devolve uma
+    lista genérica. Por isso filtramos do nosso lado: só mantemos itens que
+    realmente batem com o termo buscado. Status possíveis:
+    ok | vazio | termo_curto | erro_rede | http_XXX | resposta_invalida
     """
     descricao = (descricao or "").strip()
-    if not descricao:
-        return []
+    if len(descricao) < 2:
+        return {"status": "termo_curto", "itens": []}
+
     url = ENDPOINTS.get(tipo, ENDPOINTS["material"])
     params = {"descricaoItem": descricao, "pagina": 1, "tamanhoPagina": tamanho}
 
     try:
         resp = _session.get(url, params=params, timeout=timeout)
     except requests.RequestException as e:
-        log.warning("Falha ao consultar catálogo: %s", e)
-        return []
+        log.warning("Falha de rede ao consultar catálogo: %s", e)
+        return {"status": "erro_rede", "itens": []}
 
     if resp.status_code != 200:
-        log.warning("Catálogo retornou HTTP %s: %s", resp.status_code, resp.text[:200])
-        return []
+        log.warning("Catálogo HTTP %s: %s", resp.status_code, resp.text[:200])
+        return {"status": f"http_{resp.status_code}", "itens": []}
 
     try:
         dados = resp.json()
     except ValueError:
-        return []
+        return {"status": "resposta_invalida", "itens": []}
 
-    registros = dados.get("resultado") if isinstance(dados, dict) else dados
-    registros = registros or []
+    registros = (dados.get("resultado") if isinstance(dados, dict) else dados) or []
 
     alvo = normalizar(descricao)
+    tokens = [t for t in alvo.split() if len(t) >= 2]
+
     itens = []
     for reg in registros:
         norm = _normalizar_item(reg, tipo)
         if not norm["codigo"]:
             continue
-        # relevância: similaridade entre o termo buscado e a descrição oficial
-        norm["relevancia"] = round(
-            fuzz.token_set_ratio(alvo, normalizar(norm["descricao"])) / 100.0, 3
-        )
-        itens.append(norm)
+        desc_norm = normalizar(norm["descricao"])
+        pdm_norm = normalizar(norm["pdm"] or "")
+        campo = f"{desc_norm} {pdm_norm}"
 
-    # mais relevantes primeiro; ativos antes de inativos
+        # contém todos os tokens do termo? (sinal forte)
+        contem = bool(tokens) and all(t in campo for t in tokens)
+        rel = fuzz.token_set_ratio(alvo, desc_norm) / 100.0
+        if contem:
+            rel = max(rel, 0.9)
+        norm["relevancia"] = round(rel, 3)
+
+        # só mantém o que realmente tem a ver com o termo
+        if contem or rel >= 0.5:
+            itens.append(norm)
+
     itens.sort(key=lambda x: (x["ativo"] is True, x["relevancia"]), reverse=True)
-    return itens
+    return {"status": "ok" if itens else "vazio", "itens": itens[:30]}
