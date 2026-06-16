@@ -459,9 +459,10 @@ async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}
 async function buscarCatmat(){
   const termo=$('#cat-termo').value.trim(), tipo=$('#cat-tipo').value;
   const box=$('#cat-resultados');
-  const linkOficial=`<a href="https://catalogo.compras.gov.br/cnbs-web/busca" target="_blank" style="color:var(--accent)">abrir catálogo oficial ↗</a>`;
+  const urlOficial=`https://catalogo.compras.gov.br/cnbs-web/busca?pesquisa=${encodeURIComponent(termo)}`;
+  const botaoOficial=`<a class="btn" href="${urlOficial}" target="_blank" style="display:inline-block;margin-top:6px">Buscar “${termo}” no catálogo oficial ↗</a>`;
   if(termo.length<2){ box.textContent='Digite o nome do produto (ex.: papel, caneta).'; return; }
-  box.textContent='Buscando no catálogo oficial...';
+  box.textContent='Tentando busca automática...';
   try{
     const r=await api('/api/catmat?'+new URLSearchParams({descricao:termo,tipo:tipo}));
     if(r.status==='ok' && r.resultados.length){
@@ -478,17 +479,12 @@ async function buscarCatmat(){
       }).join('');
       return;
     }
-    // mensagens conforme o motivo
-    let msg;
-    if(r.status==='vazio')
-      msg=`Nenhum item para “${termo}”. Tente o <b>nome</b> do produto (ex.: papel, caneta, álcool) em vez de códigos ou medidas. Ou ${linkOficial} e copie o código manualmente.`;
-    else if(r.status==='erro_rede' || (r.status||'').startsWith('http') || r.status==='resposta_invalida')
-      msg=`A API do catálogo do governo não respondeu agora (costuma ficar instável). Tente de novo em instantes, ou ${linkOficial} e copie o código.`;
-    else
-      msg=`Digite o nome do produto. Você também pode ${linkOficial}.`;
-    box.innerHTML=msg;
+    // A API pública de busca por TEXTO foi descontinuada pelo governo, então
+    // o caminho confiável é o catálogo oficial (abre já com o termo).
+    box.innerHTML = `<div style="line-height:1.5">A busca automática por texto depende de uma API do governo que foi descontinuada, então o jeito garantido é pelo catálogo oficial:</div>${botaoOficial}
+      <div class="muted" style="margin-top:8px;font-size:11px">No site, busque pelo nome (ex.: papel, caneta), copie o código CATMAT/CATSER e cole no campo do produto aqui.</div>`;
   }catch(e){
-    box.innerHTML=`Não consegui consultar agora. Tente de novo, ou ${linkOficial}.`;
+    box.innerHTML=`Não consegui consultar agora.${botaoOficial}`;
   }
 }
 

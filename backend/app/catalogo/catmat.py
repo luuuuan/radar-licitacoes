@@ -27,10 +27,6 @@ from ..matching.engine import normalizar
 log = logging.getLogger("catalogo.catmat")
 
 # API legada (busca por texto/contém)
-LEGADO = {
-    "material": "https://compras.dados.gov.br/materiais/v1/materiais.json",
-    "servico": "https://compras.dados.gov.br/servicos/v1/servicos.json",
-}
 # API nova (reserva; filtra por código)
 NOVA = {
     "material": "https://dadosabertos.compras.gov.br/modulo-material/4_consultarItemMaterial",
@@ -109,21 +105,16 @@ def buscar(descricao: str, tipo: str = "material",
     tentativas = []
     registros, url_final = [], None
 
-    # 1) API legada: busca por texto/contém
-    regs, st, url_final, _ = _consultar(LEGADO[tipo],
-                                        {"descricao": termo, "offset": 0}, timeout)
-    tentativas.append({"fonte": "legado", "url": url_final, "status": st, "registros": len(regs)})
+    # Tentativa pela API nova (filtra por código; descricaoItem raramente faz
+    # busca por texto). A API antiga de busca por texto foi descontinuada, então
+    # o caminho confiável para o usuário é o catálogo oficial (link no painel).
+    regs, st, url_final, _ = _consultar(NOVA[tipo],
+                                       {"descricaoItem": termo, "pagina": 1,
+                                        "tamanhoPagina": tamanho}, timeout)
+    tentativas.append({"fonte": "dadosabertos", "url": url_final,
+                       "status": st, "registros": len(regs)})
     if regs:
         registros = regs
-
-    # 2) reserva: API nova (filtra por código; descricaoItem raramente ajuda)
-    if not registros:
-        regs2, st2, url2, _ = _consultar(NOVA[tipo],
-                                         {"descricaoItem": termo, "pagina": 1,
-                                          "tamanhoPagina": tamanho}, timeout)
-        tentativas.append({"fonte": "nova", "url": url2, "status": st2, "registros": len(regs2)})
-        if regs2:
-            registros, url_final = regs2, url2
 
     log.info("Catálogo '%s': %d registros (tentativas: %s)",
              descricao, len(registros), tentativas)
