@@ -83,43 +83,61 @@ def _normalizar_item(item: dict, tipo: str) -> dict:
     }
 
 
+def _consultar(url: str, termo: str, tamanho: int, timeout: int):
+    """Faz uma consulta e devolve (registros, resp, erro)."""
+    params = {"descricaoItem": termo, "pagina": 1, "tamanhoPagina": tamanho}
+    try:
+        resp = _session.get(url, params=params, timeout=timeout)
+    except requests.RequestException as e:
+        return [], None, ("erro_rede", str(e))
+    if resp.status_code != 200:
+        return [], resp, (f"http_{resp.status_code}", resp.text[:300])
+    try:
+        dados = resp.json()
+    except ValueError:
+        return [], resp, ("resposta_invalida", None)
+    return _extrair_lista(dados), resp, (None, dados)
+
+
 def buscar(descricao: str, tipo: str = "material",
            tamanho: int = 500, timeout: int = 45, debug: bool = False) -> dict:
     """
     Busca itens do catálogo e devolve {"status": ..., "itens": [...]}.
 
-    A API de dados abertos às vezes ignora o filtro por descrição e devolve uma
-    lista genérica. Por isso filtramos do nosso lado: só mantemos itens que
-    realmente batem com o termo buscado. Status possíveis:
-    ok | vazio | termo_curto | erro_rede | http_XXX | resposta_invalida
+    Os catálogos do SIASG são gravados em MAIÚSCULAS e a busca por descrição é
+    sensível a isso, então tentamos variações do termo (maiúsculo primeiro) e
+    ficamos com a primeira que trouxer registros. Depois filtramos do nosso lado
+    para manter só o que realmente bate com o termo buscado.
+    Status: ok | vazio | termo_curto | erro_rede | http_XXX | resposta_invalida
     """
     descricao = (descricao or "").strip()
     if len(descricao) < 2:
         return {"status": "termo_curto", "itens": []}
 
     url = ENDPOINTS.get(tipo, ENDPOINTS["material"])
-    params = {"descricaoItem": descricao, "pagina": 1, "tamanhoPagina": tamanho}
 
-    try:
-        resp = _session.get(url, params=params, timeout=timeout)
-    except requests.RequestException as e:
-        log.warning("Falha de rede ao consultar catálogo: %s", e)
-        return {"status": "erro_rede", "itens": []}
+    # variações a tentar, sem repetir (maiúsculas costuma ser o que funciona)
+    variacoes, vistos = [], set()
+    for v in (descricao.upper(), descricao, descricao.capitalize()):
+        if v not in vistos:
+            vistos.add(v); variacoes.append(v)
 
-    if resp.status_code != 200:
-        log.warning("Catálogo HTTP %s em %s: %s", resp.status_code, resp.url, resp.text[:300])
-        out = {"status": f"http_{resp.status_code}", "itens": []}
-        if debug:
-            out["debug"] = {"url": resp.url, "http": resp.status_code, "corpo": resp.text[:500]}
-        return out
+    registros, resp, info = [], None, (None, None)
+    termo_usado = None
+    for termo in variacoes:
+        registros, resp, info = _consultar(url, termo, tamanho, timeout)
+        termo_usado = termo
+        if info[0] in ("erro_rede", "resposta_invalida") or (info[0] or "").startswith("http_"):
+            # erro de verdade: não adianta tentar outras variações
+            out = {"status": info[0], "itens": []}
+            if debug:
+                out["debug"] = {"url": getattr(resp, "url", url), "erro": info[1]}
+            return out
+        if registros:
+            break  # achou registros, para de tentar
 
-    try:
-        dados = resp.json()
-    except ValueError:
-        return {"status": "resposta_invalida", "itens": []}
-
-    registros = _extrair_lista(dados)
-    log.info("Catálogo: %d registros brutos para '%s'", len(registros), descricao)
+    log.info("Catálogo: %d registros brutos para '%s' (termo='%s')",
+             len(registros), descricao, termo_usado)
 
     alvo = normalizar(descricao)
     tokens = [t for t in alvo.split() if len(t) >= 2]
@@ -145,11 +163,12 @@ def buscar(descricao: str, tipo: str = "material",
     itens.sort(key=lambda x: (x["ativo"] is True, x["relevancia"]), reverse=True)
     resultado = {"status": "ok" if itens else "vazio", "itens": itens[:30]}
     if debug:
+        dados = info[1]
         chaves_topo = list(dados.keys()) if isinstance(dados, dict) else "lista_no_topo"
         primeiro = registros[0] if registros else None
         resultado["debug"] = {
-            "url": resp.url,
-            "http": 200,
+            "url": getattr(resp, "url", url),
+            "termo_usado": termo_usado,
             "registros_brutos": len(registros),
             "itens_apos_filtro": len(itens),
             "chaves_no_topo": chaves_topo,
