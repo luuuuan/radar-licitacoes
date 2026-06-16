@@ -19,6 +19,7 @@ import csv
 import io
 import os
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
@@ -38,6 +39,15 @@ BASE_DIR = os.path.dirname(__file__)
 # A pasta static fica em backend/static (um nível acima de backend/app)
 STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
 
+BR_TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def _brt(dt: datetime | None) -> str | None:
+    """Converte um datetime UTC (naive) para o horário de Brasília em ISO."""
+    if not dt:
+        return None
+    return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(BR_TZ).isoformat()
+
 
 @app.on_event("startup")
 def _startup():
@@ -53,6 +63,11 @@ class ProdutoIn(BaseModel):
     catmat: str | None = None
     catser: str | None = None
     palavras_chave: str | None = None
+    preco_custo: float | None = None
+    preco_venda: float | None = None
+    fornecedor_nome: str | None = None
+    fornecedor_contato: str | None = None
+    fornecedor_site: str | None = None
 
 
 class RegraIn(BaseModel):
@@ -73,6 +88,9 @@ def listar_produtos(db: Session = Depends(get_session)):
         "id": p.id, "descricao": p.descricao, "ncm": p.ncm, "cest": p.cest,
         "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
         "palavras_chave": p.palavras_chave, "ativo": p.ativo,
+        "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
+        "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
+        "fornecedor_site": p.fornecedor_site,
     } for p in produtos]
 
 
@@ -141,6 +159,65 @@ def marcar(match_id: int, dados: MarcarIn, db: Session = Depends(get_session)):
         m.interessante = dados.interessante
     db.commit()
     return {"ok": True}
+
+
+@app.get("/api/editais/{edital_id}/detalhe")
+def edital_detalhe(edital_id: int, db: Session = Depends(get_session)):
+    """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
+    compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)).scalar_one_or_none()
+
+    # item (número) -> produto_id, a partir do detalhe do match
+    mapa: dict = {}
+    if match and match.detalhe:
+        for d in (match.detalhe.get("itens") or []):
+            if d.get("item") is not None:
+                mapa[d["item"]] = d.get("produto_id")
+    prod_ids = {v for v in mapa.values() if v}
+    produtos = {}
+    if prod_ids:
+        produtos = {p.id: p for p in db.execute(
+            select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
+
+    itens = []
+    for it in ed.itens:
+        prod = produtos.get(mapa.get(it.numero))
+        margem = margem_pct = None
+        if prod and it.valor_unitario is not None and prod.preco_custo is not None:
+            margem = round(it.valor_unitario - prod.preco_custo, 2)
+            if it.valor_unitario:
+                margem_pct = round(margem / it.valor_unitario * 100, 1)
+        itens.append({
+            "numero": it.numero, "descricao": it.descricao,
+            "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
+            "compativel": prod is not None,
+            "margem": margem, "margem_pct": margem_pct,
+            "produto": None if not prod else {
+                "id": prod.id, "descricao": prod.descricao,
+                "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,
+                "fornecedor_nome": prod.fornecedor_nome,
+                "fornecedor_contato": prod.fornecedor_contato,
+                "fornecedor_site": prod.fornecedor_site,
+            },
+        })
+    itens.sort(key=lambda x: x["compativel"], reverse=True)
+
+    dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+    return {
+        "edital": {
+            "id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+            "modalidade": ed.modalidade, "uf": ed.uf, "municipio": ed.municipio,
+            "valor_estimado": ed.valor_estimado, "fonte": ed.fonte, "link": ed.link,
+            "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+            "dias_restantes": dias,
+            "nivel": match.nivel if match else None,
+            "score": match.score if match else None,
+        },
+        "itens": itens,
+    }
 
 
 # --------------------------- Regras de exclusão ----------------------- #
@@ -223,8 +300,8 @@ def logs(db: Session = Depends(get_session)):
     regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
     return [{
         "id": l.id, "fonte": l.fonte,
-        "iniciado_em": l.iniciado_em.isoformat() if l.iniciado_em else None,
-        "finalizado_em": l.finalizado_em.isoformat() if l.finalizado_em else None,
+        "iniciado_em": _brt(l.iniciado_em),
+        "finalizado_em": _brt(l.finalizado_em),
         "editais_novos": l.editais_novos, "editais_vistos": l.editais_vistos,
         "matches_fortes": l.matches_fortes, "erro": l.erro,
     } for l in regs]

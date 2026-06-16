@@ -55,9 +55,61 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
   .field{margin-bottom:10px}
+
+  /* ---- Tela de carregamento ---- */
+  #splash{position:fixed;inset:0;background:var(--bg);z-index:9999;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    transition:opacity .4s ease}
+  #splash.out{opacity:0;pointer-events:none}
+  .radar{width:90px;height:90px;border-radius:50%;position:relative;
+    border:2px solid var(--line);overflow:hidden}
+  .radar::before{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0 280deg, rgba(59,130,246,.55) 360deg);
+    animation:spin 1.3s linear infinite}
+  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle, transparent 30%, rgba(59,130,246,.08) 31%, transparent 32%,
+      transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
+
+  /* ---- Modal de detalhes ---- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:5000;
+    display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
+  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    width:100%;max-width:780px;padding:22px}
+  .modal-card h2{margin:0 0 4px;font-size:18px}
+  .close-x{float:right;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:none;background:none}
+  .item-row{border:1px solid var(--line);border-radius:9px;padding:12px;margin:10px 0}
+  .item-row.match{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.05)}
+  .precos{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+  .preco-box{background:var(--panel2);border-radius:8px;padding:8px 10px}
+  .preco-box .v{font-size:16px;font-weight:700}
+  .preco-box .l{font-size:11px;color:var(--muted)}
+  .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
+  .forn a{color:var(--accent);text-decoration:none}
+
+  /* ---- Responsivo ---- */
+  @media (max-width:680px){
+    header{flex-wrap:wrap;padding:12px 16px;gap:8px}
+    header h1{font-size:16px}
+    .wrap{padding:14px}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .grid2{grid-template-columns:1fr}
+    .precos{grid-template-columns:1fr}
+    nav button{padding:7px 12px;font-size:12px}
+    .ed-top{flex-direction:column;gap:6px}
+    .toolbar{gap:8px}
+    .toolbar input,.toolbar select{flex:1;min-width:0}
+  }
 </style>
 </head>
 <body>
+<div id="splash">
+  <div class="radar"></div>
+  <div class="t">📡 Carregando o Radar de Licitações…</div>
+</div>
+<div id="modal-mount"></div>
 <header>
   <h1>📡 Radar de Licitações</h1>
   <span class="badge">PNCP + Lei 14.133/2021</span>
@@ -125,6 +177,22 @@
 
       <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
         <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
+
+      <div class="grid2">
+        <div class="field"><label>Meu custo (R$) — quanto você paga</label>
+          <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
+        <div class="field"><label>Meu preço de venda (R$)</label>
+          <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Fornecedor</label>
+          <input id="p-forn" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
+        <div class="field"><label>Contato do fornecedor</label>
+          <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
+      </div>
+      <div class="field"><label>Site do fornecedor</label>
+        <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
+
       <button class="btn" onclick="salvarProduto()">Salvar produto</button>
     </div>
     <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
@@ -211,6 +279,7 @@ async function loadEditais(){
       ${det?`<div class="det">${det}</div>`:''}
       <div class="acoes">
         ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ↗</a>`:''}
+        <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">📋 detalhes / margem</button>
         <span style="flex:1"></span>
         <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?'✓ lido':'marcar lido'}</button>
         <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?'★ interessante':'☆ interessante'}</button>
@@ -233,11 +302,15 @@ async function loadProdutos(){
     <td><button class="btn ghost" onclick="delProduto(${p.id})">excluir</button></td></tr>`).join('');
 }
 async function salvarProduto(){
+  const num = id => { const v=$('#'+id).value.trim(); return v===''?null:parseFloat(v.replace(',','.')); };
+  const txt = id => $('#'+id).value.trim()||null;
   const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
-    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value};
+    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
+    preco_custo:num('p-custo'), preco_venda:num('p-venda'),
+    fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site')};
   if(!body.descricao){alert('Informe a descrição');return;}
   await api('/api/produtos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw'].forEach(i=>$('#'+i).value='');
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
   loadProdutos(); loadResumo();
 }
 async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
@@ -348,7 +421,59 @@ async function coletar(){
   }, 8000);
 }
 
-loadResumo(); loadEditais(); loadColetaStatus();
+async function abrirDetalhe(id){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando…</p></div></div>';
+  try{
+    const d=await api(`/api/editais/${id}/detalhe`);
+    const e=d.edital;
+    const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
+    const itensHtml=d.itens.map(it=>{
+      let bloco='';
+      if(it.compativel && it.produto){
+        const f=it.produto;
+        const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
+        const cu=f.preco_custo!=null?fmtMoeda(f.preco_custo):'—';
+        let mg='—',cls='';
+        if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); cls=it.margem>=0?'margem-pos':'margem-neg'; }
+        bloco=`<div class="precos">
+            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
+            <div class="preco-box"><div class="v">${cu}</div><div class="l">meu custo</div></div>
+            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial</div></div>
+          </div>
+          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
+        if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
+          bloco+=`<div class="forn">🏭 ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
+        } else {
+          bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
+        }
+      } else {
+        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${it.quantidade}`:''} · (sem produto seu compatível)</div>`;
+      }
+      return `<div class="item-row ${it.compativel?'match':''}">
+        <strong>${it.compativel?'✓ ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
+    }).join('');
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharModal()">×</button>
+        <h2>${e.orgao||'Órgão'}</h2>
+        <div class="muted" style="font-size:13px">${e.modalidade||''} · ${e.municipio||''}/${e.uf||''} · ${prazo}</div>
+        <p style="line-height:1.45">${e.objeto||''}</p>
+        ${e.link?`<a href="${e.link}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
+        <h3 style="margin:16px 0 4px;font-size:14px">Itens${d.itens.length?` (${d.itens.length})`:''}</h3>
+        ${itensHtml||'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
+      </div></div>`;
+  }catch(err){
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()"><div class="modal-card"><button class="close-x" onclick="fecharModal()">×</button><p>Não consegui carregar os detalhes agora.</p></div></div>`;
+  }
+}
+function fecharModal(){ $('#modal-mount').innerHTML=''; }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
+
+// inicialização + esconder a tela de carregamento
+Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+  setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+});
 setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
 </script>
 </body>

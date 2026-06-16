@@ -1,0 +1,24 @@
+name: Manter app acordado (keep-alive)
+
+# Dá um "ping" no app a cada 10 minutos para o Render não deixá-lo dormir
+# (o free dorme após 15 min sem acesso). Também roda manualmente pelo botão.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pingar o app no Render
+        run: |
+          URL="${{ vars.RENDER_URL }}"
+          if [ -z "$URL" ]; then
+            echo "⚠ Defina a variável RENDER_URL em:"
+            echo "  Settings → Secrets and variables → Actions → aba Variables → New repository variable"
+            echo "  Nome: RENDER_URL   Valor: https://seu-app.onrender.com"
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$URL")
+          echo "Ping em $URL -> HTTP $code"

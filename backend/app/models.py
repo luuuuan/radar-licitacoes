@@ -33,6 +33,13 @@ class Produto(Base):
     catser: Mapped[str | None] = mapped_column(String(20), nullable=True)  # serviço
     # Palavras-chave separadas por vírgula
     palavras_chave: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Preços (para cálculo de margem)
+    preco_custo: Mapped[float | None] = mapped_column(Float, nullable=True)   # quanto você paga
+    preco_venda: Mapped[float | None] = mapped_column(Float, nullable=True)   # seu preço de venda
+    # Fornecedor
+    fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fornecedor_site: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
