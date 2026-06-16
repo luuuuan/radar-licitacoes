@@ -3,11 +3,20 @@ Configurações centrais do Radar de Licitações.
 Tudo é lido de variáveis de ambiente (arquivo .env). Veja .env.example.
 """
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Autenticação (HTTP Basic). Se ambos vazios, a API fica aberta (dev local).
+    BASIC_AUTH_USER: str = ""
+    BASIC_AUTH_PASS: str = ""
+    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
+    # Necessária porque a coleta passa a rodar no Render (que alcança o PNCP),
+    # disparada por um agendador externo (GitHub Actions) 1x/dia.
+    CRON_SECRET: str = ""
 
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
@@ -28,12 +37,18 @@ class Settings(BaseSettings):
     PNCP_TAMANHO_PAGINA: int = 50
     # Atraso entre requisições para não sobrecarregar o portal (segundos)
     PNCP_DELAY: float = 0.3
+    # Re-tentativas quando o PNCP falha/instabiliza (timeout, 5xx, 429)
+    PNCP_TENTATIVAS: int = 3
 
     # Matching / pontuação
     LIMIAR_FORTE: float = 0.62
     LIMIAR_MEDIO: float = 0.40
     # Acima desse score textual o item é considerado compatível
     LIMIAR_ITEM: float = 0.35
+    # Exige cobertura mínima de itens para classificar como "forte", MAS só
+    # para matches fuzzy/textuais — um casamento por código exato (NCM/CATMAT)
+    # continua forte mesmo sendo 1 item. 0 = desliga. 0.05 = 5% dos itens.
+    FRACAO_MINIMA_FORTE: float = 0.05
 
     # Notificações por e-mail (SMTP)
     SMTP_HOST: str = ""
@@ -49,6 +64,22 @@ class Settings(BaseSettings):
 
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"
+
+    # Lembretes
+    LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
+    LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
+
+    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
+    # Se vazia, o endpoint fica desativado.
+    CRON_SECRET: str = ""
+
+    @field_validator("SMTP_PORT", mode="before")
+    @classmethod
+    def _porta_vazia_vira_padrao(cls, v):
+        # No GitHub Actions, um secret não definido chega como "" e quebraria o int.
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return 587
+        return v
 
 
 @lru_cache

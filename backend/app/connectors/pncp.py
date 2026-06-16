@@ -19,6 +19,7 @@ Eletrônico, 8=Dispensa, 9=Inexigibilidade, etc.
 from __future__ import annotations
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta, datetime
 
 import requests
@@ -54,17 +55,38 @@ def _parse_data(valor: str | None) -> date | None:
 class PNCPConnector(BaseConnector):
     nome = "PNCP"
 
-    def __init__(self, session: requests.Session | None = None):
+    def __init__(self, session: requests.Session | None = None,
+                 ufs: str | None = None, modalidades: str | None = None,
+                 horizonte: int | None = None):
         self.base = settings.PNCP_BASE_URL.rstrip("/")
         self.itens_base = settings.PNCP_ITENS_BASE_URL.rstrip("/")
-        self.modalidades = parse_csv_ints(settings.PNCP_MODALIDADES)
-        self.ufs = parse_csv_str(settings.PNCP_UFS)  # [] = todas
-        self.horizonte = settings.PNCP_HORIZONTE_DIAS
+        self.modalidades = parse_csv_ints(modalidades if modalidades is not None else settings.PNCP_MODALIDADES)
+        self.ufs = parse_csv_str(ufs if ufs is not None else settings.PNCP_UFS)  # [] = todas
+        self.horizonte = horizonte if horizonte is not None else settings.PNCP_HORIZONTE_DIAS
         self.tam_pagina = settings.PNCP_TAMANHO_PAGINA
         self.delay = settings.PNCP_DELAY
+        self.tentativas = max(1, settings.PNCP_TENTATIVAS)
         self.http = session or requests.Session()
         self.http.headers.update({"Accept": "application/json",
                                   "User-Agent": "RadarLicitacoes/1.0"})
+
+    def _get_com_retry(self, url: str, params: dict, timeout: int):
+        """GET com re-tentativas em falhas transitórias (timeout, 5xx, 429).
+        Espera progressiva entre tentativas. Retorna a resposta ou None."""
+        ultimo_erro = None
+        for tentativa in range(1, self.tentativas + 1):
+            try:
+                resp = self.http.get(url, params=params, timeout=timeout)
+                if resp.status_code in (500, 502, 503, 504, 429):
+                    ultimo_erro = f"HTTP {resp.status_code}"
+                    raise requests.RequestException(ultimo_erro)
+                return resp
+            except requests.RequestException as e:
+                ultimo_erro = str(e)
+                if tentativa < self.tentativas:
+                    time.sleep(self.delay * (2 ** tentativa))  # backoff: 0.6s, 1.2s...
+        log.warning("Desisti após %d tentativa(s): %s", self.tentativas, ultimo_erro)
+        return None
 
     # ------------------------------------------------------------------ #
     def coletar(self) -> list[EditalColetado]:
@@ -76,8 +98,26 @@ class PNCPConnector(BaseConnector):
             for uf in alvos_uf:
                 self._coletar_modalidade_uf(modalidade, uf, data_final, editais)
 
-        log.info("PNCP: %d editais coletados", len(editais))
-        return list(editais.values())
+        lista = list(editais.values())
+        self._coletar_itens_paralelo(lista)
+        log.info("PNCP: %d editais coletados", len(lista))
+        return lista
+
+    def _coletar_itens_paralelo(self, editais: list[EditalColetado]) -> None:
+        """Busca os itens de todos os editais em paralelo (muito mais rápido
+        que serial). max_workers moderado para não sobrecarregar o portal."""
+        alvos = [e for e in editais if e.raw and e.raw.get("_ref_itens")]
+        if alvos:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(self._preencher_itens, alvos))
+        # não persistimos nada do raw (evita inflar o banco)
+        for e in editais:
+            e.raw = None
+
+    def _preencher_itens(self, ed: EditalColetado) -> None:
+        ref = ed.raw.get("_ref_itens") if ed.raw else None
+        if ref:
+            ed.itens = self._coletar_itens(*ref)
 
     def _coletar_modalidade_uf(self, modalidade: int, uf: str | None,
                                data_final: str, acc: dict) -> None:
@@ -91,13 +131,10 @@ class PNCPConnector(BaseConnector):
             }
             if uf:
                 params["uf"] = uf
-            try:
-                resp = self.http.get(f"{self.base}/v1/contratacoes/proposta",
-                                     params=params, timeout=40)
-            except requests.RequestException as e:
-                log.warning("Falha de rede (mod=%s uf=%s pag=%s): %s",
-                            modalidade, uf, pagina, e)
-                break
+            resp = self._get_com_retry(f"{self.base}/v1/contratacoes/proposta",
+                                       params, timeout=40)
+            if resp is None:
+                break  # falhou mesmo após as re-tentativas
 
             if resp.status_code == 204:  # sem conteúdo
                 break
@@ -143,11 +180,11 @@ class PNCPConnector(BaseConnector):
             data_encerramento=_parse_data(reg.get("dataEncerramentoProposta")),
             link=self._montar_link(reg),
             categoria_pncp=str(reg.get("codigoCategoriaProcesso") or reg.get("categoriaProcesso") or ""),
-            raw=reg,
+            # NÃO guardamos o JSON inteiro do PNCP (inflaria o banco com milhares
+            # de editais). Só uma referência temporária para buscar os itens.
+            raw={"_ref_itens": (orgao_ent.get("cnpj"), reg.get("anoCompra"),
+                                reg.get("sequencialCompra"))},
         )
-        ed.itens = self._coletar_itens(orgao_ent.get("cnpj"),
-                                       reg.get("anoCompra"),
-                                       reg.get("sequencialCompra"))
         return ed
 
     def _montar_link(self, reg: dict) -> str | None:
@@ -165,9 +202,8 @@ class PNCPConnector(BaseConnector):
             return []
         url = f"{self.itens_base}/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
         try:
-            resp = self.http.get(url, params={"pagina": 1, "tamanhoPagina": 100},
-                                 timeout=30)
-            if resp.status_code != 200:
+            resp = self._get_com_retry(url, {"pagina": 1, "tamanhoPagina": 100}, timeout=30)
+            if resp is None or resp.status_code != 200:
                 return []
             dados = resp.json()
             # o endpoint pode devolver uma lista direta ou {"data": [...]}

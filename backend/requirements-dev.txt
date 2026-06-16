@@ -1,0 +1,4 @@
+# Dependências de desenvolvimento/teste (não vão para a imagem de produção).
+# Uso:  cd backend && pip install -r requirements-dev.txt && pytest
+-r requirements.txt
+pytest==8.3.4

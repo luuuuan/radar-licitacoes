@@ -33,6 +33,13 @@ class Produto(Base):
     catser: Mapped[str | None] = mapped_column(String(20), nullable=True)  # serviço
     # Palavras-chave separadas por vírgula
     palavras_chave: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Preços (para cálculo de margem)
+    preco_custo: Mapped[float | None] = mapped_column(Float, nullable=True)   # quanto você paga
+    preco_venda: Mapped[float | None] = mapped_column(Float, nullable=True)   # seu preço de venda
+    # Fornecedor
+    fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fornecedor_site: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -94,6 +101,9 @@ class Match(Base):
     lido: Mapped[bool] = mapped_column(Boolean, default=False)
     interessante: Mapped[bool] = mapped_column(Boolean, default=False)
     notificado: Mapped[bool] = mapped_column(Boolean, default=False)
+    prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
+    # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
+    status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
@@ -120,3 +130,28 @@ class LogColeta(Base):
     editais_vistos: Mapped[int] = mapped_column(Integer, default=0)
     matches_fortes: Mapped[int] = mapped_column(Integer, default=0)
     erro: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Configuracao(Base):
+    """Configurações editáveis pelo painel (UFs, modalidades, etc.).
+    Sobrepõem os valores das variáveis de ambiente quando definidas."""
+    __tablename__ = "configuracoes"
+
+    chave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[str] = mapped_column(Text, default="")
+
+
+class Documento(Base):
+    """Documentos de habilitação (certidões, SICAF, etc.) com data de validade,
+    para o sistema avisar antes de vencer."""
+    __tablename__ = "documentos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
+    orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    data_validade: Mapped[date] = mapped_column(Date)
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
+    avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

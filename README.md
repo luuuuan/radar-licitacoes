@@ -149,7 +149,32 @@ Lista completa e schema dos campos no Swagger oficial:
 
 ---
 
-## 🗺️ Roadmap (o que ainda dá pra plugar)
+## 🔐 Autenticação do painel
+
+Por padrão (sem configurar), o painel fica **aberto** — ok só para teste local.
+Em produção, defina no ambiente:
+
+```
+BASIC_AUTH_USER=seu_usuario
+BASIC_AUTH_PASS=sua_senha_forte
+```
+
+Aí o navegador pede login (HTTP Basic) para acessar o painel e a API. A rota
+`/health` continua aberta (para o keep-alive/monitor). A coleta via GitHub
+Actions roda direto no banco (não passa pela API), então não precisa de senha.
+
+---
+
+## 🧪 Testes
+
+```bash
+cd backend && pytest
+```
+
+Cobrem o motor de matching (código exato, similaridade, palavra-chave, regras
+de exclusão e o viés de editais grandes) — sem banco e sem HTTP.
+
+---
 
 O núcleo já entrega os requisitos centrais. Próximos passos, em ordem de retorno:
 

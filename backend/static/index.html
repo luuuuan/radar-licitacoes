@@ -55,9 +55,66 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
   .field{margin-bottom:10px}
+
+  /* ---- Tela de carregamento ---- */
+  #splash{position:fixed;inset:0;background:var(--bg);z-index:9999;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    transition:opacity .4s ease}
+  #splash.out{opacity:0;pointer-events:none}
+  .radar{width:90px;height:90px;border-radius:50%;position:relative;
+    border:2px solid var(--line);overflow:hidden}
+  .radar::before{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0 280deg, rgba(59,130,246,.55) 360deg);
+    animation:spin 1.3s linear infinite}
+  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle, transparent 30%, rgba(59,130,246,.08) 31%, transparent 32%,
+      transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
+
+  /* ---- Modal de detalhes ---- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:5000;
+    display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
+  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    width:100%;max-width:780px;padding:22px}
+  .modal-card h2{margin:0 0 4px;font-size:18px}
+  .close-x{float:right;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:none;background:none}
+  .item-row{border:1px solid var(--line);border-radius:9px;padding:12px;margin:10px 0}
+  .item-row.match{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.05)}
+  .precos{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+  .preco-box{background:var(--panel2);border-radius:8px;padding:8px 10px}
+  .preco-box .v{font-size:16px;font-weight:700}
+  .preco-box .l{font-size:11px;color:var(--muted)}
+  .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .status-sel{font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer}
+  .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
+  .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
+  .status-sel.st-ganho{border-color:var(--forte);color:var(--forte)}
+  .status-sel.st-perdido,.status-sel.st-descartado{border-color:#f87171;color:#f87171}
+  .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
+  .forn a{color:var(--accent);text-decoration:none}
+
+  /* ---- Responsivo ---- */
+  @media (max-width:680px){
+    header{flex-wrap:wrap;padding:12px 16px;gap:8px}
+    header h1{font-size:16px}
+    .wrap{padding:14px}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .grid2{grid-template-columns:1fr}
+    .precos{grid-template-columns:1fr}
+    nav button{padding:7px 12px;font-size:12px}
+    .ed-top{flex-direction:column;gap:6px}
+    .toolbar{gap:8px}
+    .toolbar input,.toolbar select{flex:1;min-width:0}
+  }
 </style>
 </head>
 <body>
+<div id="splash">
+  <div class="radar"></div>
+  <div class="t">📡 Carregando o Radar de Licitações…</div>
+</div>
+<div id="modal-mount"></div>
 <header>
   <h1>📡 Radar de Licitações</h1>
   <span class="badge">PNCP + Lei 14.133/2021</span>
@@ -72,7 +129,10 @@
   <nav>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+    <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+    <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+    <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
   </nav>
 
@@ -87,12 +147,21 @@
       </select>
       <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
              oninput="this.value=this.value.toUpperCase()">
+      <select id="f-status" onchange="loadEditais()">
+        <option value="">Qualquer situação</option>
+        <option value="novo">Novo</option>
+        <option value="vou_participar">Vou participar</option>
+        <option value="proposta_enviada">Proposta enviada</option>
+        <option value="ganho">Ganho</option>
+        <option value="perdido">Perdido</option>
+        <option value="descartado">Descartado</option>
+      </select>
       <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
       <span style="flex:1"></span>
-      <a class="btn ghost" href="/api/export.csv" download>⬇ Exportar CSV</a>
+      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
     </div>
     <div id="lista-editais"></div>
   </section>
@@ -100,7 +169,7 @@
   <!-- CATALOGO -->
   <section id="t-catalogo" class="hidden">
     <div class="card">
-      <h3 style="margin-top:0">Cadastrar produto/serviço</h3>
+      <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
       <div class="field"><label>Descrição</label>
         <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
       <div class="grid2">
@@ -111,7 +180,7 @@
       </div>
 
       <div class="field" style="background:var(--panel2);padding:12px;border-radius:8px">
-        <label>🔍 Buscar código no catálogo oficial (Compras.gov.br)</label>
+        <label><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-2px"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Buscar código no catálogo oficial (Compras.gov.br)</label>
         <div class="toolbar" style="margin-bottom:8px">
           <input id="cat-termo" placeholder="ex: papel A4 75g branco" style="flex:1;min-width:200px">
           <select id="cat-tipo">
@@ -125,7 +194,24 @@
 
       <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
         <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
-      <button class="btn" onclick="salvarProduto()">Salvar produto</button>
+
+      <div class="grid2">
+        <div class="field"><label>Meu custo (R$) — quanto você paga</label>
+          <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
+        <div class="field"><label>Meu preço de venda (R$)</label>
+          <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Fornecedor</label>
+          <input id="p-forn" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
+        <div class="field"><label>Contato do fornecedor</label>
+          <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
+      </div>
+      <div class="field"><label>Site do fornecedor</label>
+        <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
+
+      <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
+      <button class="btn ghost hidden" onclick="cancelarEdicao()" id="btn-cancelar-prod">Cancelar edição</button>
     </div>
     <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
       <th>Palavras-chave</th><th></th></tr></thead>
@@ -150,6 +236,55 @@
       <tbody id="lista-regras"></tbody></table>
   </section>
 
+  <!-- DOCUMENTOS -->
+  <section id="t-documentos" class="hidden">
+    <div class="card">
+      <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Cadastre suas certidões e documentos de habilitação com a data de validade. O sistema avisa antes de vencer.</p>
+      <div class="field"><label>Nome do documento</label>
+        <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
+      <div class="grid2">
+        <div class="field"><label>Órgão emissor</label>
+          <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
+        <div class="field"><label>Validade</label>
+          <input id="d-validade" type="date" style="width:100%"></div>
+      </div>
+      <div class="field"><label>Observação (opcional)</label>
+        <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+      <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
+      <button class="btn ghost hidden" onclick="cancelarEdicaoDoc()" id="btn-cancelar-doc">Cancelar edição</button>
+    </div>
+    <table><thead><tr><th>Documento</th><th>Emissor</th><th>Validade</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="lista-documentos"></tbody></table>
+  </section>
+
+  <!-- INTELIGÊNCIA DE PREÇO -->
+  <section id="t-precos" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Inteligência de preço</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor estimado</strong> dos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
+    </div>
+    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th></tr></thead>
+      <tbody id="lista-precos"></tbody></table>
+  </section>
+
+  <!-- CONFIGURAÇÕES -->
+  <section id="t-config" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Configurações de monitoramento</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora, sem precisar mexer no servidor. Vazio em UFs = todas.</p>
+      <div class="field"><label>UFs (siglas separadas por vírgula)</label>
+        <input id="c-ufs" style="width:100%" placeholder="ex: PR,SP  (vazio = todas)"></div>
+      <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
+        <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
+        <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
+      <div class="field"><label>Horizonte de busca (dias à frente)</label>
+        <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+      <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
+      <span id="config-msg" class="muted" style="margin-left:10px"></span>
+    </div>
+  </section>
+
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
@@ -162,11 +297,29 @@
 const $ = s => document.querySelector(s);
 const api = (u,o)=>fetch(u,o).then(r=>r.json());
 
+// Ícones SVG inline (herdam a cor do texto via currentColor)
+const _svg = p => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">${p}</svg>`;
+const ICN = {
+  detalhe:    _svg('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/>'),
+  check:      _svg('<polyline points="20 6 9 17 4 12"/>'),
+  estrela:    `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="currentColor" stroke-width="1" style="vertical-align:-2px"><polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/></svg>`,
+  estrelaVazia:_svg('<polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/>'),
+  busca:      _svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),
+  fornecedor: _svg('<path d="M3 21V8l6-3 6 3v13"/><path d="M9 21v-5h2v5"/><path d="M21 21V11l-6-3"/>'),
+  externo:    _svg('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  baixar:     _svg('<path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/>'),
+  relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
+};
+
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','catalogo','regras','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   if(name==='catalogo') loadProdutos();
+  if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
+  if(name==='documentos') loadDocumentos();
+  if(name==='config') loadConfig();
   if(name==='logs') loadLogs();
 }
 
@@ -181,15 +334,20 @@ async function loadResumo(){
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
-async function loadEditais(){
+let paginaEditais = 1;
+
+async function loadEditais(resetPagina=true){
+  if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
-        nl=$('#f-naolidos').checked;
-  const qs=new URLSearchParams();
+        st=$('#f-status').value, nl=$('#f-naolidos').checked;
+  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:50});
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
+  if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
-  const eds = await api('/api/editais?'+qs);
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
   if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
-  $('#lista-editais').innerHTML = eds.map(e=>{
+  const cards = eds.map(e=>{
     const urg = e.dias_restantes!=null && e.dias_restantes<=5;
     const prazo = e.dias_restantes==null?'prazo n/d':
       (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
@@ -210,13 +368,34 @@ async function loadEditais(){
       </div>
       ${det?`<div class="det">${det}</div>`:''}
       <div class="acoes">
-        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ↗</a>`:''}
+        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+        <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
+        <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
+          <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+          <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+          <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+          <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+          <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+          <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+        </select>
         <span style="flex:1"></span>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?'✓ lido':'marcar lido'}</button>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?'★ interessante':'☆ interessante'}</button>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
       </div>
     </div>`;
   }).join('');
+  const nav = r.paginas>1 ? `<div class="toolbar" style="justify-content:center;margin-top:6px">
+      <button class="btn ghost" ${paginaEditais<=1?'disabled':''} onclick="mudarPagina(-1)">‹ anterior</button>
+      <span class="muted">página ${r.pagina} de ${r.paginas} · ${r.total} editais</span>
+      <button class="btn ghost" ${paginaEditais>=r.paginas?'disabled':''} onclick="mudarPagina(1)">próxima ›</button>
+    </div>` : '';
+  $('#lista-editais').innerHTML = cards + nav;
+}
+
+function mudarPagina(delta){
+  paginaEditais = Math.max(1, paginaEditais + delta);
+  loadEditais(false);
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 
 async function marcar(id,campo,val){
@@ -226,19 +405,54 @@ async function marcar(id,campo,val){
 }
 
 async function loadProdutos(){
-  const ps=await api('/api/produtos');
+  const r=await api('/api/produtos?por_pagina=500');
+  const ps=r.resultados||[];
   $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
     <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
     <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
-    <td><button class="btn ghost" onclick="delProduto(${p.id})">excluir</button></td></tr>`).join('');
+    <td style="white-space:nowrap">
+      <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
+      <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
+    </td></tr>`).join('');
 }
+let editandoId = null;
+
 async function salvarProduto(){
+  const num = id => { const v=$('#'+id).value.trim(); return v===''?null:parseFloat(v.replace(',','.')); };
+  const txt = id => $('#'+id).value.trim()||null;
   const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
-    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value};
+    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
+    preco_custo:num('p-custo'), preco_venda:num('p-venda'),
+    fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site')};
   if(!body.descricao){alert('Informe a descrição');return;}
-  await api('/api/produtos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw'].forEach(i=>$('#'+i).value='');
+  const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
+  const metodo = editandoId ? 'PUT' : 'POST';
+  await api(url,{method:metodo,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  cancelarEdicao();
   loadProdutos(); loadResumo();
+}
+
+async function editarProduto(id){
+  const p = await api('/api/produtos/'+id);
+  const set=(campo,val)=>$('#'+campo).value = (val==null?'':val);
+  set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
+  set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
+  set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
+  set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
+  editandoId = id;
+  $('#form-titulo').textContent = 'Editar produto';
+  $('#btn-salvar-prod').textContent = 'Salvar alterações';
+  $('#btn-cancelar-prod').classList.remove('hidden');
+  $('#cat-resultados').innerHTML='Digite uma descrição e clique em Buscar para encontrar o código oficial.';
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function cancelarEdicao(){
+  editandoId = null;
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  $('#form-titulo').textContent = 'Cadastrar produto/serviço';
+  $('#btn-salvar-prod').textContent = 'Salvar produto';
+  $('#btn-cancelar-prod').classList.add('hidden');
 }
 async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
 
@@ -281,7 +495,7 @@ async function buscarCatmat(){
 function aplicarCodigo(campo, codigo, descricao){
   $('#'+campo).value=codigo;
   if(!$('#p-desc').value) $('#p-desc').value=descricao;
-  $('#cat-resultados').innerHTML=`✓ Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
+  $('#cat-resultados').innerHTML=`${ICN.check} Código ${codigo} aplicado no campo ${campo==='p-catmat'?'CATMAT':'CATSER'}.`;
 }
 
 async function loadRegras(){
@@ -297,6 +511,91 @@ async function salvarRegra(){
   $('#r-valor').value=''; loadRegras();
 }
 async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras(); }
+
+let editandoDocId = null;
+
+async function loadDocumentos(){
+  const ds=await api('/api/documentos');
+  if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
+  $('#lista-documentos').innerHTML=ds.map(d=>{
+    let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
+    if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+    else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    return `<tr>
+      <td>${d.nome}</td><td class="muted">${d.orgao_emissor||'—'}</td>
+      <td>${d.data_validade.split('-').reverse().join('/')}</td>
+      <td style="color:${cor};font-weight:600">${txt}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost" onclick='editarDocumento(${JSON.stringify(d)})'>editar</button>
+        <button class="btn ghost" onclick="delDocumento(${d.id})">excluir</button>
+      </td></tr>`;
+  }).join('');
+}
+
+async function salvarDocumento(){
+  const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
+    data_validade:$('#d-validade').value, observacao:$('#d-obs').value.trim()||null};
+  if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
+  const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
+  await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  cancelarEdicaoDoc(); loadDocumentos();
+}
+
+function editarDocumento(d){
+  $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
+  $('#d-validade').value=d.data_validade; $('#d-obs').value=d.observacao||'';
+  editandoDocId=d.id;
+  $('#doc-form-titulo').textContent='Editar documento';
+  $('#btn-salvar-doc').textContent='Salvar alterações';
+  $('#btn-cancelar-doc').classList.remove('hidden');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function cancelarEdicaoDoc(){
+  editandoDocId=null;
+  ['d-nome','d-orgao','d-validade','d-obs'].forEach(i=>$('#'+i).value='');
+  $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
+  $('#btn-salvar-doc').textContent='Salvar documento';
+  $('#btn-cancelar-doc').classList.add('hidden');
+}
+
+async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
+
+async function mudarStatus(matchId, status){
+  await api(`/api/editais/${matchId}/status`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadResumo();
+}
+
+const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+async function loadPrecos(){
+  const ps=await api('/api/inteligencia-preco');
+  if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
+  $('#lista-precos').innerHTML=ps.map(p=>`<tr>
+    <td>${p.descricao}</td><td>${p.ocorrencias}</td>
+    <td>${fmtR(p.minimo)}</td><td><strong>${fmtR(p.mediana)}</strong></td>
+    <td>${fmtR(p.maximo)}</td><td class="muted">${fmtR(p.preco_venda)}</td>
+  </tr>`).join('');
+}
+
+async function loadConfig(){
+  const c=await api('/api/config');
+  $('#c-ufs').value=c.PNCP_UFS||'';
+  $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
+  $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
+}
+
+async function salvarConfig(){
+  const body={
+    PNCP_UFS:$('#c-ufs').value.trim(),
+    PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
+    PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
+  };
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#config-msg').innerHTML=ICN.check+' salvo — vale na próxima coleta';
+  setTimeout(()=>{$('#config-msg').textContent='';},4000);
+}
 
 async function loadLogs(){
   const ls=await api('/api/logs');
@@ -348,7 +647,59 @@ async function coletar(){
   }, 8000);
 }
 
-loadResumo(); loadEditais(); loadColetaStatus();
+async function abrirDetalhe(id){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando…</p></div></div>';
+  try{
+    const d=await api(`/api/editais/${id}/detalhe`);
+    const e=d.edital;
+    const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
+    const itensHtml=d.itens.map(it=>{
+      let bloco='';
+      if(it.compativel && it.produto){
+        const f=it.produto;
+        const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
+        const cu=f.preco_custo!=null?fmtMoeda(f.preco_custo):'—';
+        let mg='—',cls='';
+        if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); cls=it.margem>=0?'margem-pos':'margem-neg'; }
+        bloco=`<div class="precos">
+            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
+            <div class="preco-box"><div class="v">${cu}</div><div class="l">meu custo</div></div>
+            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial</div></div>
+          </div>
+          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
+        if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
+          bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
+        } else {
+          bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
+        }
+      } else {
+        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${it.quantidade}`:''} · (sem produto seu compatível)</div>`;
+      }
+      return `<div class="item-row ${it.compativel?'match':''}">
+        <strong>${it.compativel?ICN.check+' ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
+    }).join('');
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharModal()">×</button>
+        <h2>${e.orgao||'Órgão'}</h2>
+        <div class="muted" style="font-size:13px">${e.modalidade||''} · ${e.municipio||''}/${e.uf||''} · ${prazo}</div>
+        <p style="line-height:1.45">${e.objeto||''}</p>
+        ${e.link?`<a href="${e.link}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
+        <h3 style="margin:16px 0 4px;font-size:14px">Itens${d.itens.length?` (${d.itens.length})`:''}</h3>
+        ${itensHtml||'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
+      </div></div>`;
+  }catch(err){
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()"><div class="modal-card"><button class="close-x" onclick="fecharModal()">×</button><p>Não consegui carregar os detalhes agora.</p></div></div>`;
+  }
+}
+function fecharModal(){ $('#modal-mount').innerHTML=''; }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
+
+// inicialização + esconder a tela de carregamento
+Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+  setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+});
 setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
 </script>
 </body>

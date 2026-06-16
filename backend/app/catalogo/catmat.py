@@ -49,11 +49,31 @@ def _campo(item: dict, *nomes, default=None):
     return default
 
 
+def _extrair_lista(dados):
+    """A API pode devolver a lista sob chaves diferentes (ou no topo)."""
+    if isinstance(dados, list):
+        return dados
+    if isinstance(dados, dict):
+        for chave in ("resultado", "resultados", "data", "items", "itens",
+                      "content", "_embedded"):
+            v = dados.get(chave)
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict):  # caso _embedded: {algumaLista: [...]}
+                for vv in v.values():
+                    if isinstance(vv, list):
+                        return vv
+    return []
+
+
 def _normalizar_item(item: dict, tipo: str) -> dict:
     return {
         "tipo": tipo,
-        "codigo": _campo(item, "codigoItem", "codigoServico", "codigo"),
-        "descricao": _campo(item, "descricaoItem", "descricao", default=""),
+        "codigo": _campo(item, "codigoItem", "codigoServico", "codigo",
+                         "codigoItemMaterial", "codigoItemServico", "id"),
+        "descricao": _campo(item, "descricaoItem", "descricao",
+                            "nomeItem", "descricaoItemMaterial",
+                            "descricaoItemServico", default=""),
         "pdm": _campo(item, "nomePdm", "pdm"),
         "codigo_pdm": _campo(item, "codigoPdm"),
         "classe": _campo(item, "nomeClasse", "classe"),
@@ -64,7 +84,7 @@ def _normalizar_item(item: dict, tipo: str) -> dict:
 
 
 def buscar(descricao: str, tipo: str = "material",
-           tamanho: int = 500, timeout: int = 45) -> dict:
+           tamanho: int = 500, timeout: int = 45, debug: bool = False) -> dict:
     """
     Busca itens do catálogo e devolve {"status": ..., "itens": [...]}.
 
@@ -87,15 +107,19 @@ def buscar(descricao: str, tipo: str = "material",
         return {"status": "erro_rede", "itens": []}
 
     if resp.status_code != 200:
-        log.warning("Catálogo HTTP %s: %s", resp.status_code, resp.text[:200])
-        return {"status": f"http_{resp.status_code}", "itens": []}
+        log.warning("Catálogo HTTP %s em %s: %s", resp.status_code, resp.url, resp.text[:300])
+        out = {"status": f"http_{resp.status_code}", "itens": []}
+        if debug:
+            out["debug"] = {"url": resp.url, "http": resp.status_code, "corpo": resp.text[:500]}
+        return out
 
     try:
         dados = resp.json()
     except ValueError:
         return {"status": "resposta_invalida", "itens": []}
 
-    registros = (dados.get("resultado") if isinstance(dados, dict) else dados) or []
+    registros = _extrair_lista(dados)
+    log.info("Catálogo: %d registros brutos para '%s'", len(registros), descricao)
 
     alvo = normalizar(descricao)
     tokens = [t for t in alvo.split() if len(t) >= 2]
@@ -109,16 +133,27 @@ def buscar(descricao: str, tipo: str = "material",
         pdm_norm = normalizar(norm["pdm"] or "")
         campo = f"{desc_norm} {pdm_norm}"
 
-        # contém todos os tokens do termo? (sinal forte)
         contem = bool(tokens) and all(t in campo for t in tokens)
         rel = fuzz.token_set_ratio(alvo, desc_norm) / 100.0
         if contem:
             rel = max(rel, 0.9)
         norm["relevancia"] = round(rel, 3)
 
-        # só mantém o que realmente tem a ver com o termo
         if contem or rel >= 0.5:
             itens.append(norm)
 
     itens.sort(key=lambda x: (x["ativo"] is True, x["relevancia"]), reverse=True)
-    return {"status": "ok" if itens else "vazio", "itens": itens[:30]}
+    resultado = {"status": "ok" if itens else "vazio", "itens": itens[:30]}
+    if debug:
+        chaves_topo = list(dados.keys()) if isinstance(dados, dict) else "lista_no_topo"
+        primeiro = registros[0] if registros else None
+        resultado["debug"] = {
+            "url": resp.url,
+            "http": 200,
+            "registros_brutos": len(registros),
+            "itens_apos_filtro": len(itens),
+            "chaves_no_topo": chaves_topo,
+            "campos_do_primeiro_registro": list(primeiro.keys()) if isinstance(primeiro, dict) else None,
+            "amostra_primeiro_registro": primeiro,
+        }
+    return resultado
