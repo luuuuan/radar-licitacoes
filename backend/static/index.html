@@ -125,6 +125,7 @@
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+    <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
   </nav>
 
@@ -219,6 +220,28 @@
       <tbody id="lista-regras"></tbody></table>
   </section>
 
+  <!-- DOCUMENTOS -->
+  <section id="t-documentos" class="hidden">
+    <div class="card">
+      <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Cadastre suas certidões e documentos de habilitação com a data de validade. O sistema avisa antes de vencer.</p>
+      <div class="field"><label>Nome do documento</label>
+        <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
+      <div class="grid2">
+        <div class="field"><label>Órgão emissor</label>
+          <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
+        <div class="field"><label>Validade</label>
+          <input id="d-validade" type="date" style="width:100%"></div>
+      </div>
+      <div class="field"><label>Observação (opcional)</label>
+        <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+      <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
+      <button class="btn ghost hidden" onclick="cancelarEdicaoDoc()" id="btn-cancelar-doc">Cancelar edição</button>
+    </div>
+    <table><thead><tr><th>Documento</th><th>Emissor</th><th>Validade</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="lista-documentos"></tbody></table>
+  </section>
+
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
@@ -236,6 +259,7 @@ function tab(name){
   ['editais','catalogo','regras','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   if(name==='catalogo') loadProdutos();
   if(name==='regras') loadRegras();
+  if(name==='documentos') loadDocumentos();
   if(name==='logs') loadLogs();
 }
 
@@ -418,6 +442,55 @@ async function salvarRegra(){
   $('#r-valor').value=''; loadRegras();
 }
 async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras(); }
+
+let editandoDocId = null;
+
+async function loadDocumentos(){
+  const ds=await api('/api/documentos');
+  if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
+  $('#lista-documentos').innerHTML=ds.map(d=>{
+    let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
+    if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+    else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    return `<tr>
+      <td>${d.nome}</td><td class="muted">${d.orgao_emissor||'—'}</td>
+      <td>${d.data_validade.split('-').reverse().join('/')}</td>
+      <td style="color:${cor};font-weight:600">${txt}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost" onclick='editarDocumento(${JSON.stringify(d)})'>editar</button>
+        <button class="btn ghost" onclick="delDocumento(${d.id})">excluir</button>
+      </td></tr>`;
+  }).join('');
+}
+
+async function salvarDocumento(){
+  const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
+    data_validade:$('#d-validade').value, observacao:$('#d-obs').value.trim()||null};
+  if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
+  const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
+  await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  cancelarEdicaoDoc(); loadDocumentos();
+}
+
+function editarDocumento(d){
+  $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
+  $('#d-validade').value=d.data_validade; $('#d-obs').value=d.observacao||'';
+  editandoDocId=d.id;
+  $('#doc-form-titulo').textContent='Editar documento';
+  $('#btn-salvar-doc').textContent='Salvar alterações';
+  $('#btn-cancelar-doc').classList.remove('hidden');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function cancelarEdicaoDoc(){
+  editandoDocId=null;
+  ['d-nome','d-orgao','d-validade','d-obs'].forEach(i=>$('#'+i).value='');
+  $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
+  $('#btn-salvar-doc').textContent='Salvar documento';
+  $('#btn-cancelar-doc').classList.add('hidden');
+}
+
+async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
 
 async function loadLogs(){
   const ls=await api('/api/logs');

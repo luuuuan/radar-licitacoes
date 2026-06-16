@@ -56,3 +56,12 @@ def notificar(edital, match) -> bool:
         if canal.disponivel() and canal.enviar(titulo, corpo):
             enviou = True
     return enviou
+
+
+def enviar_aviso(titulo: str, corpo: str) -> bool:
+    """Envio genérico (lembretes de prazo, documentos, etc.)."""
+    enviou = False
+    for canal in NOTIFIERS:
+        if canal.disponivel() and canal.enviar(titulo, corpo):
+            enviou = True
+    return enviou

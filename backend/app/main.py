@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, Match, RegraExclusao, LogColeta
+from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento
 from .service import processar_coleta
 from .catalogo import catmat
 
@@ -116,6 +116,13 @@ class RegraIn(BaseModel):
 class MarcarIn(BaseModel):
     lido: bool | None = None
     interessante: bool | None = None
+
+
+class DocumentoIn(BaseModel):
+    nome: str
+    orgao_emissor: str | None = None
+    data_validade: date
+    observacao: str | None = None
 
 
 # --------------------------- Produtos --------------------------------- #
@@ -337,6 +344,9 @@ def _rodar_coleta_bg():
     db = SessionLocal()
     try:
         processar_coleta(db)
+        # após coletar, verifica prazos encerrando e documentos vencendo
+        from .lembretes import verificar_todos
+        verificar_todos(db)
     finally:
         db.close()
 
@@ -456,6 +466,62 @@ def buscar_catmat(
     de dados abertos do Compras.gov.br, ranqueados por relevância."""
     r = catmat.buscar(descricao, tipo=tipo)
     return {"status": r["status"], "total": len(r["itens"]), "resultados": r["itens"]}
+
+
+# --------------------------- Documentos (habilitação) ----------------- #
+@app.get("/api/documentos")
+def listar_documentos(db: Session = Depends(get_session)):
+    docs = db.execute(select(Documento).order_by(Documento.data_validade.asc())).scalars().all()
+    hoje = date.today()
+    return [{
+        "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
+        "data_validade": d.data_validade.isoformat(),
+        "dias_para_vencer": (d.data_validade - hoje).days,
+        "observacao": d.observacao, "ativo": d.ativo,
+    } for d in docs]
+
+
+@app.post("/api/documentos")
+def criar_documento(dados: DocumentoIn, db: Session = Depends(get_session)):
+    d = Documento(**dados.model_dump())
+    db.add(d)
+    db.commit()
+    return {"id": d.id}
+
+
+@app.put("/api/documentos/{doc_id}")
+def atualizar_documento(doc_id: int, dados: DocumentoIn, db: Session = Depends(get_session)):
+    d = db.get(Documento, doc_id)
+    if not d:
+        raise HTTPException(404, "Documento não encontrado")
+    for campo, valor in dados.model_dump().items():
+        setattr(d, campo, valor)
+    d.avisado_para = None  # validade mudou -> permite avisar de novo
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/documentos/{doc_id}")
+def remover_documento(doc_id: int, db: Session = Depends(get_session)):
+    d = db.get(Documento, doc_id)
+    if d:
+        db.delete(d)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/lembretes/verificar")
+def verificar_lembretes(bg: BackgroundTasks):
+    """Dispara a verificação de prazos e documentos manualmente."""
+    def _run():
+        db = SessionLocal()
+        try:
+            from .lembretes import verificar_todos
+            verificar_todos(db)
+        finally:
+            db.close()
+    bg.add_task(_run)
+    return {"ok": True, "mensagem": "Verificação de lembretes iniciada."}
 
 
 # --------------------------- Dashboard estático ----------------------- #

@@ -54,6 +54,9 @@ _COLUNAS_NOVAS = {
         ("fornecedor_contato", "VARCHAR(160)"),
         ("fornecedor_site", "VARCHAR(255)"),
     ],
+    "matches": [
+        ("prazo_avisado", "BOOLEAN DEFAULT FALSE"),
+    ],
 }
 
 

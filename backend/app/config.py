@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"
 
+    # Lembretes
+    LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
+    LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
+
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.
     CRON_SECRET: str = ""

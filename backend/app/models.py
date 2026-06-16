@@ -101,6 +101,7 @@ class Match(Base):
     lido: Mapped[bool] = mapped_column(Boolean, default=False)
     interessante: Mapped[bool] = mapped_column(Boolean, default=False)
     notificado: Mapped[bool] = mapped_column(Boolean, default=False)
+    prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
@@ -127,3 +128,19 @@ class LogColeta(Base):
     editais_vistos: Mapped[int] = mapped_column(Integer, default=0)
     matches_fortes: Mapped[int] = mapped_column(Integer, default=0)
     erro: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Documento(Base):
+    """Documentos de habilitação (certidões, SICAF, etc.) com data de validade,
+    para o sistema avisar antes de vencer."""
+    __tablename__ = "documentos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
+    orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    data_validade: Mapped[date] = mapped_column(Date)
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
+    avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
