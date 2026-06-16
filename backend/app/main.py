@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query
+from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -47,8 +47,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Radar de Licitações", version="1.1", lifespan=lifespan)
 
-# Caminhos liberados sem autenticação (health check / keep-alive)
-_ROTAS_PUBLICAS = {"/health"}
+# Caminhos liberados sem autenticação Basic (health/keep-alive e cron com chave própria)
+_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron"}
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -345,6 +345,20 @@ def _rodar_coleta_bg():
 def coletar_agora(bg: BackgroundTasks):
     bg.add_task(_rodar_coleta_bg)
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
+
+
+@app.api_route("/api/coletar-cron", methods=["GET", "POST"])
+def coletar_cron(bg: BackgroundTasks, request: Request):
+    """Dispara a coleta de DENTRO do Render (que alcança o PNCP), chamado por um
+    agendador externo (GitHub Actions). Protegido por CRON_SECRET, já que esta
+    rota é isenta do login Basic."""
+    if not settings.CRON_SECRET:
+        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
+    enviado = request.headers.get("X-Cron-Key") or request.query_params.get("chave") or ""
+    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
+        raise HTTPException(403, "Chave inválida.")
+    bg.add_task(_rodar_coleta_bg)
+    return {"ok": True, "mensagem": "Coleta iniciada (cron)."}
 
 
 @app.get("/api/coleta/status")

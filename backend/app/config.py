@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # Autenticação (HTTP Basic). Se ambos vazios, a API fica aberta (dev local).
     BASIC_AUTH_USER: str = ""
     BASIC_AUTH_PASS: str = ""
+    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
+    # Necessária porque a coleta passa a rodar no Render (que alcança o PNCP),
+    # disparada por um agendador externo (GitHub Actions) 1x/dia.
+    CRON_SECRET: str = ""
 
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
@@ -58,6 +62,10 @@ class Settings(BaseSettings):
 
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"
+
+    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
+    # Se vazia, o endpoint fica desativado.
+    CRON_SECRET: str = ""
 
     @field_validator("SMTP_PORT", mode="before")
     @classmethod
