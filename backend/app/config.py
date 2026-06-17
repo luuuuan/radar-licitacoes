@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
     LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
 
+    # IA semântica (Gemini embeddings) — opcional
+    GEMINI_API_KEY: str = ""
+    IA_MODELO_EMBEDDING: str = "gemini-embedding-001"
+    # peso da IA no score final (0..1). 0.4 = 60% texto + 40% IA.
+    IA_PESO: float = 0.4
+    # piso de similaridade: cosseno abaixo disso conta como 0 (evita que a
+    # "linha de base" alta dos embeddings infle itens sem relação).
+    IA_FLOOR: float = 0.5
+
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.
     CRON_SECRET: str = ""

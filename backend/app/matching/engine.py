@@ -26,6 +26,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ..config import settings
+from .embeddings import embeddings as _ia_embeddings, cosseno as _ia_cosseno, ia_disponivel
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +101,10 @@ class ResultadoMatch:
 # Motor
 # ---------------------------------------------------------------------------
 class MatchingEngine:
-    def __init__(self, produtos: list[ProdutoCat]):
+    def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False):
         self.produtos = produtos
+        self.usar_ia = bool(usar_ia) and ia_disponivel() and len(produtos) > 0
+        self._prod_emb = None  # embeddings dos produtos (gerados sob demanda)
         self._textos_prod = [p.texto_busca() for p in produtos]
         self._vectorizer = None
         self._matriz_prod = None
@@ -167,16 +170,56 @@ class MatchingEngine:
         return melhor, melhor_prod, motivo
 
     # ---- avalia um edital inteiro -----------------------------------------
+    def _emb_produtos(self):
+        if self._prod_emb is None:
+            self._prod_emb = _ia_embeddings(self._textos_prod)
+        return self._prod_emb
+
+    def _ia_score_item(self, item_emb) -> tuple[float, ProdutoCat | None]:
+        """Melhor similaridade semântica do item contra os produtos (reescalada)."""
+        if not item_emb:
+            return 0.0, None
+        melhor, prod = 0.0, None
+        for j, pe in enumerate(self._emb_produtos()):
+            if not pe:
+                continue
+            c = _ia_cosseno(item_emb, pe)
+            if c > melhor:
+                melhor, prod = c, self.produtos[j]
+        # reescala: abaixo do piso vira 0; piso..1 -> 0..1
+        floor = settings.IA_FLOOR
+        norm = max(0.0, (melhor - floor) / (1.0 - floor)) if melhor > floor else 0.0
+        return norm, prod
+
     def avaliar(self, objeto: str, itens: list[ItemEdt]) -> ResultadoMatch:
         # Se o edital não trouxe itens detalhados, usa o objeto como um item único.
         alvos = itens if itens else [ItemEdt(numero=None, descricao=objeto or "")]
+
+        # embeddings dos itens em lote (1 chamada), só se a IA estiver ligada
+        item_embs = [None] * len(alvos)
+        if self.usar_ia:
+            textos_itens = [(it.texto_busca() or normalizar(objeto or "")) for it in alvos]
+            item_embs = _ia_embeddings(textos_itens)
 
         scores_itens: list[float] = []
         detalhe: list[dict] = []
         compativeis = 0
 
-        for it in alvos:
+        for idx, it in enumerate(alvos):
             sc, prod, motivo = self._score_item(it)
+
+            # reforço pela IA semântica
+            if self.usar_ia and item_embs[idx]:
+                ia_sc, ia_prod = self._ia_score_item(item_embs[idx])
+                w = settings.IA_PESO
+                combinado = sc * (1 - w) + ia_sc * w
+                if ia_sc > sc and ia_prod is not None:
+                    prod = ia_prod
+                    motivo = f"semelhança IA ({round(ia_sc, 2)})"
+                elif ia_sc > 0 and motivo:
+                    motivo = f"{motivo} + IA"
+                sc = combinado
+
             scores_itens.append(sc)
             if sc >= settings.LIMIAR_ITEM:
                 compativeis += 1

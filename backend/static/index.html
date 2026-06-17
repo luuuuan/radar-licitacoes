@@ -97,6 +97,16 @@
   .status-sel.st-perdido,.status-sel.st-descartado{border-color:#f87171;color:#f87171}
   .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
   .forn a{color:var(--accent);text-decoration:none}
+  /* switch liga/desliga */
+  .switch{position:relative;display:inline-block;width:46px;height:26px}
+  .switch input{opacity:0;width:0;height:0}
+  .switch .slider{position:absolute;inset:0;background:var(--panel2);border:1px solid var(--line);
+    border-radius:26px;cursor:pointer;transition:.2s}
+  .switch .slider::before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;
+    background:var(--muted);border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--accent);border-color:var(--accent)}
+  .switch input:checked + .slider::before{transform:translateX(20px);background:#fff}
+  .switch input:disabled + .slider{opacity:.5;cursor:not-allowed}
 
   /* ---- Responsivo ---- */
   /* Tablet */
@@ -315,6 +325,14 @@
         <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
       <div class="field"><label>Horizonte de busca (dias à frente)</label>
         <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+      <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
+        <label>Refinamento por IA (semântico)</label>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <label class="switch"><input type="checkbox" id="c-ia"><span class="slider"></span></label>
+          <span id="ia-status" class="muted" style="font-size:12px"></span>
+        </div>
+        <span class="muted" style="font-size:11px">Usa o Gemini (gratuito) pra entender sinônimos e linguagem de edital, refinando se o seu item condiz com o que é pedido. Precisa da chave GEMINI_API_KEY configurada no servidor.</span>
+      </div>
       <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
       <span id="config-msg" class="muted" style="margin-left:10px"></span>
     </div>
@@ -597,6 +615,12 @@ async function loadConfig(){
   $('#c-ufs').value=c.PNCP_UFS||'';
   $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
   $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
+  const disp = c.IA_DISPONIVEL==='1';
+  $('#c-ia').checked = c.IA_ATIVA==='1' && disp;
+  $('#c-ia').disabled = !disp;
+  $('#ia-status').textContent = disp
+    ? (c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)')
+    : 'Chave GEMINI_API_KEY não configurada no servidor';
 }
 
 async function salvarConfig(){
@@ -604,10 +628,12 @@ async function salvarConfig(){
     PNCP_UFS:$('#c-ufs').value.trim(),
     PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
     PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
+    IA_ATIVA: $('#c-ia').checked ? '1' : '0',
   };
   await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  $('#config-msg').innerHTML=ICN.check+' salvo — vale na próxima coleta';
-  setTimeout(()=>{$('#config-msg').textContent='';},4000);
+  $('#config-msg').innerHTML=ICN.check+' salvo — vale na próxima coleta (use Recalcular p/ aplicar nos já coletados)';
+  setTimeout(()=>{$('#config-msg').textContent='';},5000);
+  loadConfig();
 }
 
 async function loadLogs(){

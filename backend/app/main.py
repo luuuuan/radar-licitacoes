@@ -562,12 +562,16 @@ class ConfigIn(BaseModel):
     PNCP_UFS: str | None = None
     PNCP_MODALIDADES: str | None = None
     PNCP_HORIZONTE_DIAS: str | None = None
+    IA_ATIVA: str | None = None
 
 
 @app.get("/api/config")
 def obter_config(db: Session = Depends(get_session)):
     from . import configuracoes
-    return configuracoes.todas(db)
+    from .matching.embeddings import ia_disponivel
+    dados = configuracoes.todas(db)
+    dados["IA_DISPONIVEL"] = "1" if ia_disponivel() else "0"  # chave configurada?
+    return dados
 
 
 @app.post("/api/config")

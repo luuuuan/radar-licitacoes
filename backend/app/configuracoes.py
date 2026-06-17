@@ -13,6 +13,7 @@ _FALLBACK = {
     "PNCP_UFS": lambda: settings.PNCP_UFS,
     "PNCP_MODALIDADES": lambda: settings.PNCP_MODALIDADES,
     "PNCP_HORIZONTE_DIAS": lambda: str(settings.PNCP_HORIZONTE_DIAS),
+    "IA_ATIVA": lambda: "0",  # IA semântica ligada/desligada pelo painel
 }
 
 

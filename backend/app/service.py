@@ -78,7 +78,9 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
     catalogo = _carregar_catalogo(db)
     if not catalogo:
         log.warning("Catálogo vazio — cadastre produtos antes de coletar.")
-    engine = MatchingEngine(catalogo)
+    from . import configuracoes as cfg
+    usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
     termos_excl, categorias_excl = _carregar_exclusoes(db)
     nivel_min = NIVEIS_ORDEM.get(settings.NOTIFICAR_NIVEL_MINIMO, 2)
 
@@ -125,7 +127,9 @@ def recalcular_matches(db: Session) -> dict:
     os matches gravados. Útil depois de adicionar/remover produtos: editais antigos
     deixam de mostrar resultados defasados. Com catálogo vazio, zera tudo."""
     catalogo = _carregar_catalogo(db)
-    engine = MatchingEngine(catalogo)
+    from . import configuracoes as cfg
+    usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
     editais = db.execute(select(Edital)).scalars().all()
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
 
