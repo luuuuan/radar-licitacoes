@@ -377,6 +377,14 @@ def coletar_agora(bg: BackgroundTasks):
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
+@app.post("/api/recalcular")
+def recalcular(db: Session = Depends(get_session)):
+    """Reavalia os editais já coletados contra o catálogo atual (corrige
+    resultados defasados depois de adicionar/remover produtos)."""
+    from .service import recalcular_matches
+    return recalcular_matches(db)
+
+
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])
 def coletar_cron(bg: BackgroundTasks, request: Request):
     """Dispara a coleta de DENTRO do Render (que alcança o PNCP), chamado por um

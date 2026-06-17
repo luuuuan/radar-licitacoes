@@ -120,6 +120,41 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
     return resumo
 
 
+def recalcular_matches(db: Session) -> dict:
+    """Reavalia TODOS os editais já coletados contra o catálogo ATUAL, atualizando
+    os matches gravados. Útil depois de adicionar/remover produtos: editais antigos
+    deixam de mostrar resultados defasados. Com catálogo vazio, zera tudo."""
+    catalogo = _carregar_catalogo(db)
+    engine = MatchingEngine(catalogo)
+    editais = db.execute(select(Edital)).scalars().all()
+    resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
+
+    for ed in editais:
+        resumo["editais"] += 1
+        itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
+                             ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
+                     for i in ed.itens]
+        resultado = engine.avaliar(ed.objeto or "", itens_edt)
+
+        match = db.execute(
+            select(Match).where(Match.edital_id == ed.id)
+        ).scalars().first()
+        if match is None:
+            match = Match(edital_id=ed.id)
+            db.add(match)
+        match.score = resultado.score
+        match.nivel = resultado.nivel
+        match.itens_compativeis = resultado.itens_compativeis
+        match.detalhe = {"itens": resultado.detalhe}
+        resumo["atualizados"] += 1
+        if resultado.nivel == "forte":
+            resumo["fortes"] += 1
+
+    db.commit()
+    log.info("Recálculo de matches: %s", resumo)
+    return resumo
+
+
 def _processar_edital(db, ec, engine, catalogo, tem_catalogo,
                       termos_excl, categorias_excl, nivel_min, resumo):
     """Processa um único edital: exclusão -> persistência -> match -> notificação.

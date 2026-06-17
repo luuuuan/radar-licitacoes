@@ -144,7 +144,8 @@
   <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
-  <button class="btn" onclick="coletar()">▶ Coletar agora</button>
+  <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+  <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
 </header>
 
 <div class="wrap">
@@ -623,6 +624,19 @@ async function coletar(){
     await loadColetaStatus(); loadResumo();
     if(++n>45) clearInterval(t);     // ~6 min
   }, 8000);
+}
+
+async function recalcular(){
+  const el=$('#coleta-status');
+  el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
+  try{
+    const r=await api('/api/recalcular',{method:'POST'});
+    el.textContent=`Recalculados ${r.atualizados} edital(is) · ${r.fortes} forte(s)`;
+    el.style.color='var(--muted)';
+    loadEditais(); loadResumo();
+  }catch(e){
+    el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+  }
 }
 
 async function abrirDetalhe(id){
