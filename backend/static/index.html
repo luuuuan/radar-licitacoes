@@ -27,6 +27,10 @@
   nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
     padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
   nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* elementos do menu lateral (só aparecem no mobile) */
+  .hamburger{display:none;background:transparent;border:none;color:var(--txt);cursor:pointer;padding:4px;margin-right:4px}
+  .nav-head{display:none}
+  .nav-overlay{display:none}
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
   select,input,textarea{background:var(--panel2);border:1px solid var(--line);
     color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
@@ -111,9 +115,18 @@
     .kpi .n{font-size:20px}
     .grid2{grid-template-columns:1fr}
     .precos{grid-template-columns:1fr}
-    /* menu vira uma faixa rolável na horizontal (uma linha só) */
-    nav{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
-    nav button{padding:7px 12px;font-size:12px;white-space:nowrap;flex:0 0 auto}
+    /* menu lateral (gaveta) no mobile */
+    .hamburger{display:inline-flex;align-items:center}
+    .nav-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:5500}
+    nav{position:fixed;top:0;left:0;height:100%;width:80%;max-width:300px;
+      margin:0;flex-direction:column;flex-wrap:nowrap;gap:4px;background:var(--panel);
+      border-right:1px solid var(--line);padding:14px;z-index:6000;
+      transform:translateX(-100%);transition:transform .25s ease;overflow-y:auto}
+    nav.open{transform:translateX(0)}
+    nav button{width:100%;text-align:left;padding:12px 14px;font-size:14px}
+    .nav-head{display:flex;justify-content:space-between;align-items:center;
+      font-weight:600;font-size:15px;margin-bottom:8px;color:var(--txt)}
+    .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px}
     .ed-top{flex-direction:column;gap:6px}
     .toolbar{gap:8px}
     .toolbar input,.toolbar select{flex:1 1 auto;min-width:0}
@@ -140,6 +153,7 @@
 </div>
 <div id="modal-mount"></div>
 <header>
+  <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
   <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Radar de Licitações</h1>
   <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
@@ -151,7 +165,9 @@
 <div class="wrap">
   <div class="kpis" id="kpis"></div>
 
-  <nav>
+  <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
+  <nav id="nav">
+    <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
     <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
@@ -182,6 +198,11 @@
         <option value="descartado">Descartado</option>
       </select>
       <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+      <select id="f-porpag" onchange="loadEditais()" title="Editais por página">
+        <option value="10">10 por página</option>
+        <option value="20" selected>20 por página</option>
+        <option value="50">50 por página</option>
+      </select>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
@@ -326,9 +347,17 @@ const ICN = {
   doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
 };
 
+function toggleMenu(){
+  const open = $('#nav').classList.toggle('open');
+  $('#nav-overlay').classList.toggle('open', open);
+}
+
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
   ['editais','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  // fecha o menu lateral no mobile após escolher
+  $('#nav').classList.remove('open');
+  $('#nav-overlay').classList.remove('open');
   if(name==='catalogo') loadProdutos();
   if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
@@ -354,7 +383,8 @@ async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
         st=$('#f-status').value, nl=$('#f-naolidos').checked;
-  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:50});
+  const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
+  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag});
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
@@ -398,11 +428,15 @@ async function loadEditais(resetPagina=true){
       </div>
     </div>`;
   }).join('');
-  const nav = r.paginas>1 ? `<div class="toolbar" style="justify-content:center;margin-top:6px">
+  const ini = (r.pagina-1)*r.por_pagina + 1;
+  const fim = Math.min(r.pagina*r.por_pagina, r.total);
+  const navBtns = r.paginas>1 ? `
       <button class="btn ghost" ${paginaEditais<=1?'disabled':''} onclick="mudarPagina(-1)">‹ anterior</button>
-      <span class="muted">página ${r.pagina} de ${r.paginas} · ${r.total} editais</span>
-      <button class="btn ghost" ${paginaEditais>=r.paginas?'disabled':''} onclick="mudarPagina(1)">próxima ›</button>
-    </div>` : '';
+      <button class="btn ghost" ${paginaEditais>=r.paginas?'disabled':''} onclick="mudarPagina(1)">próxima ›</button>` : '';
+  const nav = `<div class="toolbar" style="justify-content:center;align-items:center;margin-top:10px;gap:10px">
+      <span class="muted">mostrando ${ini}–${fim} de ${r.total} edital(is)${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
+      ${navBtns}
+    </div>`;
   $('#lista-editais').innerHTML = cards + nav;
 }
 
