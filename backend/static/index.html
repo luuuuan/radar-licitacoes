@@ -397,7 +397,7 @@ function tab(name){
 async function loadResumo(){
   const r = await api('/api/resumo');
   $('#kpis').innerHTML = [
-    ['Editais',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
+    ['Editais ativos',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
     ['Não lidos',r.nao_lidos],['Produtos',r.produtos]
   ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
 }

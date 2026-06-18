@@ -462,12 +462,25 @@ def logs(db: Session = Depends(get_session)):
 
 @app.get("/api/resumo")
 def resumo(db: Session = Depends(get_session)):
+    hoje = date.today()
+    # "ativo" = sem data de encerramento ou com prazo ainda não vencido
+    ativo = (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje)
+
     total_prod = db.scalar(select(func.count(Produto.id))) or 0
-    total_editais = db.scalar(select(func.count(Edital.id))) or 0
+    total_editais = db.scalar(
+        select(func.count(Edital.id)).where(ativo)
+    ) or 0
     por_nivel = dict(db.execute(
-        select(Match.nivel, func.count(Match.id)).group_by(Match.nivel)
+        select(Match.nivel, func.count(Match.id))
+        .join(Edital, Match.edital_id == Edital.id)
+        .where(ativo)
+        .group_by(Match.nivel)
     ).all())
-    nao_lidos = db.scalar(select(func.count(Match.id)).where(Match.lido == False)) or 0  # noqa: E712
+    nao_lidos = db.scalar(
+        select(func.count(Match.id))
+        .join(Edital, Match.edital_id == Edital.id)
+        .where(ativo).where(Match.lido == False)  # noqa: E712
+    ) or 0
     return {
         "produtos": total_prod, "editais": total_editais,
         "fortes": por_nivel.get("forte", 0), "medios": por_nivel.get("medio", 0),
