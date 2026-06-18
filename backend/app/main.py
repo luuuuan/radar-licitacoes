@@ -163,13 +163,15 @@ def modelo_produtos():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Produtos"
-    cabec = ["descricao", "palavras_chave", "ncm", "catmat", "catser",
-             "preco_custo", "preco_venda", "fornecedor_nome"]
+    cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
+             "preco_custo", "preco_venda",
+             "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
     ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
-               "150123", "", "18,90", "24,50", "Distribuidora Exemplo"])
+               "7891234567890", "150123", "", "18,90", "24,50",
+               "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
     ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
-               "", "", "1,20", "2,00", ""])
+               "", "", "", "1,20", "2,00", "", "", ""])
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
