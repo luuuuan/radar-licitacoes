@@ -370,6 +370,8 @@ const ICN = {
   fornecedor: _svg('<path d="M3 21V8l6-3 6 3v13"/><path d="M9 21v-5h2v5"/><path d="M21 21V11l-6-3"/>'),
   externo:    _svg('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
   baixar:     _svg('<path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/>'),
+  ia:         _svg('<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15z"/>'),
+  proposta:   _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/>'),
   relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
 };
@@ -428,6 +430,8 @@ function cardEdital(e){
     <div class="acoes">
       ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
+      <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
+      <button class="btn ghost" onclick="abrirProposta(${e.edital_id})">${ICN.proposta||''} Proposta</button>
       <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
       <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
@@ -729,6 +733,135 @@ async function recalcular(){
   }catch(e){
     el.textContent='Erro ao recalcular'; el.style.color='#f87171';
   }
+}
+
+function _listaHTML(titulo, itens){
+  if(!itens||!itens.length) return '';
+  return `<div style="margin-top:10px"><strong>${titulo}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${i}</li>`).join('')}</ul></div>`;
+}
+
+async function analisarEdital(id, forcar){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p></div></div>';
+  try{
+    const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`);
+    let corpo;
+    if(r.status==='ok'){
+      const flags=[];
+      if(r.exige_amostra) flags.push('Exige amostra');
+      if(r.exige_visita) flags.push('Exige visita técnica');
+      corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
+        ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
+        ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
+        ${_listaHTML('Prazos', r.prazos)}
+        ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
+        <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
+          Análise automática por IA${r.fonte?` · fonte: ${r.fonte}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
+          <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
+        </div>`;
+    } else {
+      const msgs={sem_ia:'A IA não está configurada. Ligue o toggle em Configurações e adicione a chave GEMINI_API_KEY no servidor.',
+        sem_ref:'Não foi possível localizar este edital no PNCP.',
+        sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
+        vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
+        sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
+        erro_ia:'A IA não respondeu agora (pode ser limite diário do plano gratuito). Tente mais tarde.',
+        resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
+      corpo = `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
+        ${r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
+    }
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Análise do edital (IA)</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>${corpo}
+      </div></div>`;
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao analisar o edital.</p></div></div>';
+  }
+}
+
+let _propEditalId = null;
+
+async function abrirProposta(id){
+  _propEditalId = id;
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando proposta…</p></div></div>';
+  try{
+    const p=await api(`/api/editais/${id}/proposta`);
+    window._propItens = (p.itens||[]).map(i=>({
+      descricao:i.descricao||'', quantidade:+i.quantidade||0,
+      custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card" style="max-width:880px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0">Proposta — ${p.orgao||'edital'}</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
+        <div id="prop-tabela"></div>
+        <div class="field" style="margin-top:10px"><label>Observações</label>
+          <textarea id="prop-obs" style="width:100%;min-height:50px">${p.observacoes||''}</textarea></div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
+          <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
+          <span style="flex:1"></span>
+          <span id="prop-msg" class="muted" style="font-size:12px"></span>
+        </div>
+      </div></div>`;
+    renderProposta();
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao abrir a proposta.</p></div></div>';
+  }
+}
+
+function renderProposta(){
+  const its=window._propItens||[];
+  let tv=0, tc=0;
+  const linhas=its.map((it,idx)=>{
+    const totItem=(it.preco_unit||0)*(it.quantidade||0);
+    const margItem=((it.preco_unit||0)-(it.custo_unit||0))*(it.quantidade||0);
+    tv+=totItem; tc+=(it.custo_unit||0)*(it.quantidade||0);
+    return `<tr>
+      <td><input value="${(it.descricao||'').replace(/"/g,'&quot;')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
+      <td><input type="number" step="any" value="${it.quantidade}" onchange="propSet(${idx},'quantidade',this.value)" style="width:80px"></td>
+      <td><input type="number" step="any" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
+      <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
+      <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
+      <td style="white-space:nowrap;color:${margItem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margItem)}</td>
+      <td><button class="btn ghost" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
+    </tr>`;
+  }).join('');
+  const margem=tv-tc, pct=tv?(margem/tv*100):0;
+  $('#prop-tabela').innerHTML=`<div style="overflow-x:auto"><table>
+    <thead><tr><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
+    <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
+  </table></div>
+  <button class="btn ghost" style="margin-top:8px" onclick="propAdd()">+ adicionar item</button>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+    <div><div class="muted" style="font-size:11px">Total da proposta</div><strong style="font-size:18px">${fmtMoeda(tv)}</strong></div>
+    <div><div class="muted" style="font-size:11px">Custo total</div><strong style="font-size:18px">${fmtMoeda(tc)}</strong></div>
+    <div><div class="muted" style="font-size:11px">Margem</div><strong style="font-size:18px;color:${margem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margem)} (${pct.toFixed(1)}%)</strong></div>
+  </div>`;
+}
+
+function propSet(idx,campo,val){
+  const it=window._propItens[idx];
+  it[campo] = campo==='descricao' ? val : (parseFloat(val)||0);
+  renderProposta();
+}
+function propAdd(){ window._propItens.push({descricao:'',quantidade:1,custo_unit:0,preco_unit:0}); renderProposta(); }
+function propDel(idx){ window._propItens.splice(idx,1); renderProposta(); }
+
+async function salvarProposta(){
+  try{
+    await api(`/api/editais/${_propEditalId}/proposta`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({itens:window._propItens, observacoes:$('#prop-obs').value})});
+    $('#prop-msg').innerHTML=ICN.check+' proposta salva';
+    setTimeout(()=>{$('#prop-msg').textContent='';},4000);
+  }catch(e){ $('#prop-msg').textContent='erro ao salvar'; }
 }
 
 async function baixarDocumentos(id){

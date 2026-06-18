@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     # IA semântica (Gemini embeddings) — opcional
     GEMINI_API_KEY: str = ""
     IA_MODELO_EMBEDDING: str = "gemini-embedding-001"
+    IA_MODELO_TEXTO: str = "gemini-2.5-flash"   # análise de editais (texto)
     # peso da IA no score final (0..1). 0.4 = 60% texto + 40% IA.
     IA_PESO: float = 0.4
     # piso de similaridade: cosseno abaixo disso conta como 0 (evita que a

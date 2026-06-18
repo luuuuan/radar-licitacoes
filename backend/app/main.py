@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento
+from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta
 from .service import processar_coleta
 from .catalogo import catmat
 
@@ -412,13 +412,8 @@ def _ref_pncp(ed: Edital):
         return None
 
 
-@app.get("/api/editais/{edital_id}/documentos")
-def documentos_edital(edital_id: int, db: Session = Depends(get_session)):
-    """Lista os arquivos/anexos do edital publicados no PNCP (edital, anexos,
-    planilha de itens) para download."""
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
+def _listar_arquivos_pncp(ed: Edital) -> dict:
+    """Busca no PNCP os arquivos/anexos publicados para o edital."""
     ref = _ref_pncp(ed)
     if not ref:
         return {"status": "sem_ref", "arquivos": [], "portal": ed.link}
@@ -454,6 +449,43 @@ def documentos_edital(edital_id: int, db: Session = Depends(get_session)):
     arquivos = [x for x in arquivos if x["url"]]
     return {"status": "ok" if arquivos else "vazio",
             "arquivos": arquivos, "portal": ed.link}
+
+
+@app.get("/api/editais/{edital_id}/documentos")
+def documentos_edital(edital_id: int, db: Session = Depends(get_session)):
+    """Lista os arquivos/anexos do edital publicados no PNCP para download."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    return _listar_arquivos_pncp(ed)
+
+
+@app.get("/api/editais/{edital_id}/analise")
+def analise_edital(edital_id: int, forcar: bool = Query(False),
+                   db: Session = Depends(get_session)):
+    """Análise do edital por IA (resumo, exigências, prazos, pontos de atenção).
+    Resultado fica em cache; use ?forcar=true para refazer."""
+    from . import analise_edital as ia
+    import json as _json
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    if not ia.ia_texto_disponivel():
+        return {"status": "sem_ia"}
+    if ed.analise_ia and not forcar:
+        try:
+            cache = _json.loads(ed.analise_ia)
+            cache["cache"] = True
+            return cache
+        except ValueError:
+            pass
+    docs = _listar_arquivos_pncp(ed)
+    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [])
+    if resultado.get("status") == "ok":
+        ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
+        ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+        db.commit()
+    return resultado
 
 
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])
@@ -544,6 +576,84 @@ def resumo(db: Session = Depends(get_session)):
         "fortes": por_nivel.get("forte", 0), "medios": por_nivel.get("medio", 0),
         "fracos": por_nivel.get("fraco", 0), "nao_lidos": nao_lidos,
     }
+
+
+class PropostaIn(BaseModel):
+    itens: list[dict] = []
+    observacoes: str | None = None
+
+
+def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
+    if prop and prop.itens:
+        itens = prop.itens
+    else:
+        # esqueleto a partir dos itens do edital
+        itens = [{
+            "descricao": it.descricao,
+            "quantidade": it.quantidade or 0,
+            "custo_unit": 0,
+            "preco_unit": it.valor_unitario or 0,
+        } for it in ed.itens]
+    total_venda = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
+    total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
+    margem = total_venda - total_custo
+    margem_pct = (margem / total_venda * 100) if total_venda else 0
+    return {
+        "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+        "itens": itens, "observacoes": prop.observacoes if prop else "",
+        "total_venda": round(total_venda, 2), "total_custo": round(total_custo, 2),
+        "margem": round(margem, 2), "margem_pct": round(margem_pct, 1),
+        "existe": prop is not None,
+    }
+
+
+@app.get("/api/editais/{edital_id}/proposta")
+def obter_proposta(edital_id: int, db: Session = Depends(get_session)):
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
+    return _proposta_payload(ed, prop)
+
+
+@app.post("/api/editais/{edital_id}/proposta")
+def salvar_proposta(edital_id: int, dados: PropostaIn, db: Session = Depends(get_session)):
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
+    if prop is None:
+        prop = Proposta(edital_id=edital_id)
+        db.add(prop)
+    prop.itens = dados.itens
+    prop.observacoes = dados.observacoes
+    db.commit()
+    db.refresh(prop)
+    return _proposta_payload(ed, prop)
+
+
+@app.get("/api/editais/{edital_id}/proposta.csv")
+def exportar_proposta(edital_id: int, db: Session = Depends(get_session)):
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
+    p = _proposta_payload(ed, prop)
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Descrição", "Quantidade", "Custo unit.", "Preço unit.", "Total venda", "Margem"])
+    for it in p["itens"]:
+        q = it.get("quantidade") or 0
+        cu = it.get("custo_unit") or 0
+        pu = it.get("preco_unit") or 0
+        w.writerow([it.get("descricao", ""), q, f"{cu:.2f}", f"{pu:.2f}",
+                    f"{pu * q:.2f}", f"{(pu - cu) * q:.2f}"])
+    w.writerow([])
+    w.writerow(["", "", "", "TOTAIS:", f"{p['total_venda']:.2f}", f"{p['margem']:.2f}"])
+    buf.seek(0)
+    nome = f"proposta_edital_{edital_id}.csv"
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f"attachment; filename={nome}"})
 
 
 @app.get("/api/export.csv")

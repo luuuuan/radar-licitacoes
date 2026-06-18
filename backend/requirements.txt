@@ -20,3 +20,4 @@ tzdata==2025.2
 pytest==8.3.4
 # Opcional (busca semântica com embeddings reais — ver README):
 # sentence-transformers==3.3.1
+pypdf>=5.0

@@ -58,6 +58,10 @@ _COLUNAS_NOVAS = {
         ("prazo_avisado", "BOOLEAN DEFAULT FALSE"),
         ("status", "VARCHAR(20) DEFAULT 'novo'"),
     ],
+    "editais": [
+        ("analise_ia", "TEXT"),
+        ("analise_em", "TIMESTAMP"),
+    ],
 }
 
 

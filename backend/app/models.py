@@ -63,6 +63,8 @@ class Edital(Base):
     data_encerramento: Mapped[date | None] = mapped_column(Date, nullable=True)  # fim recebimento propostas
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
+    analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     itens: Mapped[list["ItemEdital"]] = relationship(
@@ -155,3 +157,19 @@ class Documento(Base):
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
     avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Proposta(Base):
+    """Proposta comercial do usuário para um edital: itens com custo e preço,
+    para calcular total e margem. Uma proposta por edital."""
+    __tablename__ = "propostas"
+    __table_args__ = (UniqueConstraint("edital_id", name="uq_proposta_edital"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"))
+    # itens: [{descricao, quantidade, custo_unit, preco_unit}]
+    itens: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
