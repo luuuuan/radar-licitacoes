@@ -153,21 +153,83 @@ class MatchingEngine:
                 melhor_prod = self.produtos[j]
                 motivo = "similaridade textual"
 
-        # 3) reforço por palavra-chave (fuzzy) — pega o que o TF-IDF perde
-        for p in self.produtos:
-            for kw in p.keywords():
-                if not kw:
-                    continue
-                if kw in texto_item:
-                    sc = 0.75
-                else:
-                    sc = fuzz.token_set_ratio(kw, texto_item) / 100.0 * 0.7
-                if sc > melhor:
-                    melhor = sc
-                    melhor_prod = p
-                    motivo = f"palavra-chave '{kw}'"
+        # 3) reforço por palavra-chave — agora por QUANTIDADE de termos que casam.
+        #    Uma palavra isolada é sinal fraco (evita "papel" casar com
+        #    "fragmentadora de papel"); várias palavras elevam o nível.
+        melhor_kw = self._melhor_por_keywords(texto_item)
+        if melhor_kw and melhor_kw[0] > melhor:
+            melhor, melhor_prod, motivo = melhor_kw
+
+        # Anti-coincidência: se o casamento se apoia em UMA única palavra
+        # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora
+        # de papel"), rebaixa abaixo do limiar para não virar item compatível.
+        if melhor_prod is not None and melhor < 0.9:
+            toks_item = {t for t in texto_item.split()
+                         if len(t) >= 2 and t not in self._GENERICAS}
+            toks_prod = {t for t in melhor_prod.texto_busca().split()
+                         if len(t) >= 2 and t not in self._GENERICAS}
+            comuns = toks_item & toks_prod
+            if len(comuns) <= 1 and melhor > 0.34:
+                termo = next(iter(comuns), "")
+                melhor = 0.34          # < LIMIAR_ITEM -> não conta como compatível
+                motivo = f"só 1 termo em comum ('{termo}') — fraco"
 
         return melhor, melhor_prod, motivo
+
+    # palavras genéricas demais para casar sozinhas (embalagem/quantidade/etc.)
+    _GENERICAS = {
+        "kit", "kits", "caixa", "caixas", "cx", "unidade", "unidades", "und", "un",
+        "material", "materiais", "conjunto", "conjuntos", "pacote", "pacotes", "pct",
+        "peca", "pecas", "item", "itens", "produto", "produtos", "jogo", "jogos",
+        "par", "pares", "embalagem", "tipo", "modelo", "diversos", "geral", "linha",
+        "aquisicao", "servico", "servicos", "fornecimento", "tamanho",
+    }
+
+    def _melhor_por_keywords(self, texto_item: str):
+        """Avalia o catálogo contra o texto do item somando palavras-chave que
+        casam. Retorna (score, produto, motivo) ou None."""
+        melhor = None
+        for p in self.produtos:
+            especificas, genericas = [], 0
+            for kw in p.keywords():
+                if not kw or len(kw) < 2:
+                    continue
+                casou = kw in texto_item
+                if not casou:
+                    # fuzzy só conta se for praticamente igual (variação de grafia)
+                    if fuzz.token_set_ratio(kw, texto_item) / 100.0 >= 0.92:
+                        casou = True
+                if not casou:
+                    continue
+                if kw in self._GENERICAS:
+                    genericas += 1
+                else:
+                    especificas.append(kw)
+
+            n = len(especificas)
+            if n == 0 and genericas == 0:
+                continue
+            if n == 0:
+                sc = 0.20                       # só genéricas -> bem fraco
+            elif n == 1:
+                sc = 0.35                       # 1 palavra isolada -> fraco
+            elif n == 2:
+                sc = 0.52                       # 2 palavras -> médio
+            else:
+                sc = 0.66                       # 3+ palavras -> forte
+            if n >= 1 and genericas:
+                sc = min(sc + 0.05, 0.90)       # genéricas só reforçam se houver específica
+
+            if n == 0:
+                motivo = "termos genéricos (fraco)"
+            elif n == 1:
+                motivo = f"palavra-chave '{especificas[0]}'"
+            else:
+                motivo = f"{n} palavras-chave ({', '.join(especificas[:3])})"
+
+            if melhor is None or sc > melhor[0]:
+                melhor = (sc, p, motivo)
+        return melhor
 
     # ---- avalia um edital inteiro -----------------------------------------
     def _emb_produtos(self):

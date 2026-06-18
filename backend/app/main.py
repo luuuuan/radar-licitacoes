@@ -882,9 +882,11 @@ class ConfigIn(BaseModel):
 @app.get("/api/config")
 def obter_config(db: Session = Depends(get_session)):
     from . import configuracoes
-    from .matching.embeddings import ia_disponivel
+    from .matching.embeddings import ia_disponivel, ia_bloqueada, segundos_para_liberar
     dados = configuracoes.todas(db)
     dados["IA_DISPONIVEL"] = "1" if ia_disponivel() else "0"  # chave configurada?
+    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"    # cota diária estourou?
+    dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar() / 60))
     return dados
 
 

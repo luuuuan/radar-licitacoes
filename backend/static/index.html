@@ -690,9 +690,15 @@ async function loadConfig(){
   const disp = c.IA_DISPONIVEL==='1';
   $('#c-ia').checked = c.IA_ATIVA==='1' && disp;
   $('#c-ia').disabled = !disp;
-  $('#ia-status').textContent = disp
-    ? (c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)')
-    : 'Chave GEMINI_API_KEY não configurada no servidor';
+  let txt;
+  if(!disp) txt='Chave GEMINI_API_KEY não configurada no servidor';
+  else if(c.IA_BLOQUEADA==='1'){
+    const min=+c.IA_LIBERA_EM_MIN||0;
+    const h=Math.floor(min/60), m=min%60;
+    txt=`Limite diário gratuito atingido — volta a usar IA em ~${h>0?h+'h':''}${m}min (até lá, usa só o texto)`;
+  }
+  else txt = c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)';
+  $('#ia-status').textContent = txt;
 }
 
 async function salvarConfig(){
