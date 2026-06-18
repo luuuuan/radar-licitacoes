@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -156,6 +156,32 @@ def listar_produtos(
     }
 
 
+@app.get("/api/produtos/modelo.xlsx")
+def modelo_produtos():
+    """Planilha-modelo para importação de produtos."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Produtos"
+    cabec = ["descricao", "palavras_chave", "ncm", "catmat", "catser",
+             "preco_custo", "preco_venda", "fornecedor_nome"]
+    ws.append(cabec)
+    ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
+               "150123", "", "18,90", "24,50", "Distribuidora Exemplo"])
+    ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
+               "", "", "1,20", "2,00", ""])
+    for col in ws.columns:
+        larg = max(len(str(c.value or "")) for c in col) + 2
+        ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=modelo_produtos.xlsx"})
+
+
 @app.get("/api/produtos/{produto_id}")
 def obter_produto(produto_id: int, db: Session = Depends(get_session)):
     p = db.get(Produto, produto_id)
@@ -182,6 +208,98 @@ def atualizar_produto(produto_id: int, dados: ProdutoIn, db: Session = Depends(g
         setattr(p, campo, valor)
     db.commit()
     return {"ok": True, "id": p.id}
+
+
+# Colunas aceitas na planilha de importação (cabeçalho -> campo do produto)
+_COLS_IMPORT = {
+    "descricao": "descricao", "descrição": "descricao", "produto": "descricao",
+    "palavras_chave": "palavras_chave", "palavras-chave": "palavras_chave",
+    "palavras chave": "palavras_chave", "ncm": "ncm", "cest": "cest", "ean": "ean",
+    "catmat": "catmat", "catser": "catser",
+    "preco_custo": "preco_custo", "preço_custo": "preco_custo", "custo": "preco_custo",
+    "preco_venda": "preco_venda", "preço_venda": "preco_venda", "venda": "preco_venda",
+    "fornecedor_nome": "fornecedor_nome", "fornecedor": "fornecedor_nome",
+    "fornecedor_contato": "fornecedor_contato", "fornecedor_site": "fornecedor_site",
+}
+_CAMPOS_NUM = {"preco_custo", "preco_venda"}
+
+
+def _num_br(v):
+    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace("R$", "").replace(" ", "")
+    if "," in s:                       # formato BR: ponto = milhar, vírgula = decimal
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+@app.post("/api/produtos/importar")
+async def importar_produtos(arquivo: UploadFile = File(...),
+                            db: Session = Depends(get_session)):
+    """Importa produtos de uma planilha .xlsx. Atualiza quando a descrição já
+    existe; caso contrário, cria. Retorna um resumo do que foi feito."""
+    import openpyxl
+    conteudo = await arquivo.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+    except Exception:
+        raise HTTPException(400, "Arquivo inválido. Envie uma planilha .xlsx.")
+    ws = wb.active
+    linhas = ws.iter_rows(values_only=True)
+    try:
+        cabec = next(linhas)
+    except StopIteration:
+        return {"status": "vazio", "criados": 0, "atualizados": 0, "ignorados": 0, "erros": []}
+
+    # mapeia índice de coluna -> campo do produto
+    mapa = {}
+    for i, nome in enumerate(cabec):
+        chave = str(nome or "").strip().lower()
+        if chave in _COLS_IMPORT:
+            mapa[i] = _COLS_IMPORT[chave]
+    if "descricao" not in mapa.values():
+        raise HTTPException(400, "A planilha precisa de uma coluna 'descricao'.")
+
+    criados = atualizados = ignorados = 0
+    erros = []
+    for n, linha in enumerate(linhas, start=2):
+        if linha is None or all(c is None or str(c).strip() == "" for c in linha):
+            continue
+        dados = {}
+        for i, campo in mapa.items():
+            val = linha[i] if i < len(linha) else None
+            if campo in _CAMPOS_NUM:
+                dados[campo] = _num_br(val)
+            else:
+                dados[campo] = (str(val).strip() if val not in (None, "") else None)
+        desc = dados.get("descricao")
+        if not desc:
+            ignorados += 1
+            continue
+        # atualizar se a descrição já existe (case-insensitive)
+        existente = db.execute(
+            select(Produto).where(func.lower(Produto.descricao) == desc.lower())
+        ).scalars().first()
+        try:
+            if existente:
+                for campo, valor in dados.items():
+                    if valor is not None:           # só sobrescreve o que veio preenchido
+                        setattr(existente, campo, valor)
+                atualizados += 1
+            else:
+                db.add(Produto(**dados))
+                criados += 1
+        except Exception as e:
+            erros.append(f"linha {n}: {e}")
+    db.commit()
+    return {"status": "ok", "criados": criados, "atualizados": atualizados,
+            "ignorados": ignorados, "erros": erros[:20]}
 
 
 @app.delete("/api/produtos/{produto_id}")

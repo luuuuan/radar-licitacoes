@@ -235,6 +235,17 @@
   <!-- CATALOGO -->
   <section id="t-catalogo" class="hidden">
     <div class="card">
+      <h3 style="margin-top:0">Importar produtos por planilha (Excel)</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Baixe o modelo, preencha (só a coluna <b>descricao</b> é obrigatória) e envie. Produtos com descrição já existente são atualizados; os novos são adicionados.</p>
+      <div class="toolbar">
+        <button class="btn ghost" onclick="window.open('/api/produtos/modelo.xlsx','_blank')">${''}Baixar modelo .xlsx</button>
+        <label class="btn" style="cursor:pointer">Escolher planilha e importar
+          <input type="file" id="imp-arquivo" accept=".xlsx" style="display:none" onchange="importarPlanilha(this)">
+        </label>
+        <span id="imp-msg" class="muted" style="font-size:12px"></span>
+      </div>
+    </div>
+    <div class="card">
       <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
       <div class="field"><label>Descrição</label>
         <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
@@ -504,6 +515,31 @@ async function marcar(id,campo,val){
   await api(`/api/editais/${id}/marcar`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({[campo]:val})});
   loadEditais(); loadResumo();
+}
+
+async function importarPlanilha(input){
+  const f = input.files && input.files[0];
+  if(!f) return;
+  const msg=$('#imp-msg');
+  msg.textContent='Importando…'; msg.style.color='var(--medio)';
+  try{
+    const fd=new FormData(); fd.append('arquivo', f);
+    const resp=await fetch('/api/produtos/importar',{method:'POST',body:fd});
+    const r=await resp.json();
+    if(r.status==='ok'){
+      msg.innerHTML=`${ICN.check} ${r.criados} criado(s), ${r.atualizados} atualizado(s)`
+        + (r.ignorados?`, ${r.ignorados} ignorado(s)`:'')
+        + (r.erros&&r.erros.length?` · ${r.erros.length} erro(s)`:'');
+      msg.style.color='var(--muted)';
+      loadProdutos(); loadResumo();
+    } else {
+      msg.textContent = r.detail || 'Não foi possível importar (confira o cabeçalho da planilha).';
+      msg.style.color='#f87171';
+    }
+  }catch(e){
+    msg.textContent='Erro ao importar a planilha.'; msg.style.color='#f87171';
+  }
+  input.value='';  // permite reenviar o mesmo arquivo
 }
 
 async function loadProdutos(){
