@@ -322,6 +322,7 @@ def listar_editais(
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
+    hoje: bool = Query(False),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_session),
@@ -337,6 +338,8 @@ def listar_editais(
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
+    if hoje:
+        filtro.append(Edital.data_publicacao == date.today())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)
@@ -411,6 +414,9 @@ def mudar_status(match_id: int, dados: StatusIn, db: Session = Depends(get_sessi
     m.status = dados.status
     db.commit()
     return {"ok": True}
+
+
+@app.get("/api/editais/{edital_id}/detalhe")
 def edital_detalhe(edital_id: int, db: Session = Depends(get_session)):
     """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
     compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
@@ -691,10 +697,16 @@ def resumo(db: Session = Depends(get_session)):
         .join(Edital, Match.edital_id == Edital.id)
         .where(ativo).where(Match.lido == False)  # noqa: E712
     ) or 0
+    # editais publicados hoje (ativos)
+    do_dia = db.scalar(
+        select(func.count(Edital.id))
+        .where(ativo).where(Edital.data_publicacao == hoje)
+    ) or 0
     return {
         "produtos": total_prod, "editais": total_editais,
         "fortes": por_nivel.get("forte", 0), "medios": por_nivel.get("medio", 0),
         "fracos": por_nivel.get("fraco", 0), "nao_lidos": nao_lidos,
+        "do_dia": do_dia,
     }
 
 

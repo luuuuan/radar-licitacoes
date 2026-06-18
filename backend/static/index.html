@@ -10,6 +10,11 @@
     --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
     --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
   }
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
+    --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
+    --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
+  }
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     background:var(--bg);color:var(--txt);font-size:14px}
@@ -90,6 +95,9 @@
   .preco-box .v{font-size:16px;font-weight:700}
   .preco-box .l{font-size:11px;color:var(--muted)}
   .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .card-click{cursor:pointer;transition:border-color .15s, transform .05s}
+  .card-click:hover{border-color:var(--accent)}
+  .card-click:active{transform:scale(0.998)}
   .status-sel{font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer}
   .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
   .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
@@ -168,6 +176,7 @@
   <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
+  <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
   <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
   <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
 </header>
@@ -217,6 +226,9 @@
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
+        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> só de hoje
+      </label>
       <span style="flex:1"></span>
       <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
     </div>
@@ -245,40 +257,51 @@
         <span id="imp-msg" class="muted" style="font-size:12px"></span>
       </div>
     </div>
-    <div class="card">
-      <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
-      <div class="field"><label>Descrição</label>
-        <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
-      <div class="grid2">
-        <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
-        <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
-        <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%">
-          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button></div>
-        <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%">
-          <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
-      </div>
-
-      <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
-        <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
-
-      <div class="grid2">
-        <div class="field"><label>Meu custo (R$) — quanto você paga</label>
-          <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
-        <div class="field"><label>Meu preço de venda (R$)</label>
-          <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label>Fornecedor</label>
-          <input id="p-forn" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
-        <div class="field"><label>Contato do fornecedor</label>
-          <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
-      </div>
-      <div class="field"><label>Site do fornecedor</label>
-        <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
-
-      <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
-      <button class="btn ghost hidden" onclick="cancelarEdicao()" id="btn-cancelar-prod">Cancelar edição</button>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Produtos cadastrados</h3>
+      <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
     </div>
+
+    <div id="modal-produto" class="modal hidden" onclick="if(event.target===this)fecharFormProduto()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharFormProduto()" aria-label="Fechar">×</button>
+        <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
+        <div class="field"><label>Descrição</label>
+          <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
+        <div class="grid2">
+          <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
+          <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
+          <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%">
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button></div>
+          <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%">
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
+        </div>
+
+        <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
+          <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
+
+        <div class="grid2">
+          <div class="field"><label>Meu custo (R$) — quanto você paga</label>
+            <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
+          <div class="field"><label>Meu preço de venda (R$)</label>
+            <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Fornecedor</label>
+            <input id="p-forn" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
+          <div class="field"><label>Contato do fornecedor</label>
+            <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
+        </div>
+        <div class="field"><label>Site do fornecedor</label>
+          <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
+
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
+          <button class="btn ghost" onclick="fecharFormProduto()">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
     <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
       <th>Palavras-chave</th><th></th></tr></thead>
       <tbody id="lista-produtos"></tbody></table>
@@ -304,22 +327,35 @@
 
   <!-- DOCUMENTOS -->
   <section id="t-documentos" class="hidden">
-    <div class="card">
-      <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Cadastre suas certidões e documentos de habilitação com a data de validade. O sistema avisa antes de vencer.</p>
-      <div class="field"><label>Nome do documento</label>
-        <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
-      <div class="grid2">
-        <div class="field"><label>Órgão emissor</label>
-          <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
-        <div class="field"><label>Validade</label>
-          <input id="d-validade" type="date" style="width:100%"></div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div>
+        <h3 style="margin:0">Documentos / certidões</h3>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">O sistema avisa antes de cada documento vencer.</p>
       </div>
-      <div class="field"><label>Observação (opcional)</label>
-        <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
-      <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
-      <button class="btn ghost hidden" onclick="cancelarEdicaoDoc()" id="btn-cancelar-doc">Cancelar edição</button>
+      <button class="btn" onclick="abrirFormDocumento()">+ Cadastrar documento</button>
     </div>
+
+    <div id="modal-documento" class="modal hidden" onclick="if(event.target===this)fecharFormDocumento()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharFormDocumento()" aria-label="Fechar">×</button>
+        <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
+        <div class="field"><label>Nome do documento</label>
+          <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
+        <div class="grid2">
+          <div class="field"><label>Órgão emissor</label>
+            <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
+          <div class="field"><label>Validade</label>
+            <input id="d-validade" type="date" style="width:100%"></div>
+        </div>
+        <div class="field"><label>Observação (opcional)</label>
+          <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
+          <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
     <table><thead><tr><th>Documento</th><th>Emissor</th><th>Validade</th><th>Situação</th><th></th></tr></thead>
       <tbody id="lista-documentos"></tbody></table>
   </section>
@@ -370,6 +406,27 @@
 const $ = s => document.querySelector(s);
 const api = (u,o)=>fetch(u,o).then(r=>r.json());
 
+// ---- Tema claro/escuro (lembra a escolha) ----
+const _icoSol='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
+const _icoLua='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+function aplicarTema(t){
+  document.documentElement.setAttribute('data-theme', t);
+  const b=$('#btn-tema'); if(b) b.innerHTML = (t==='light') ? _icoLua : _icoSol;
+}
+function alternarTema(){
+  const atual = document.documentElement.getAttribute('data-theme')==='light' ? 'light' : 'dark';
+  const novo = atual==='light' ? 'dark' : 'light';
+  try{ localStorage.setItem('radar-tema', novo); }catch(e){}
+  aplicarTema(novo);
+}
+(function(){
+  let t='dark';
+  try{ t = localStorage.getItem('radar-tema') || 'dark'; }catch(e){}
+  document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('DOMContentLoaded', ()=>aplicarTema(t));
+})();
+
+
 // Ícones SVG inline (herdam a cor do texto via currentColor)
 const _svg = p => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">${p}</svg>`;
 const ICN = {
@@ -409,10 +466,18 @@ function tab(name){
 
 async function loadResumo(){
   const r = await api('/api/resumo');
-  $('#kpis').innerHTML = [
+  const kpiDia = `<div class="kpi" style="border-color:var(--accent);cursor:pointer" onclick="filtrarDoDia()" title="Ver editais publicados hoje">
+    <div class="n" style="color:var(--accent)">${r.do_dia||0}</div><div class="l">Editais do dia</div></div>`;
+  $('#kpis').innerHTML = kpiDia + [
     ['Editais ativos',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
     ['Não lidos',r.nao_lidos],['Produtos',r.produtos]
   ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+}
+
+function filtrarDoDia(){
+  tab('editais');
+  $('#f-hoje').checked = true;
+  loadEditais();
 }
 
 function fmtMoeda(v){ if(v==null) return '—';
@@ -424,7 +489,7 @@ function cardEdital(e){
     (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
   const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
     `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
-  return `<div class="card">
+  return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
     <div class="ed-top">
       <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
       <span class="pill ${e.nivel}">${e.nivel} · ${e.score}</span>
@@ -438,7 +503,7 @@ function cardEdital(e){
       <span class="prazo ${urg?'urg':''}">${prazo}</span>
     </div>
     ${det?`<div class="det">${det}</div>`:''}
-    <div class="acoes">
+    <div class="acoes" onclick="event.stopPropagation()">
       ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
       <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
@@ -482,6 +547,7 @@ async function loadEditais(resetPagina=true){
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
+  if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
@@ -555,6 +621,15 @@ async function loadProdutos(){
 }
 let editandoId = null;
 
+function abrirFormProduto(){
+  cancelarEdicao();            // limpa e prepara para novo cadastro
+  $('#modal-produto').classList.remove('hidden');
+}
+function fecharFormProduto(){
+  $('#modal-produto').classList.add('hidden');
+  cancelarEdicao();
+}
+
 async function salvarProduto(){
   const num = id => { const v=$('#'+id).value.trim(); return v===''?null:parseFloat(v.replace(',','.')); };
   const txt = id => $('#'+id).value.trim()||null;
@@ -566,7 +641,7 @@ async function salvarProduto(){
   const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
   const metodo = editandoId ? 'PUT' : 'POST';
   await api(url,{method:metodo,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  cancelarEdicao();
+  fecharFormProduto();
   loadProdutos(); loadResumo();
 }
 
@@ -580,8 +655,7 @@ async function editarProduto(id){
   editandoId = id;
   $('#form-titulo').textContent = 'Editar produto';
   $('#btn-salvar-prod').textContent = 'Salvar alterações';
-  $('#btn-cancelar-prod').classList.remove('hidden');
-  window.scrollTo({top:0, behavior:'smooth'});
+  $('#modal-produto').classList.remove('hidden');
 }
 
 function cancelarEdicao(){
@@ -589,7 +663,6 @@ function cancelarEdicao(){
   ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
-  $('#btn-cancelar-prod').classList.add('hidden');
 }
 async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
 
@@ -635,13 +708,22 @@ async function loadDocumentos(){
   }).join('');
 }
 
+function abrirFormDocumento(){
+  cancelarEdicaoDoc();
+  $('#modal-documento').classList.remove('hidden');
+}
+function fecharFormDocumento(){
+  $('#modal-documento').classList.add('hidden');
+  cancelarEdicaoDoc();
+}
+
 async function salvarDocumento(){
   const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
     data_validade:$('#d-validade').value, observacao:$('#d-obs').value.trim()||null};
   if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
   const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
   await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  cancelarEdicaoDoc(); loadDocumentos();
+  fecharFormDocumento(); loadDocumentos();
 }
 
 function editarDocumento(d){
@@ -650,8 +732,7 @@ function editarDocumento(d){
   editandoDocId=d.id;
   $('#doc-form-titulo').textContent='Editar documento';
   $('#btn-salvar-doc').textContent='Salvar alterações';
-  $('#btn-cancelar-doc').classList.remove('hidden');
-  window.scrollTo({top:0,behavior:'smooth'});
+  $('#modal-documento').classList.remove('hidden');
 }
 
 function cancelarEdicaoDoc(){
@@ -659,7 +740,6 @@ function cancelarEdicaoDoc(){
   ['d-nome','d-orgao','d-validade','d-obs'].forEach(i=>$('#'+i).value='');
   $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
   $('#btn-salvar-doc').textContent='Salvar documento';
-  $('#btn-cancelar-doc').classList.add('hidden');
 }
 
 async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
