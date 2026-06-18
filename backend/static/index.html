@@ -427,6 +427,7 @@ function cardEdital(e){
     ${det?`<div class="det">${det}</div>`:''}
     <div class="acoes">
       ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
       <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
       <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
@@ -727,6 +728,37 @@ async function recalcular(){
     loadEditais(); loadResumo();
   }catch(e){
     el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+  }
+}
+
+async function baixarDocumentos(id){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Buscando documentos no PNCP…</p></div></div>';
+  try{
+    const r=await api(`/api/editais/${id}/documentos`);
+    const arqs=r.arquivos||[];
+    let corpo;
+    if(arqs.length){
+      corpo = `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
+        + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
+            <a class="btn ghost" href="${a.url}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
+            <span style="flex:1">${a.titulo}${a.tipo?` <span class="muted">· ${a.tipo}</span>`:''}</span>
+          </div>`).join('');
+    } else {
+      const motivo = r.status==='vazio' ? 'Este edital não tem arquivos publicados no PNCP.'
+        : 'Não foi possível obter os arquivos pela API do PNCP (alguns órgãos só publicam no portal próprio).';
+      corpo = `<p style="line-height:1.5">${motivo}</p>`
+        + (r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
+    }
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Documentos do edital</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>${corpo}
+      </div></div>`;
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao buscar documentos.</p></div></div>';
   }
 }
 

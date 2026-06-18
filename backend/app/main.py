@@ -20,6 +20,7 @@ import io
 import os
 import base64
 import secrets
+import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -396,6 +397,63 @@ def recalcular(db: Session = Depends(get_session)):
     resultados defasados depois de adicionar/remover produtos)."""
     from .service import recalcular_matches
     return recalcular_matches(db)
+
+
+def _ref_pncp(ed: Edital):
+    """Reconstrói (cnpj, ano, sequencial) a partir do numeroControlePNCP
+    (formato: cnpj-tipo-sequencial/ano)."""
+    try:
+        esq, ano = ed.id_externo.rsplit("/", 1)
+        partes = esq.split("-")
+        cnpj = (ed.cnpj_orgao or partes[0]).strip()
+        seq = int(partes[-1])
+        return cnpj, int(ano), seq
+    except Exception:
+        return None
+
+
+@app.get("/api/editais/{edital_id}/documentos")
+def documentos_edital(edital_id: int, db: Session = Depends(get_session)):
+    """Lista os arquivos/anexos do edital publicados no PNCP (edital, anexos,
+    planilha de itens) para download."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    ref = _ref_pncp(ed)
+    if not ref:
+        return {"status": "sem_ref", "arquivos": [], "portal": ed.link}
+    cnpj, ano, seq = ref
+    base = settings.PNCP_ITENS_BASE_URL.rstrip("/")
+    url = f"{base}/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos"
+    try:
+        r = requests.get(url, timeout=30,
+                         headers={"Accept": "application/json",
+                                  "User-Agent": "RadarLicitacoes/1.0"})
+    except requests.RequestException:
+        return {"status": "erro_rede", "arquivos": [], "portal": ed.link}
+    if r.status_code != 200:
+        return {"status": f"http_{r.status_code}", "arquivos": [], "portal": ed.link}
+    try:
+        dados = r.json()
+    except ValueError:
+        return {"status": "resposta_invalida", "arquivos": [], "portal": ed.link}
+
+    lista = dados if isinstance(dados, list) else (dados.get("data") or [])
+    arquivos = []
+    for a in lista:
+        if not isinstance(a, dict):
+            continue
+        seq_doc = a.get("sequencialDocumento")
+        arquivos.append({
+            "titulo": a.get("titulo") or a.get("nomeArquivo")
+                      or a.get("tipoDocumentoNome") or "Documento",
+            "tipo": a.get("tipoDocumentoNome") or "",
+            "url": a.get("url") or a.get("uri") or a.get("link")
+                   or (f"{url}/{seq_doc}" if seq_doc is not None else None),
+        })
+    arquivos = [x for x in arquivos if x["url"]]
+    return {"status": "ok" if arquivos else "vazio",
+            "arquivos": arquivos, "portal": ed.link}
 
 
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])
