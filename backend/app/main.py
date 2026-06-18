@@ -199,11 +199,13 @@ def listar_editais(
     nivel: str | None = Query(None),
     uf: str | None = Query(None),
     status: str | None = Query(None),
+    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_session),
 ):
+    hoje = date.today()
     base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
     filtro = []
     if nivel:
@@ -214,6 +216,15 @@ def listar_editais(
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
+
+    if vista == "ativos":
+        # ainda dentro do prazo (sem data ou data >= hoje)
+        filtro.append((Edital.data_encerramento.is_(None)) |
+                      (Edital.data_encerramento >= hoje))
+    elif vista == "encerrados":
+        # prazo passou E eu participei (proposta enviada / ganho / perdido)
+        filtro.append(Edital.data_encerramento < hoje)
+        filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
 
@@ -221,7 +232,9 @@ def listar_editais(
         select(func.count()).select_from(base.subquery())
     ) or 0
 
-    q = base.order_by(Match.score.desc(), Edital.data_encerramento.asc())
+    ordem = (Match.score.desc(), Edital.data_encerramento.asc()) if vista == "ativos" \
+        else (Edital.data_encerramento.desc(),)
+    q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
     out = []

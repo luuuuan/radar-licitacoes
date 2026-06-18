@@ -179,6 +179,7 @@
   <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
+    <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
     <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
@@ -220,6 +221,15 @@
       <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
     </div>
     <div id="lista-editais"></div>
+  </section>
+
+  <!-- ENCERRADOS (que participei) -->
+  <section id="t-encerrados" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Editais encerrados que você participou</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Editais com o prazo já vencido e marcados como “proposta enviada”, “ganho” ou “perdido”. Atualize a situação de um edital na aba Editais para ele aparecer aqui.</p>
+    </div>
+    <div id="lista-encerrados"></div>
   </section>
 
   <!-- CATALOGO -->
@@ -371,10 +381,11 @@ function toggleMenu(){
 
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
+  if(name==='encerrados') loadEncerrados();
   if(name==='catalogo') loadProdutos();
   if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
@@ -394,6 +405,56 @@ async function loadResumo(){
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
+function cardEdital(e){
+  const urg = e.dias_restantes!=null && e.dias_restantes<=5;
+  const prazo = e.dias_restantes==null?'prazo n/d':
+    (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+  const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
+    `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
+  return `<div class="card">
+    <div class="ed-top">
+      <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
+      <span class="pill ${e.nivel}">${e.nivel} · ${e.score}</span>
+    </div>
+    <div class="ed-obj">${e.objeto||''}</div>
+    <div class="ed-meta">
+      <span>${e.modalidade||''}</span>
+      <span>${e.municipio||''}/${e.uf||''}</span>
+      <span>${fmtMoeda(e.valor_estimado)}</span>
+      <span>${e.itens_compativeis} item(ns) compatível(eis)</span>
+      <span class="prazo ${urg?'urg':''}">${prazo}</span>
+    </div>
+    ${det?`<div class="det">${det}</div>`:''}
+    <div class="acoes">
+      ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
+      <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
+        <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+        <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+        <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+        <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+        <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+        <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+      </select>
+      <span style="flex:1"></span>
+      <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+    </div>
+  </div>`;
+}
+
+function navPaginacao(r, fnPagina, paginaAtual){
+  const ini = (r.pagina-1)*r.por_pagina + 1;
+  const fim = Math.min(r.pagina*r.por_pagina, r.total);
+  const btns = r.paginas>1 ? `
+      <button class="btn ghost" ${paginaAtual<=1?'disabled':''} onclick="${fnPagina}(-1)">‹ anterior</button>
+      <button class="btn ghost" ${paginaAtual>=r.paginas?'disabled':''} onclick="${fnPagina}(1)">próxima ›</button>` : '';
+  return `<div class="toolbar" style="justify-content:center;align-items:center;margin-top:10px;gap:10px">
+      <span class="muted">mostrando ${ini}–${fim} de ${r.total} edital(is)${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
+      ${btns}
+    </div>`;
+}
+
 let paginaEditais = 1;
 
 async function loadEditais(resetPagina=true){
@@ -401,60 +462,31 @@ async function loadEditais(resetPagina=true){
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
         st=$('#f-status').value, nl=$('#f-naolidos').checked;
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
-  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag});
+  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
   if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
-  if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
-  const cards = eds.map(e=>{
-    const urg = e.dias_restantes!=null && e.dias_restantes<=5;
-    const prazo = e.dias_restantes==null?'prazo n/d':
-      (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
-    const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
-      `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
-    return `<div class="card">
-      <div class="ed-top">
-        <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
-        <span class="pill ${e.nivel}">${e.nivel} · ${e.score}</span>
-      </div>
-      <div class="ed-obj">${e.objeto||''}</div>
-      <div class="ed-meta">
-        <span>${e.modalidade||''}</span>
-        <span>${e.municipio||''}/${e.uf||''}</span>
-        <span>${fmtMoeda(e.valor_estimado)}</span>
-        <span>${e.itens_compativeis} item(ns) compatível(eis)</span>
-        <span class="prazo ${urg?'urg':''}">${prazo}</span>
-      </div>
-      ${det?`<div class="det">${det}</div>`:''}
-      <div class="acoes">
-        ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
-        <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
-        <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
-          <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
-          <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
-          <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
-          <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
-          <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
-          <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
-        </select>
-        <span style="flex:1"></span>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-        <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
-      </div>
-    </div>`;
-  }).join('');
-  const ini = (r.pagina-1)*r.por_pagina + 1;
-  const fim = Math.min(r.pagina*r.por_pagina, r.total);
-  const navBtns = r.paginas>1 ? `
-      <button class="btn ghost" ${paginaEditais<=1?'disabled':''} onclick="mudarPagina(-1)">‹ anterior</button>
-      <button class="btn ghost" ${paginaEditais>=r.paginas?'disabled':''} onclick="mudarPagina(1)">próxima ›</button>` : '';
-  const nav = `<div class="toolbar" style="justify-content:center;align-items:center;margin-top:10px;gap:10px">
-      <span class="muted">mostrando ${ini}–${fim} de ${r.total} edital(is)${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
-      ${navBtns}
-    </div>`;
-  $('#lista-editais').innerHTML = cards + nav;
+  if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
+  $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais);
+}
+
+let paginaEncerrados = 1;
+
+async function loadEncerrados(resetPagina=true){
+  if(resetPagina) paginaEncerrados = 1;
+  const qs=new URLSearchParams({pagina:paginaEncerrados, por_pagina:20, vista:'encerrados'});
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
+  if(!eds.length){ $('#lista-encerrados').innerHTML='<p class="muted">Nenhum edital encerrado que você participou. Aparecem aqui os editais com prazo vencido marcados como “proposta enviada”, “ganho” ou “perdido”.</p>'; return; }
+  $('#lista-encerrados').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaEnc',paginaEncerrados);
+}
+
+function mudarPaginaEnc(delta){
+  paginaEncerrados = Math.max(1, paginaEncerrados + delta);
+  loadEncerrados(false);
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 
 function mudarPagina(delta){
