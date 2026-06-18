@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # piso de similaridade: cosseno abaixo disso conta como 0 (evita que a
     # "linha de base" alta dos embeddings infle itens sem relação).
     IA_FLOOR: float = 0.5
+    # sinal textual mínimo do edital para valer a pena gastar IA nele.
+    # Editais sem nenhuma relação (texto ~0) não chamam a IA -> economiza cota.
+    IA_MIN_SINAL: float = 0.12
 
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.

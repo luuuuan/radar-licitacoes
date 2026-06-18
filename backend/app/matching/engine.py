@@ -257,21 +257,31 @@ class MatchingEngine:
         # Se o edital não trouxe itens detalhados, usa o objeto como um item único.
         alvos = itens if itens else [ItemEdt(numero=None, descricao=objeto or "")]
 
-        # embeddings dos itens em lote (1 chamada), só se a IA estiver ligada
+        # 1) Score TEXTUAL primeiro (grátis): é a peneira que decide se vale IA.
+        base = [self._score_item(it) for it in alvos]   # (sc, prod, motivo)
+        max_txt = max((b[0] for b in base), default=0.0)
+
+        # 2) IA só quando ligada E o edital tem sinal textual mínimo. Assim os
+        #    milhares de editais sem relação não gastam cota. Dentro de um edital
+        #    relevante, só embeda os itens que a IA ainda pode mudar (não-fortes).
+        usar_ia_aqui = self.usar_ia and max_txt >= settings.IA_MIN_SINAL
         item_embs = [None] * len(alvos)
-        if self.usar_ia:
-            textos_itens = [(it.texto_busca() or normalizar(objeto or "")) for it in alvos]
-            item_embs = _ia_embeddings(textos_itens)
+        if usar_ia_aqui:
+            idxs = [i for i, (sc, _, _) in enumerate(base) if sc < settings.LIMIAR_FORTE]
+            textos = [(alvos[i].texto_busca() or normalizar(objeto or "")) for i in idxs]
+            embs = _ia_embeddings(textos)
+            for k, i in enumerate(idxs):
+                item_embs[i] = embs[k]
 
         scores_itens: list[float] = []
         detalhe: list[dict] = []
         compativeis = 0
 
         for idx, it in enumerate(alvos):
-            sc, prod, motivo = self._score_item(it)
+            sc, prod, motivo = base[idx]
 
-            # reforço pela IA semântica
-            if self.usar_ia and item_embs[idx]:
+            # reforço pela IA semântica (quando aplicável)
+            if usar_ia_aqui and item_embs[idx]:
                 ia_sc, ia_prod = self._ia_score_item(item_embs[idx])
                 w = settings.IA_PESO
                 combinado = sc * (1 - w) + ia_sc * w

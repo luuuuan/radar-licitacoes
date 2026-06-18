@@ -130,7 +130,12 @@ def recalcular_matches(db: Session) -> dict:
     from . import configuracoes as cfg
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
     engine = MatchingEngine(catalogo, usar_ia=usar_ia)
-    editais = db.execute(select(Edital)).scalars().all()
+    # processa os mais relevantes primeiro: se a cota de IA acabar no meio,
+    # os editais que mais importam já terão sido refinados.
+    editais = db.execute(
+        select(Edital).join(Match, Match.edital_id == Edital.id, isouter=True)
+        .order_by(Match.score.desc().nullslast())
+    ).scalars().all()
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
 
     for ed in editais:
