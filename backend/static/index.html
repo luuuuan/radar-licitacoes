@@ -227,7 +227,7 @@
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
-        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> só de hoje
+        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> novos hoje
       </label>
       <span style="flex:1"></span>
       <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
@@ -466,8 +466,8 @@ function tab(name){
 
 async function loadResumo(){
   const r = await api('/api/resumo');
-  const kpiDia = `<div class="kpi" style="border-color:var(--accent);cursor:pointer" onclick="filtrarDoDia()" title="Ver editais publicados hoje">
-    <div class="n" style="color:var(--accent)">${r.do_dia||0}</div><div class="l">Editais do dia</div></div>`;
+  const kpiDia = `<div class="kpi" style="border-color:var(--accent);cursor:pointer" onclick="filtrarDoDia()" title="Ver editais que entraram hoje">
+    <div class="n" style="color:var(--accent)">${r.do_dia||0}</div><div class="l">Novos hoje</div></div>`;
   $('#kpis').innerHTML = kpiDia + [
     ['Editais ativos',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
     ['Não lidos',r.nao_lidos],['Produtos',r.produtos]

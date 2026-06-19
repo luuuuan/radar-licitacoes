@@ -315,6 +315,15 @@ def remover_produto(produto_id: int, db: Session = Depends(get_session)):
 
 
 # --------------------------- Editais / Matches ------------------------ #
+def _inicio_hoje_utc() -> datetime:
+    """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
+    (coletado_em é gravado em UTC). Serve para contar 'coletados hoje'."""
+    tz = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(tz)
+    inicio = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+    return inicio.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+
 @app.get("/api/editais")
 def listar_editais(
     nivel: str | None = Query(None),
@@ -327,7 +336,7 @@ def listar_editais(
     por_pagina: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_session),
 ):
-    hoje = date.today()
+    hoje_data = date.today()
     base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
     filtro = []
     if nivel:
@@ -339,15 +348,15 @@ def listar_editais(
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
     if hoje:
-        filtro.append(Edital.data_publicacao == date.today())
+        filtro.append(Edital.coletado_em >= _inicio_hoje_utc())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)
         filtro.append((Edital.data_encerramento.is_(None)) |
-                      (Edital.data_encerramento >= hoje))
+                      (Edital.data_encerramento >= hoje_data))
     elif vista == "encerrados":
         # prazo passou E eu participei (proposta enviada / ganho / perdido)
-        filtro.append(Edital.data_encerramento < hoje)
+        filtro.append(Edital.data_encerramento < hoje_data)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
@@ -697,10 +706,10 @@ def resumo(db: Session = Depends(get_session)):
         .join(Edital, Match.edital_id == Edital.id)
         .where(ativo).where(Match.lido == False)  # noqa: E712
     ) or 0
-    # editais publicados hoje (ativos)
+    # editais que entraram hoje no sistema (coletados hoje), ainda ativos
     do_dia = db.scalar(
         select(func.count(Edital.id))
-        .where(ativo).where(Edital.data_publicacao == hoje)
+        .where(ativo).where(Edital.coletado_em >= _inicio_hoje_utc())
     ) or 0
     return {
         "produtos": total_prod, "editais": total_editais,
