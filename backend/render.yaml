@@ -1,0 +1,42 @@
+# Blueprint do Render — provisiona o dashboard/API (web service).
+# A coleta diária NÃO roda aqui: ela é agendada de graça pelo GitHub Actions
+# (.github/workflows/coleta-diaria.yml). O cron job nativo do Render é pago.
+#
+# Como usar: no Render → New → Blueprint → conecte este repositório.
+services:
+  - type: web
+    name: radar-licitacoes
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free                      # free dorme após 15 min ocioso (cold start ~30s)
+    # O comando de start vem do CMD do Dockerfile (já lê a porta do Render via $PORT).
+    envVars:
+      # cole a string de conexão do Supabase no painel (Environment) — fica secreta
+      - key: DATABASE_URL
+        sync: false
+      - key: PNCP_MODALIDADES
+        value: "6,8,9,4"
+      - key: PNCP_UFS
+        value: "PR,SP"
+      - key: PNCP_HORIZONTE_DIAS
+        value: "30"
+      - key: NOTIFICAR_NIVEL_MINIMO
+        value: "forte"
+      # opcionais — preencha no painel se for usar
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: NOTIFICAR_EMAIL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
