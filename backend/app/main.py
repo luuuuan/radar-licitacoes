@@ -102,7 +102,8 @@ def _set_cookie_sessao(resp: _Resp, usuario_id: int):
 
 
 @app.post("/api/auth/cadastro")
-def auth_cadastro(dados: CadastroIn, resp: _Resp, db: Session = Depends(get_session)):
+def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
+                  db: Session = Depends(get_session)):
     # valida e-mail
     try:
         email = validate_email(dados.email, check_deliverability=False).normalized.lower()
@@ -143,10 +144,11 @@ def auth_cadastro(dados: CadastroIn, resp: _Resp, db: Session = Depends(get_sess
     if smtp_ok:
         base = settings.APP_BASE_URL.rstrip("/")
         link = f"{base}/verificar?token={u.token_verificacao}"
-        _email_mod.enviar_para(
-            email, "Confirme seu cadastro — Radar de Licitações",
-            f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a conta:\n{link}\n\n"
-            "Se você não criou esta conta, ignore esta mensagem.")
+        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a conta:\n{link}\n\n"
+                 "Se você não criou esta conta, ignore esta mensagem.")
+        # envia em segundo plano: o cadastro responde na hora, sem esperar o SMTP
+        bg.add_task(_email_mod.enviar_para, email,
+                    "Confirme seu cadastro — Radar de Licitações", corpo)
         return {"ok": True, "verificar_email": True,
                 "mensagem": "Enviamos um link de confirmação para o seu e-mail."}
 

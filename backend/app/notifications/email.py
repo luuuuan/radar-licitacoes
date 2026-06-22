@@ -25,7 +25,7 @@ class EmailNotifier(BaseNotifier):
             msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
             msg["To"] = settings.NOTIFICAR_EMAIL
             msg.attach(MIMEText(corpo, "plain", "utf-8"))
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as s:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as s:
                 s.starttls()
                 if settings.SMTP_USER:
                     s.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
@@ -51,7 +51,7 @@ def enviar_para(destinatario: str, titulo: str, corpo: str) -> bool:
         msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
         msg["To"] = destinatario
         msg.attach(MIMEText(corpo, "plain", "utf-8"))
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as s:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as s:
             s.starttls()
             if settings.SMTP_USER:
                 s.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
