@@ -62,7 +62,14 @@ _COLUNAS_NOVAS = {
         ("analise_ia", "TEXT"),
         ("analise_em", "TIMESTAMP"),
     ],
+    "produtos_user": [("usuario_id", "INTEGER")],
 }
+# adiciona usuario_id às tabelas que passam a ser por-usuário
+for _t in ("produtos", "matches", "documentos", "regras_exclusao", "propostas"):
+    _COLUNAS_NOVAS.setdefault(_t, [])
+    if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS[_t]:
+        _COLUNAS_NOVAS[_t].append(("usuario_id", "INTEGER"))
+_COLUNAS_NOVAS.pop("produtos_user", None)
 
 
 def _migrar_colunas_novas() -> None:
@@ -89,6 +96,22 @@ def _migrar_colunas_novas() -> None:
                     # silencioso só quando a coluna já existe; o resto é logado
                     if "exist" not in msg and "duplicate" not in msg:
                         log.warning("Migração %s.%s falhou: %s", tabela, nome, e)
+
+        # Multiusuário: a unicidade de matches passa a ser (usuario_id, edital_id).
+        # Remove a restrição antiga (só edital_id) e cria a nova, no Postgres.
+        if not eh_sqlite:
+            for sql in (
+                "ALTER TABLE matches DROP CONSTRAINT IF EXISTS matches_edital_id_key",
+                "ALTER TABLE matches ADD CONSTRAINT uq_match_user_edital "
+                "UNIQUE (usuario_id, edital_id)",
+            ):
+                try:
+                    conn.execute(text(sql))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    if "exist" not in str(e).lower() and "duplicate" not in str(e).lower():
+                        log.warning("Migração de constraint de matches: %s", e)
 
 
 def get_session():

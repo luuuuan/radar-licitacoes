@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar de Licitações — Entrar</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
+    --forte:#22c55e; --medio:#eab308; --fraco:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--txt);font-size:14px;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    width:100%;max-width:420px;padding:28px}
+  .logo{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .logo svg{color:var(--accent)}
+  .logo h1{font-size:18px;margin:0;font-weight:600}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 20px}
+  .tabs{display:flex;gap:8px;margin-bottom:18px}
+  .tabs button{flex:1;padding:9px;border:1px solid var(--line);background:var(--panel2);
+    color:var(--muted);border-radius:8px;cursor:pointer;font-size:13px}
+  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+  input{width:100%;padding:10px;border:1px solid var(--line);background:var(--panel2);
+    color:var(--txt);border-radius:8px;font-size:14px}
+  input:focus{outline:none;border-color:var(--accent)}
+  .btn{width:100%;margin-top:18px;padding:11px;border:none;border-radius:8px;
+    background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .msg{margin-top:14px;padding:10px;border-radius:8px;font-size:13px;display:none}
+  .msg.erro{display:block;background:rgba(239,68,68,.12);border:1px solid var(--fraco);color:#fca5a5}
+  .msg.ok{display:block;background:rgba(34,197,94,.12);border:1px solid var(--forte);color:#86efac}
+  .forca{height:5px;border-radius:3px;background:var(--panel2);margin-top:7px;overflow:hidden}
+  .forca i{display:block;height:100%;width:0;transition:width .2s,background .2s}
+  .forca-txt{font-size:11px;color:var(--muted);margin-top:4px}
+  .hint{font-size:11px;color:var(--muted);margin-top:6px}
+  .row{display:flex;gap:10px}
+  .row > div{flex:1}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l4-2"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+    <h1>Radar de Licitações</h1>
+  </div>
+  <p class="sub">Monitor de licitações públicas · PNCP + Lei 14.133/2021</p>
+
+  <div class="tabs">
+    <button id="tab-login" class="on" onclick="mostrar('login')">Entrar</button>
+    <button id="tab-cadastro" onclick="mostrar('cadastro')">Criar conta</button>
+  </div>
+
+  <!-- LOGIN -->
+  <form id="form-login" onsubmit="return entrar(event)">
+    <label>E-mail</label>
+    <input id="l-email" type="email" autocomplete="email" required>
+    <label>Senha</label>
+    <input id="l-senha" type="password" autocomplete="current-password" required>
+    <button class="btn" type="submit">Entrar</button>
+  </form>
+
+  <!-- CADASTRO -->
+  <form id="form-cadastro" class="hidden" onsubmit="return cadastrar(event)">
+    <label>Nome ou razão social</label>
+    <input id="c-nome" required>
+    <label>CPF ou CNPJ <span style="opacity:.6">(opcional)</span></label>
+    <input id="c-doc" placeholder="só números">
+    <label>E-mail</label>
+    <input id="c-email" type="email" autocomplete="email" required>
+    <label>Senha</label>
+    <input id="c-senha" type="password" autocomplete="new-password" required oninput="medirForca()">
+    <div class="forca"><i id="forca-barra"></i></div>
+    <div class="forca-txt" id="forca-txt">Use 8+ caracteres, com letra, número e símbolo.</div>
+    <button class="btn" type="submit">Criar conta</button>
+  </form>
+
+  <div id="msg" class="msg"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+function mostrar(qual){
+  const ehLogin = qual==='login';
+  $('#form-login').classList.toggle('hidden', !ehLogin);
+  $('#form-cadastro').classList.toggle('hidden', ehLogin);
+  $('#tab-login').classList.toggle('on', ehLogin);
+  $('#tab-cadastro').classList.toggle('on', !ehLogin);
+  msg('');
+}
+function msg(t, tipo){
+  const m=$('#msg'); m.textContent=t||''; m.className='msg'+(t?(' '+(tipo||'erro')):'');
+}
+function medirForca(){
+  const s=$('#c-senha').value;
+  let n=0;
+  if(s.length>=8)n++; if(/[A-Za-z]/.test(s))n++; if(/\d/.test(s))n++; if(/[^A-Za-z0-9]/.test(s))n++;
+  const cores=['var(--fraco)','var(--fraco)','var(--medio)','var(--medio)','var(--forte)'];
+  const larg=[0,25,50,75,100][n];
+  const txt=['','Fraca','Fraca','Média','Forte'][n];
+  $('#forca-barra').style.width=larg+'%';
+  $('#forca-barra').style.background=cores[n];
+  if(s) $('#forca-txt').textContent = txt+' — 8+ caracteres, com letra, número e símbolo.';
+}
+async function post(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  let j={}; try{ j=await r.json(); }catch(e){}
+  return {ok:r.ok, status:r.status, data:j};
+}
+async function entrar(e){
+  e.preventDefault(); msg('');
+  const btn=$('#form-login button'); btn.disabled=true;
+  const r=await post('/api/auth/login',{email:$('#l-email').value, senha:$('#l-senha').value});
+  btn.disabled=false;
+  if(r.ok){ location.href='/'; }
+  else msg(r.data.detail || 'Não foi possível entrar.');
+  return false;
+}
+async function cadastrar(e){
+  e.preventDefault(); msg('');
+  const btn=$('#form-cadastro button'); btn.disabled=true;
+  const r=await post('/api/auth/cadastro',{
+    nome:$('#c-nome').value, email:$('#c-email').value,
+    senha:$('#c-senha').value, documento:$('#c-doc').value||null});
+  btn.disabled=false;
+  if(r.ok){
+    if(r.data.verificar_email){
+      msg(r.data.mensagem || 'Enviamos um link de confirmação para o seu e-mail. Confirme para entrar.', 'ok');
+      $('#form-cadastro').reset(); medirForca();
+    } else { location.href='/'; }
+  } else {
+    msg(r.data.detail || 'Não foi possível criar a conta.');
+  }
+  return false;
+}
+
+// Página de verificação de e-mail (/verificar?token=...)
+(async function(){
+  const params = new URLSearchParams(location.search);
+  if(location.pathname==='/verificar' && params.get('token')){
+    const r=await fetch('/api/auth/verificar?token='+encodeURIComponent(params.get('token')));
+    if(r.ok) msg('E-mail confirmado! Agora você já pode entrar.', 'ok');
+    else msg('Link de verificação inválido ou já usado.');
+  }
+  if(location.pathname==='/cadastro') mostrar('cadastro');
+})();
+</script>
+</body>
+</html>

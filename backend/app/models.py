@@ -20,10 +20,33 @@ class Base(DeclarativeBase):
     pass
 
 
+class Usuario(Base):
+    __tablename__ = "usuarios"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(160))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    senha_hash: Mapped[str] = mapped_column(String(255))
+    # dados cadastrais (CPF/CNPJ e endereço guardados cifrados)
+    doc_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)       # CPF/CNPJ
+    endereco_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON cifrado
+    # verificação de e-mail
+    email_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
+    token_verificacao: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # integrações próprias do usuário (cifradas/preferências)
+    gemini_key_cifrada: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
+    notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Produto(Base):
     __tablename__ = "produtos"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     descricao: Mapped[str] = mapped_column(Text)
     # Códigos de classificação (qualquer um pode estar vazio)
     ncm: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -93,9 +116,11 @@ class ItemEdital(Base):
 
 class Match(Base):
     __tablename__ = "matches"
+    __table_args__ = (UniqueConstraint("usuario_id", "edital_id", name="uq_match_user_edital"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), unique=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
     score: Mapped[float] = mapped_column(Float)           # 0..1
     nivel: Mapped[str] = mapped_column(String(10))        # fraco | medio | forte
     itens_compativeis: Mapped[int] = mapped_column(Integer, default=0)
@@ -115,6 +140,7 @@ class RegraExclusao(Base):
     __tablename__ = "regras_exclusao"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     # tipo: "termo" (palavra no objeto/item) ou "categoria" (código de categoria PNCP)
     tipo: Mapped[str] = mapped_column(String(20), default="termo")
     valor: Mapped[str] = mapped_column(String(120))
@@ -149,6 +175,7 @@ class Documento(Base):
     __tablename__ = "documentos"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
     orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
     data_validade: Mapped[date] = mapped_column(Date)
@@ -166,6 +193,7 @@ class Proposta(Base):
     __table_args__ = (UniqueConstraint("edital_id", name="uq_proposta_edital"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"))
     # itens: [{descricao, quantidade, custo_unit, preco_unit}]
     itens: Mapped[list | None] = mapped_column(JSON, nullable=True)

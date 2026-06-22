@@ -180,6 +180,10 @@
   <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
   <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
   <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
+  <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
+    <span id="user-nome" class="badge" title="Sua conta">—</span>
+    <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
+  </span>
 </header>
 
 <div class="wrap">
@@ -1067,11 +1071,32 @@ async function abrirDetalhe(id){
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
 
-// inicialização + esconder a tela de carregamento
-Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
-  setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
-});
-setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
+// ---- Portão de sessão: exige login para usar o dashboard ----
+let USUARIO = null;
+async function exigirLogin(){
+  try{
+    const r = await fetch('/api/auth/me');
+    if(r.status===401 || r.status===403){ location.href='/login'; return false; }
+    USUARIO = await r.json();
+    const el = document.getElementById('user-nome');
+    if(el) el.textContent = USUARIO.nome;
+    return true;
+  }catch(e){ location.href='/login'; return false; }
+}
+async function sair(){
+  await fetch('/api/auth/logout', {method:'POST'});
+  location.href='/login';
+}
+
+// inicialização: primeiro confirma a sessão, depois carrega os dados
+(async function(){
+  const ok = await exigirLogin();
+  if(!ok) return;   // já redirecionou para /login
+  Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+    setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+  });
+  setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
+})();
 </script>
 </body>
 </html>

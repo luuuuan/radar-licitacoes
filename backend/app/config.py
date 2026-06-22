@@ -13,6 +13,16 @@ class Settings(BaseSettings):
     # Autenticação (HTTP Basic). Se ambos vazios, a API fica aberta (dev local).
     BASIC_AUTH_USER: str = ""
     BASIC_AUTH_PASS: str = ""
+
+    # Segurança multiusuário
+    # SECRET_KEY assina os tokens de sessão (JWT). Em produção, defina no Render!
+    SECRET_KEY: str = "troque-isto-em-producao-please-32+chars-aleatorios"
+    # APP_ENCRYPTION_KEY cifra dados sensíveis (chave Gemini, CPF/CNPJ). Se vazio,
+    # é derivada da SECRET_KEY. Defina no Render para algo estável e secreto.
+    APP_ENCRYPTION_KEY: str = ""
+    TOKEN_EXPIRA_HORAS: int = 24 * 7        # sessão dura 7 dias
+    # URL pública do app (para links de verificação de e-mail). Ex.: https://...onrender.com
+    APP_BASE_URL: str = ""
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Necessária porque a coleta passa a rodar no Render (que alcança o PNCP),
     # disparada por um agendador externo (GitHub Actions) 1x/dia.
