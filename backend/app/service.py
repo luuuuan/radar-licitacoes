@@ -123,9 +123,11 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     return resumo
 
 
-def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None) -> dict:
-    """Coleta editais do PNCP (compartilhados) e, em seguida, gera os matches
-    de cada usuário contra o próprio catálogo. Parâmetros da coleta são globais."""
+def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
+                     usuario_id: int | None = None) -> dict:
+    """Coleta editais do PNCP (compartilhados) e gera matches.
+    - usuario_id definido: gera matches só para esse usuário (coleta manual).
+    - usuario_id None: gera para todos os usuários já ativos (cron diário)."""
     if conectores is None:
         from . import configuracoes as cfg
         conectores = [PNCPConnector(
@@ -166,8 +168,18 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
             log_coleta.finalizado_em = datetime.utcnow()
             db.commit()
 
-    # gera matches por usuário (apenas dos editais ainda sem match para cada um)
-    for u in _usuarios_ativos(db):
+    # gera matches: só para o usuário que pediu (manual), ou todos os ativos (cron)
+    if usuario_id is not None:
+        alvos = [u for u in [db.get(Usuario, usuario_id)] if u]
+    else:
+        # cron: atualiza apenas quem JÁ coletou alguma vez (tem ao menos 1 match),
+        # para não semear editais em contas novas que ainda não buscaram
+        ids_com_match = db.execute(
+            select(Match.usuario_id).where(Match.usuario_id.isnot(None)).distinct()
+        ).scalars().all()
+        alvos = [db.get(Usuario, uid) for uid in ids_com_match]
+        alvos = [u for u in alvos if u and u.ativo]
+    for u in alvos:
         try:
             r = _gerar_matches_usuario(db, u, recalcular_todos=False)
             resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]

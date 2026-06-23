@@ -123,7 +123,7 @@ def _email_html_verificacao(nome: str, link: str) -> str:
           </p>
         </td></tr>
       </table>
-      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações · PNCP + Lei 14.133/2021</p>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
     </td></tr>
   </table>
 </body></html>"""
@@ -680,10 +680,10 @@ def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user)
 
 
 # --------------------------- Coleta / Logs / Resumo ------------------- #
-def _rodar_coleta_bg():
+def _rodar_coleta_bg(usuario_id: int | None = None):
     db = SessionLocal()
     try:
-        processar_coleta(db)
+        processar_coleta(db, usuario_id=usuario_id)
         # após coletar, verifica prazos encerrando e documentos vencendo
         from .lembretes import verificar_todos
         verificar_todos(db)
@@ -692,8 +692,16 @@ def _rodar_coleta_bg():
 
 
 @app.post("/api/coletar")
-def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user)):
-    bg.add_task(_rodar_coleta_bg)
+def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
+                  db: Session = Depends(get_session)):
+    # precisa ter produtos cadastrados para a coleta fazer sentido
+    tem_produtos = db.scalar(
+        select(func.count(Produto.id)).where(Produto.usuario_id == user.id)) or 0
+    if not tem_produtos:
+        return {"ok": False, "sem_produtos": True,
+                "mensagem": "Cadastre ao menos um produto antes de buscar editais."}
+    # coleta manual gera matches só para quem clicou
+    bg.add_task(_rodar_coleta_bg, user.id)
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
