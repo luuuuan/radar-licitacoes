@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     NOTIFICAR_EMAIL: str = ""  # destinatário dos alertas
 
+    # E-mail via API Brevo (HTTPS — funciona no Render, que bloqueia SMTP).
+    # Envia para qualquer destinatário sem precisar verificar domínio.
+    BREVO_API_KEY: str = ""
+    BREVO_FROM_EMAIL: str = ""   # ex.: "voce@gmail.com" (remetente verificado no Brevo)
+    BREVO_FROM_NOME: str = "Radar de Licitações"
+
     # Notificações por Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
