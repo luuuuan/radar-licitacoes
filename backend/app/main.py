@@ -88,6 +88,47 @@ class CadastroIn(BaseModel):
     documento: str | None = None       # CPF ou CNPJ
 
 
+def _email_html_verificacao(nome: str, link: str) -> str:
+    """E-mail de confirmação em HTML simples e sóbrio (melhora a entrega)."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#1a2129">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 0">
+    <tr><td align="center">
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0"
+             style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
+          Radar de Licitações
+        </td></tr>
+        <tr><td style="padding:28px">
+          <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
+          <p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#3b4654">
+            Falta só um passo para ativar a sua conta. Clique no botão abaixo para
+            confirmar o seu e-mail.
+          </p>
+          <p style="margin:0 0 24px;text-align:center">
+            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
+               padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
+              Confirmar meu e-mail
+            </a>
+          </p>
+          <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
+            Se o botão não funcionar, copie e cole este endereço no navegador:
+          </p>
+          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
+          <p style="margin:0;font-size:12px;color:#94a3b8">
+            Se você não criou esta conta, é só ignorar esta mensagem.
+          </p>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações · PNCP + Lei 14.133/2021</p>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
 class LoginIn(BaseModel):
     email: str
     senha: str
@@ -144,13 +185,17 @@ def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
     if smtp_ok:
         base = settings.APP_BASE_URL.rstrip("/")
         link = f"{base}/verificar?token={u.token_verificacao}"
-        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a conta:\n{link}\n\n"
-                 "Se você não criou esta conta, ignore esta mensagem.")
-        # envia em segundo plano: o cadastro responde na hora, sem esperar o SMTP
+        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a sua conta no "
+                 f"Radar de Licitações:\n{link}\n\n"
+                 "Se você não criou esta conta, ignore esta mensagem.\n\n"
+                 "— Radar de Licitações")
+        html = _email_html_verificacao(u.nome, link)
+        # envia em segundo plano: o cadastro responde na hora, sem esperar o e-mail
         bg.add_task(_email_mod.enviar_para, email,
-                    "Confirme seu cadastro — Radar de Licitações", corpo)
+                    "Confirme seu cadastro — Radar de Licitações", corpo, html)
         return {"ok": True, "verificar_email": True,
-                "mensagem": "Enviamos um link de confirmação para o seu e-mail."}
+                "mensagem": "Enviamos um link de confirmação para o seu e-mail. "
+                            "Confira também a caixa de spam."}
 
     _set_cookie_sessao(resp, u.id)
     return {"ok": True, "verificar_email": False}
