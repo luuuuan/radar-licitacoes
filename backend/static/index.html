@@ -210,6 +210,7 @@
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
     <button data-tab="config" onclick="tab('config')">Configurações</button>
+    <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
   </nav>
 
@@ -410,6 +411,77 @@
     </div>
   </section>
 
+  <!-- PERFIL -->
+  <section id="t-perfil" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Meus dados</h3>
+      <div class="grid2">
+        <div class="field"><label>Nome ou razão social</label><input id="pf-nome" style="width:100%"></div>
+        <div class="field"><label>CPF ou CNPJ</label><input id="pf-doc" style="width:100%" placeholder="só números"></div>
+      </div>
+      <div class="field"><label>E-mail (login)</label><input id="pf-email" style="width:100%" disabled></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Endereço</h3>
+      <div class="grid2">
+        <div class="field"><label>CEP</label>
+          <input id="pf-cep" style="width:100%" placeholder="00000-000" onblur="buscarCep()">
+          <span class="muted" id="cep-status" style="font-size:11px"></span>
+        </div>
+        <div class="field"><label>Cidade / UF</label><input id="pf-cidade" style="width:100%" disabled></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Logradouro</label><input id="pf-logradouro" style="width:100%"></div>
+        <div class="field"><label>Número</label><input id="pf-numero" style="width:100%"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Bairro</label><input id="pf-bairro" style="width:100%"></div>
+        <div class="field"><label>Complemento</label><input id="pf-compl" style="width:100%"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Chave da IA (Gemini)</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">
+        Com a sua própria chave, a IA usa a sua cota gratuita — sem dividir limite com outros usuários.
+        É opcional: sem ela, o sistema funciona só com o casamento por texto.
+      </p>
+      <div class="field"><label>Sua chave Gemini</label>
+        <input id="pf-gemini" style="width:100%" placeholder="cole aqui sua chave (AIza...)" autocomplete="off">
+        <span class="muted" id="gemini-status" style="font-size:11px"></span>
+      </div>
+      <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank"
+         style="font-size:12px;padding:5px 12px">Criar/obter minha chave Gemini ↗︎</a>
+      <p class="muted" style="font-size:11px;margin-bottom:0">
+        Dica: ao criar, restrinja a chave à "Generative Language API" por segurança.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Notificações</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade forte nova.</p>
+      <label style="display:flex;gap:8px;align-items:center;margin:8px 0">
+        <input type="checkbox" id="pf-notif-email"> Por e-mail (no seu e-mail de login)
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;margin:8px 0">
+        <input type="checkbox" id="pf-notif-tg"> Por Telegram
+      </label>
+      <div class="field"><label>Seu Chat ID do Telegram</label>
+        <input id="pf-telegram" style="width:100%" placeholder="ex: 123456789">
+        <span class="muted" style="font-size:11px">
+          Como obter: no Telegram, fale com o @userinfobot e ele te dá seu Chat ID.
+          Depois, mande um "oi" para o bot do Radar para ele poder te responder.
+        </span>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn" onclick="salvarPerfil()">Salvar perfil</button>
+      <span id="perfil-msg" class="muted" style="margin-left:10px"></span>
+    </div>
+  </section>
+
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
@@ -467,7 +539,7 @@ function toggleMenu(){
 
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','encerrados','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','catalogo','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
@@ -477,6 +549,7 @@ function tab(name){
   if(name==='regras') loadRegras();
   if(name==='documentos') loadDocumentos();
   if(name==='config') loadConfig();
+  if(name==='perfil') loadPerfil();
   if(name==='logs') loadLogs();
 }
 
@@ -1095,6 +1168,68 @@ async function abrirDetalhe(id){
 }
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
+
+// ---- Perfil ----
+async function loadPerfil(){
+  const p = await api('/api/perfil');
+  $('#pf-nome').value = p.nome||'';
+  $('#pf-doc').value = p.documento||'';
+  $('#pf-email').value = p.email||'';
+  const e = p.endereco||{};
+  $('#pf-cep').value = e.cep||'';
+  $('#pf-logradouro').value = e.logradouro||'';
+  $('#pf-numero').value = e.numero||'';
+  $('#pf-bairro').value = e.bairro||'';
+  $('#pf-compl').value = e.complemento||'';
+  $('#pf-cidade').value = (e.cidade||'') + (e.uf?(' / '+e.uf):'');
+  $('#pf-cidade').dataset.cidade = e.cidade||'';
+  $('#pf-cidade').dataset.uf = e.uf||'';
+  $('#pf-gemini').value = '';
+  $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
+  $('#pf-telegram').value = p.telegram_chat_id||'';
+  $('#pf-notif-email').checked = !!p.notif_email;
+  $('#pf-notif-tg').checked = !!p.notif_telegram;
+}
+
+async function buscarCep(){
+  const cep = ($('#pf-cep').value||'').replace(/\D/g,'');
+  if(cep.length!==8){ return; }
+  $('#cep-status').textContent = 'Buscando...';
+  try{
+    const r = await fetch('/api/cep/'+cep);
+    if(!r.ok){ $('#cep-status').textContent = 'CEP não encontrado.'; return; }
+    const d = await r.json();
+    $('#pf-logradouro').value = d.logradouro||'';
+    $('#pf-bairro').value = d.bairro||'';
+    $('#pf-compl').value = d.complemento|| $('#pf-compl').value;
+    $('#pf-cidade').value = (d.cidade||'') + (d.uf?(' / '+d.uf):'');
+    $('#pf-cidade').dataset.cidade = d.cidade||'';
+    $('#pf-cidade').dataset.uf = d.uf||'';
+    $('#cep-status').textContent = '✓ Endereço preenchido';
+    $('#pf-numero').focus();
+  }catch(e){ $('#cep-status').textContent = 'Erro ao consultar o CEP.'; }
+}
+
+async function salvarPerfil(){
+  const body = {
+    nome: $('#pf-nome').value, documento: $('#pf-doc').value,
+    telegram_chat_id: $('#pf-telegram').value,
+    notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
+    endereco: {
+      cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,
+      numero: $('#pf-numero').value, bairro: $('#pf-bairro').value,
+      complemento: $('#pf-compl').value,
+      cidade: $('#pf-cidade').dataset.cidade||'', uf: $('#pf-cidade').dataset.uf||'',
+    },
+  };
+  const g = $('#pf-gemini').value.trim();
+  if(g) body.gemini_key = g;   // só envia se digitou algo (em branco mantém a atual)
+  await api('/api/perfil',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#perfil-msg').textContent = 'Perfil salvo!';
+  toast('Perfil salvo com sucesso.', 'ok', 3000);
+  setTimeout(()=>{ $('#perfil-msg').textContent=''; }, 3000);
+  loadPerfil();
+}
 
 // ---- Portão de sessão: exige login para usar o dashboard ----
 let USUARIO = null;

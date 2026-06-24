@@ -16,6 +16,7 @@ from .matching.engine import (
     MatchingEngine, ProdutoCat, ItemEdt, aplicar_regras_exclusao,
 )
 from . import notifications
+from .notifications import email as email_mod, telegram as telegram_mod
 
 log = logging.getLogger("servico")
 
@@ -81,8 +82,10 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     catalogo = _carregar_catalogo(db, usuario.id)
     termos_excl, categorias_excl = _carregar_exclusoes(db, usuario.id)
     from . import configuracoes as cfg
+    from .auth import decifrar
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
+    gemini_key = decifrar(usuario.gemini_key_cifrada)   # chave do próprio usuário
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia, gemini_key=gemini_key)
 
     # mais relevantes primeiro (se a cota de IA acabar, os melhores já foram feitos)
     editais = db.execute(
@@ -90,6 +93,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     ).scalars().all()
 
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
+    novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
     for ed in editais:
         existente = db.execute(
             select(Match).where(Match.edital_id == ed.id,
@@ -108,6 +112,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
                 db.delete(existente)
             continue
 
+        era_novo = existente is None
         resultado = engine.avaliar(ed.objeto or "", itens_edt)
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
@@ -119,8 +124,37 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
         resumo["atualizados"] += 1
         if resultado.nivel == "forte":
             resumo["fortes"] += 1
+            if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
+                novos_fortes.append((ed.objeto or "Edital", ed.orgao or "", ed.link or ""))
     db.commit()
+
+    if novos_fortes and not recalcular_todos:
+        _notificar_usuario(usuario, novos_fortes)
     return resumo
+
+
+def _notificar_usuario(usuario, fortes: list[tuple]):
+    """Avisa o usuário, pelos próprios canais, sobre novas oportunidades fortes."""
+    n = len(fortes)
+    titulo = f"🎯 {n} nova(s) oportunidade(s) forte(s) no Radar"
+    linhas = []
+    for objeto, orgao, link in fortes[:10]:
+        item = f"• {objeto[:90]}"
+        if orgao:
+            item += f" ({orgao[:40]})"
+        if link:
+            item += f"\n  {link}"
+        linhas.append(item)
+    if n > 10:
+        linhas.append(f"... e mais {n - 10}.")
+    corpo = "\n".join(linhas)
+    try:
+        if usuario.notif_email and usuario.email:
+            email_mod.enviar_para(usuario.email, titulo, corpo)
+        if usuario.notif_telegram and usuario.telegram_chat_id:
+            telegram_mod.enviar_para_chat(usuario.telegram_chat_id, titulo, corpo)
+    except Exception:
+        log.exception("Falha ao notificar usuário %s", usuario.id)
 
 
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,

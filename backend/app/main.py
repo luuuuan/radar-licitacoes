@@ -241,6 +241,78 @@ def auth_verificar(token: str, db: Session = Depends(get_session)):
     return {"ok": True}
 
 
+# =========================== PERFIL ============================ #
+class PerfilIn(BaseModel):
+    nome: str | None = None
+    documento: str | None = None
+    gemini_key: str | None = None       # "" limpa; None mantém
+    telegram_chat_id: str | None = None
+    notif_email: bool | None = None
+    notif_telegram: bool | None = None
+    endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
+
+
+@app.get("/api/perfil")
+def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
+    import json as _j
+    end = _auth.decifrar(user.endereco_cifrado)
+    try:
+        endereco = _j.loads(end) if end else {}
+    except ValueError:
+        endereco = {}
+    return {
+        "nome": user.nome, "email": user.email,
+        "documento": _auth.decifrar(user.doc_cifrado) or "",
+        "tem_gemini": bool(user.gemini_key_cifrada),
+        "telegram_chat_id": user.telegram_chat_id or "",
+        "notif_email": user.notif_email, "notif_telegram": user.notif_telegram,
+        "endereco": endereco,
+    }
+
+
+@app.post("/api/perfil")
+def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_user),
+                  db: Session = Depends(get_session)):
+    import json as _j
+    if dados.nome is not None and dados.nome.strip():
+        user.nome = dados.nome.strip()
+    if dados.documento is not None:
+        user.doc_cifrado = _auth.cifrar(dados.documento.strip() or None)
+    # chave Gemini: None = manter; "" = remover; texto = cifrar e guardar
+    if dados.gemini_key is not None:
+        user.gemini_key_cifrada = _auth.cifrar(dados.gemini_key.strip() or None)
+    if dados.telegram_chat_id is not None:
+        user.telegram_chat_id = dados.telegram_chat_id.strip() or None
+    if dados.notif_email is not None:
+        user.notif_email = dados.notif_email
+    if dados.notif_telegram is not None:
+        user.notif_telegram = dados.notif_telegram
+    if dados.endereco is not None:
+        user.endereco_cifrado = _auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False))
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/cep/{cep}")
+def consultar_cep(cep: str, user: Usuario = Depends(_auth.get_current_user)):
+    """Autopreenchimento de endereço pelo CEP (ViaCEP, gratuito)."""
+    limpo = "".join(c for c in cep if c.isdigit())
+    if len(limpo) != 8:
+        raise HTTPException(400, "CEP deve ter 8 dígitos.")
+    try:
+        r = requests.get(f"https://viacep.com.br/ws/{limpo}/json/", timeout=10)
+        dados = r.json()
+    except Exception:
+        raise HTTPException(502, "Não foi possível consultar o CEP agora.")
+    if dados.get("erro"):
+        raise HTTPException(404, "CEP não encontrado.")
+    return {
+        "cep": dados.get("cep", ""), "logradouro": dados.get("logradouro", ""),
+        "bairro": dados.get("bairro", ""), "cidade": dados.get("localidade", ""),
+        "uf": dados.get("uf", ""), "complemento": dados.get("complemento", ""),
+    }
+
+
 # --------------------------- Schemas ---------------------------------- #
 class ProdutoIn(BaseModel):
     descricao: str
@@ -1114,8 +1186,10 @@ def obter_config(user: Usuario = Depends(_auth.get_current_user),
     from . import configuracoes
     from .matching.embeddings import ia_disponivel, ia_bloqueada, segundos_para_liberar
     dados = configuracoes.todas(db)
-    dados["IA_DISPONIVEL"] = "1" if ia_disponivel() else "0"  # chave configurada?
-    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"    # cota diária estourou?
+    chave_user = _auth.decifrar(user.gemini_key_cifrada)
+    dados["IA_DISPONIVEL"] = "1" if ia_disponivel(chave_user) else "0"  # chave (do user ou global)?
+    dados["IA_CHAVE_PROPRIA"] = "1" if chave_user else "0"             # usa chave própria?
+    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"            # cota diária estourou?
     dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar() / 60))
     return dados
 
