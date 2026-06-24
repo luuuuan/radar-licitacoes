@@ -70,6 +70,7 @@ for _t in ("produtos", "matches", "documentos", "regras_exclusao", "propostas"):
     if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS[_t]:
         _COLUNAS_NOVAS[_t].append(("usuario_id", "INTEGER"))
 _COLUNAS_NOVAS.pop("produtos_user", None)
+_COLUNAS_NOVAS["usuarios"] = [("telegram_codigo", "VARCHAR(32)")]
 
 
 def _migrar_colunas_novas() -> None:

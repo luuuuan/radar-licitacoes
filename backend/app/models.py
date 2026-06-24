@@ -36,6 +36,7 @@ class Usuario(Base):
     # integrações próprias do usuário (cifradas/preferências)
     gemini_key_cifrada: Mapped[str | None] = mapped_column(Text, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_codigo: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
     notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)

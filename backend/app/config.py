@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Notificações por Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    # Bot compartilhado (multiusuário): username do bot e segredo do webhook
+    TELEGRAM_BOT_USERNAME: str = ""   # ex.: "RadarLicitacoesBot" (sem @)
+    TELEGRAM_WEBHOOK_SECRET: str = ""  # segredo que protege o endpoint do webhook
 
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"

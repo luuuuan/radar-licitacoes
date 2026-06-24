@@ -467,12 +467,13 @@
       <label style="display:flex;gap:8px;align-items:center;margin:8px 0">
         <input type="checkbox" id="pf-notif-tg"> Por Telegram
       </label>
-      <div class="field"><label>Seu Chat ID do Telegram</label>
-        <input id="pf-telegram" style="width:100%" placeholder="ex: 123456789">
-        <span class="muted" style="font-size:11px">
-          Como obter: no Telegram, fale com o @userinfobot e ele te dá seu Chat ID.
-          Depois, mande um "oi" para o bot do Radar para ele poder te responder.
-        </span>
+      <div id="tg-box" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:6px">
+        <div id="tg-status" class="muted" style="font-size:13px">—</div>
+        <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+        <p class="muted" style="font-size:11px;margin:10px 0 0">
+          Ao clicar em conectar, o Telegram abre o nosso bot. Toque em <b>Iniciar/Start</b>
+          e pronto — a conexão é automática, sem copiar código nenhum.
+        </p>
       </div>
     </div>
 
@@ -1186,9 +1187,44 @@ async function loadPerfil(){
   $('#pf-cidade').dataset.uf = e.uf||'';
   $('#pf-gemini').value = '';
   $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
-  $('#pf-telegram').value = p.telegram_chat_id||'';
   $('#pf-notif-email').checked = !!p.notif_email;
   $('#pf-notif-tg').checked = !!p.notif_telegram;
+  carregarVinculoTelegram();
+}
+
+async function carregarVinculoTelegram(){
+  const st=$('#tg-status'), ac=$('#tg-acoes');
+  try{
+    const v = await api('/api/telegram/vinculo');
+    if(!v.disponivel){
+      st.textContent = 'O Telegram ainda não foi configurado no servidor (falta o bot).';
+      ac.innerHTML=''; return;
+    }
+    if(v.conectado){
+      st.innerHTML = '✓ <b style="color:var(--forte)">Telegram conectado</b> — você receberá os avisos por aqui.';
+      ac.innerHTML = `<button class="btn ghost" onclick="desconectarTelegram()">Desconectar</button>`;
+    } else {
+      st.innerHTML = 'Telegram <b>não conectado</b>.';
+      ac.innerHTML = `<a class="btn" href="${v.link}" target="_blank" onclick="aguardarConexaoTelegram()">Conectar meu Telegram ↗︎</a>`;
+    }
+  }catch(e){ st.textContent='Não foi possível carregar o status do Telegram.'; }
+}
+
+function aguardarConexaoTelegram(){
+  // após abrir o bot, fica checando alguns segundos se a conexão chegou
+  toast('Abra o bot e toque em Iniciar. Estou aguardando a conexão...', 'aviso', 6000);
+  let n=0;
+  const t=setInterval(async()=>{
+    const v=await api('/api/telegram/vinculo');
+    if(v.conectado){ clearInterval(t); carregarVinculoTelegram(); toast('Telegram conectado!', 'ok', 4000); }
+    if(++n>20) clearInterval(t);  // ~60s
+  }, 3000);
+}
+
+async function desconectarTelegram(){
+  await api('/api/telegram/desvincular',{method:'POST'});
+  carregarVinculoTelegram();
+  toast('Telegram desconectado.', 'aviso', 3000);
 }
 
 async function buscarCep(){
@@ -1213,7 +1249,6 @@ async function buscarCep(){
 async function salvarPerfil(){
   const body = {
     nome: $('#pf-nome').value, documento: $('#pf-doc').value,
-    telegram_chat_id: $('#pf-telegram').value,
     notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
     endereco: {
       cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,

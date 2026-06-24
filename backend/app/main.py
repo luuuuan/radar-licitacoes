@@ -313,6 +313,86 @@ def consultar_cep(cep: str, user: Usuario = Depends(_auth.get_current_user)):
     }
 
 
+# ===================== VÍNCULO DO TELEGRAM (multiusuário) ===================== #
+@app.get("/api/telegram/vinculo")
+def telegram_vinculo(user: Usuario = Depends(_auth.get_current_user),
+                     db: Session = Depends(get_session)):
+    """Devolve o link para o usuário conectar o Telegram dele ao bot do Radar.
+    Gera um código único na primeira vez."""
+    if not user.telegram_codigo:
+        user.telegram_codigo = _secrets_auth.token_urlsafe(8)
+        db.commit()
+    bot = settings.TELEGRAM_BOT_USERNAME
+    disponivel = bool(settings.TELEGRAM_BOT_TOKEN and bot)
+    link = f"https://t.me/{bot}?start={user.telegram_codigo}" if disponivel else ""
+    return {
+        "disponivel": disponivel,
+        "bot": bot,
+        "codigo": user.telegram_codigo,
+        "link": link,
+        "conectado": bool(user.telegram_chat_id),
+    }
+
+
+@app.post("/api/telegram/desvincular")
+def telegram_desvincular(user: Usuario = Depends(_auth.get_current_user),
+                         db: Session = Depends(get_session)):
+    user.telegram_chat_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/telegram/webhook/{secret}")
+async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_session)):
+    """Recebe as mensagens do Telegram. Quando alguém manda /start CÓDIGO,
+    vincula o chat_id daquele usuário. Protegido por um segredo na URL."""
+    if not settings.TELEGRAM_WEBHOOK_SECRET or secret != settings.TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(404, "not found")
+    try:
+        update = await req.json()
+    except Exception:
+        return {"ok": True}
+    msg = (update or {}).get("message") or {}
+    texto = (msg.get("text") or "").strip()
+    chat = msg.get("chat") or {}
+    chat_id = str(chat.get("id") or "")
+    if texto.startswith("/start") and chat_id:
+        partes = texto.split(maxsplit=1)
+        codigo = partes[1].strip() if len(partes) > 1 else ""
+        if codigo:
+            u = db.execute(select(Usuario).where(Usuario.telegram_codigo == codigo)).scalars().first()
+            if u:
+                u.telegram_chat_id = chat_id
+                u.notif_telegram = True
+                db.commit()
+                from .notifications import telegram as _tg
+                _tg.enviar_para_chat(
+                    chat_id, "✅ Telegram conectado!",
+                    f"Pronto, {u.nome}! Você vai receber aqui os avisos de novas "
+                    "oportunidades fortes do Radar de Licitações.")
+                return {"ok": True}
+        from .notifications import telegram as _tg
+        _tg.enviar_para_chat(
+            chat_id, "Radar de Licitações",
+            "Para conectar, abra o link de vínculo na tela 'Meu perfil' do sistema.")
+    return {"ok": True}
+
+
+@app.post("/api/telegram/registrar-webhook")
+def telegram_registrar_webhook(user: Usuario = Depends(_auth.get_current_user)):
+    """Registra o webhook no Telegram (rodar uma vez após configurar o bot)."""
+    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_WEBHOOK_SECRET and settings.APP_BASE_URL):
+        raise HTTPException(400, "Configure TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET e APP_BASE_URL.")
+    url = f"{settings.APP_BASE_URL.rstrip('/')}/api/telegram/webhook/{settings.TELEGRAM_WEBHOOK_SECRET}"
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
+            json={"url": url, "allowed_updates": ["message"]}, timeout=15)
+        return {"ok": r.status_code == 200, "resposta": r.json()}
+    except Exception as e:
+        raise HTTPException(502, f"Falha ao registrar webhook: {e}")
+
+
 # --------------------------- Schemas ---------------------------------- #
 class ProdutoIn(BaseModel):
     descricao: str
