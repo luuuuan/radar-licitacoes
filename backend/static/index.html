@@ -888,7 +888,7 @@ async function loadConfig(){
   $('#c-ia').checked = c.IA_ATIVA==='1' && disp;
   $('#c-ia').disabled = !disp;
   let txt;
-  if(!disp) txt='Chave GEMINI_API_KEY não configurada no servidor';
+  if(!disp) txt='Informe a sua chave da IA (Gemini) em "Meu perfil" para ativar.';
   else if(c.IA_BLOQUEADA==='1'){
     const min=+c.IA_LIBERA_EM_MIN||0;
     const h=Math.floor(min/60), m=min%60;
@@ -1013,7 +1013,8 @@ async function analisarEdital(id, forcar){
           <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
         </div>`;
     } else {
-      const msgs={sem_ia:'A IA não está configurada. Ligue o toggle em Configurações e adicione a chave GEMINI_API_KEY no servidor.',
+      const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
+        sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
         sem_ref:'Não foi possível localizar este edital no PNCP.',
         sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
         vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
