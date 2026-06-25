@@ -60,6 +60,10 @@ class Produto(Base):
     # Preços (para cálculo de margem)
     preco_custo: Mapped[float | None] = mapped_column(Float, nullable=True)   # quanto você paga
     preco_venda: Mapped[float | None] = mapped_column(Float, nullable=True)   # seu preço de venda
+    # Unidade de venda e quantos itens "soltos" cabem nela (ex.: resma = 500 folhas).
+    # Serve para comparar com o preço unitário do órgão sem distorcer a margem.
+    unidade_venda: Mapped[str | None] = mapped_column(String(20), nullable=True)   # ex.: resma, unidade, caixa
+    itens_por_unidade: Mapped[float | None] = mapped_column(Float, nullable=True)  # ex.: 500
     # Fornecedor
     fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)

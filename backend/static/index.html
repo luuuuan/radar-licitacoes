@@ -223,6 +223,11 @@
         <option value="medio">Médio</option>
         <option value="fraco">Fraco</option>
       </select>
+      <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
+        <option value="todos">Produtos e serviços</option>
+        <option value="produtos">Só produtos</option>
+        <option value="servicos">Só serviços</option>
+      </select>
       <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
              oninput="this.value=this.value.toUpperCase()">
       <select id="f-status" onchange="loadEditais()">
@@ -302,6 +307,13 @@
             <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
           <div class="field"><label>Meu preço de venda (R$)</label>
             <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Unidade de venda</label>
+            <input id="p-unidade" style="width:100%" placeholder="ex: resma, unidade, caixa"></div>
+          <div class="field"><label>Itens por unidade
+            <span class="muted" style="font-size:11px">(ex.: resma = 500 folhas)</span></label>
+            <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
         </div>
         <div class="grid2">
           <div class="field"><label>Fornecedor</label>
@@ -650,6 +662,7 @@ async function loadEditais(resetPagina=true){
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
+  const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
@@ -738,6 +751,7 @@ async function salvarProduto(){
   const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
     catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
     preco_custo:num('p-custo'), preco_venda:num('p-venda'),
+    unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site')};
   if(!body.descricao){alert('Informe a descrição');return;}
   const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
@@ -753,6 +767,7 @@ async function editarProduto(id){
   set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
   set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
   set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
+  set('p-unidade',p.unidade_venda); set('p-itens-unid',p.itens_por_unidade);
   set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
   editandoId = id;
   $('#form-titulo').textContent = 'Editar produto';
@@ -762,7 +777,7 @@ async function editarProduto(id){
 
 function cancelarEdicao(){
   editandoId = null;
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
@@ -1145,14 +1160,22 @@ async function abrirDetalhe(id){
       if(it.compativel && it.produto){
         const f=it.produto;
         const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
-        const cu=f.preco_custo!=null?fmtMoeda(f.preco_custo):'—';
+        const temConv = f.itens_por_unidade && f.itens_por_unidade>1;
+        const cu = it.custo_comparavel!=null ? fmtMoeda(it.custo_comparavel) : (f.preco_custo!=null?fmtMoeda(f.preco_custo):'—');
+        const cuLabel = temConv ? `meu custo / ${f.unidade_venda||'unid.'}` : 'meu custo';
         let mg='—',cls='';
-        if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); cls=it.margem>=0?'margem-pos':'margem-neg'; }
+        if(it.alerta_unidade){
+          mg='⚠ conferir'; cls='margem-neg';
+        } else if(it.margem!=null){
+          mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'');
+          cls=it.margem>=0?'margem-pos':'margem-neg';
+        }
         bloco=`<div class="precos">
             <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
-            <div class="preco-box"><div class="v">${cu}</div><div class="l">meu custo</div></div>
+            <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
             <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial</div></div>
           </div>
+          ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
           <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
         if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
           bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;

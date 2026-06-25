@@ -404,6 +404,8 @@ class ProdutoIn(BaseModel):
     palavras_chave: str | None = None
     preco_custo: float | None = None
     preco_venda: float | None = None
+    unidade_venda: str | None = None
+    itens_por_unidade: float | None = None
     fornecedor_nome: str | None = None
     fornecedor_contato: str | None = None
     fornecedor_site: str | None = None
@@ -433,6 +435,7 @@ def _produto_dict(p: Produto) -> dict:
         "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
         "palavras_chave": p.palavras_chave, "ativo": p.ativo,
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
+        "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
         "fornecedor_site": p.fornecedor_site,
     }
@@ -641,6 +644,7 @@ def listar_editais(
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
     hoje: bool = Query(False),
+    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
     user: Usuario = Depends(_auth.get_current_user),
@@ -659,6 +663,14 @@ def listar_editais(
         filtro.append(Match.lido == False)  # noqa: E712
     if hoje:
         filtro.append(Edital.data_abertura == date.today())
+    # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
+    if tipo != "todos":
+        from .models import ItemEdital
+        prefixo = "m" if tipo == "produtos" else "s"
+        sub = (select(ItemEdital.edital_id)
+               .where(ItemEdital.edital_id == Edital.id)
+               .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
+        filtro.append(sub.exists())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)
@@ -769,18 +781,31 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     for it in ed.itens:
         prod = produtos.get(mapa.get(it.numero))
         margem = margem_pct = None
+        custo_comparavel = None
+        alerta_unidade = False
         if prod and it.valor_unitario is not None and prod.preco_custo is not None:
-            margem = round(it.valor_unitario - prod.preco_custo, 2)
+            # custo na MESMA base do órgão: se o produto é vendido em embalagem
+            # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
+            por_unid = prod.itens_por_unidade if (prod.itens_por_unidade or 0) > 0 else 1
+            custo_comparavel = round(prod.preco_custo / por_unid, 4)
+            margem = round(it.valor_unitario - custo_comparavel, 4)
             if it.valor_unitario:
                 margem_pct = round(margem / it.valor_unitario * 100, 1)
+            # se a margem ainda é absurda, provavelmente as unidades não batem
+            if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
+                alerta_unidade = True
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
             "compativel": prod is not None,
             "margem": margem, "margem_pct": margem_pct,
+            "custo_comparavel": custo_comparavel,
+            "alerta_unidade": alerta_unidade,
             "produto": None if not prod else {
                 "id": prod.id, "descricao": prod.descricao,
                 "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,
+                "unidade_venda": prod.unidade_venda,
+                "itens_por_unidade": prod.itens_por_unidade,
                 "fornecedor_nome": prod.fornecedor_nome,
                 "fornecedor_contato": prod.fornecedor_contato,
                 "fornecedor_site": prod.fornecedor_site,
