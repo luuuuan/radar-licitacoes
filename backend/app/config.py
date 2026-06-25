@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     PNCP_UFS: str = ""
     # Quantos dias à frente buscar editais com proposta em aberto
     PNCP_HORIZONTE_DIAS: int = 30
+
+    # Fonte extra: Portal da Transparência (licitações FEDERAIS). Opcional.
+    # Token gratuito em api.portaldatransparencia.gov.br (cadastro gov.br).
+    PORTAL_TRANSPARENCIA_TOKEN: str = ""
+    PORTAL_TRANSPARENCIA_ATIVO: bool = False
     PNCP_TAMANHO_PAGINA: int = 50
     # Atraso entre requisições para não sobrecarregar o portal (segundos)
     PNCP_DELAY: float = 0.3

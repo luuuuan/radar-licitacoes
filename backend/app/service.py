@@ -169,6 +169,12 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             modalidades=cfg.obter(db, "PNCP_MODALIDADES"),
             horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS),
         )]
+        # fonte extra opcional: Portal da Transparência (licitações federais)
+        from .connectors.transparencia import TransparenciaConnector
+        transp = TransparenciaConnector(
+            horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS))
+        if transp.disponivel():
+            conectores.append(transp)
 
     resumo = {"novos": 0, "vistos": 0}
 

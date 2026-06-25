@@ -369,7 +369,7 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
                 _tg.enviar_para_chat(
                     chat_id, "✅ Telegram conectado!",
                     f"Pronto, {u.nome}! Você vai receber aqui os avisos de novas "
-                    "oportunidades fortes do Radar de Licitações.")
+                    "oportunidades do Radar de Licitações.")
                 return {"ok": True}
         from .notifications import telegram as _tg
         _tg.enviar_para_chat(
@@ -658,7 +658,7 @@ def listar_editais(
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
     if hoje:
-        filtro.append(Edital.coletado_em >= _inicio_hoje_utc())
+        filtro.append(Edital.data_abertura == date.today())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)
@@ -1048,7 +1048,7 @@ def resumo(user: Usuario = Depends(_auth.get_current_user),
     do_dia = db.scalar(
         select(func.count(Match.id))
         .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Edital.coletado_em >= _inicio_hoje_utc())
+        .where(ativo).where(meu).where(Edital.data_abertura == hoje)
     ) or 0
     return {
         "produtos": total_prod, "editais": total_editais,

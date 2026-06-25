@@ -244,7 +244,7 @@
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
-        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> novos hoje
+        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia
       </label>
       <span style="flex:1"></span>
       <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
@@ -443,10 +443,6 @@
 
     <div class="card">
       <h3 style="margin-top:0">Chave da IA (Gemini)</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">
-        Com a sua própria chave, a IA usa a sua cota gratuita — sem dividir limite com outros usuários.
-        É opcional: sem ela, o sistema funciona só com o casamento por texto.
-      </p>
       <div class="field"><label>Sua chave Gemini</label>
         <input id="pf-gemini" style="width:100%" placeholder="cole aqui sua chave (AIza...)" autocomplete="off">
         <span class="muted" id="gemini-status" style="font-size:11px"></span>
@@ -461,19 +457,17 @@
     <div class="card">
       <h3 style="margin-top:0">Notificações</h3>
       <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade forte nova.</p>
-      <label style="display:flex;gap:8px;align-items:center;margin:8px 0">
-        <input type="checkbox" id="pf-notif-email"> Por e-mail (no seu e-mail de login)
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;margin:8px 0">
-        <input type="checkbox" id="pf-notif-tg"> Por Telegram
-      </label>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Por e-mail <span class="muted" style="font-size:12px">(no seu e-mail de login)</span></span>
+        <label class="switch"><input type="checkbox" id="pf-notif-email"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Por Telegram</span>
+        <label class="switch"><input type="checkbox" id="pf-notif-tg"><span class="slider"></span></label>
+      </div>
       <div id="tg-box" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:6px">
         <div id="tg-status" class="muted" style="font-size:13px">—</div>
         <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
-        <p class="muted" style="font-size:11px;margin:10px 0 0">
-          Ao clicar em conectar, o Telegram abre o nosso bot. Toque em <b>Iniciar/Start</b>
-          e pronto — a conexão é automática, sem copiar código nenhum.
-        </p>
       </div>
     </div>
 
@@ -556,19 +550,37 @@ function tab(name){
 
 async function loadResumo(){
   const r = await api('/api/resumo');
-  const kpiDia = `<div class="kpi" style="border-color:var(--accent);cursor:pointer" onclick="filtrarDoDia()" title="Ver editais que entraram hoje">
-    <div class="n" style="color:var(--accent)">${r.do_dia||0}</div><div class="l">Novos hoje</div></div>`;
-  $('#kpis').innerHTML = kpiDia + [
-    ['Editais ativos',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
-    ['Não lidos',r.nao_lidos],['Produtos',r.produtos]
-  ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+  const cards = [
+    {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')"},
+    {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')"},
+    {n:r.fortes,    l:'Match forte',    cor:'var(--forte)', acao:"filtrarKpi('forte')"},
+    {n:r.medios,    l:'Match médio',    cor:'var(--medio)', acao:"filtrarKpi('medio')"},
+    {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')"},
+    {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')"},
+  ];
+  $('#kpis').innerHTML = cards.map(c=>{
+    const borda = c.cor ? `border-color:${c.cor};` : '';
+    const corN = c.cor ? `color:${c.cor};` : '';
+    return `<div class="kpi" style="${borda}cursor:pointer" onclick="${c.acao}" title="Filtrar">
+      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}</div></div>`;
+  }).join('');
 }
 
-function filtrarDoDia(){
+// Aplica o filtro correspondente ao card clicado e leva para a aba Editais
+function filtrarKpi(tipo){
   tab('editais');
-  $('#f-hoje').checked = true;
+  // zera filtros
+  $('#f-hoje').checked = false;
+  $('#f-naolidos').checked = false;
+  const fn=$('#f-nivel'); if(fn) fn.value='';
+  if(tipo==='hoje') $('#f-hoje').checked = true;
+  else if(tipo==='naolidos') $('#f-naolidos').checked = true;
+  else if(tipo==='forte' || tipo==='medio'){ if(fn) fn.value=tipo; }
+  // 'ativos' = sem filtro (mostra todos os ativos)
+  paginaEditais = 1;
   loadEditais();
 }
+function filtrarDoDia(){ filtrarKpi('hoje'); }
 
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
@@ -1197,7 +1209,7 @@ async function carregarVinculoTelegram(){
   try{
     const v = await api('/api/telegram/vinculo');
     if(!v.disponivel){
-      st.textContent = 'O Telegram ainda não foi configurado no servidor (falta o bot).';
+      st.textContent = 'Conexão com o Telegram indisponível no momento.';
       ac.innerHTML=''; return;
     }
     if(v.conectado){
