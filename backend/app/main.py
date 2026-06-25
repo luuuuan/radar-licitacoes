@@ -963,8 +963,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    if not ia.ia_texto_disponivel():
-        return {"status": "sem_ia"}
+    # análise já feita: mostra do cache (é leitura, não consome IA)
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
@@ -972,8 +971,12 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             return cache
         except ValueError:
             pass
+    # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
+    chave = _auth.decifrar(user.gemini_key_cifrada)
+    if not ia.ia_texto_disponivel(chave):
+        return {"status": "sem_ia"}
     docs = _listar_arquivos_pncp(ed)
-    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [])
+    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
     if resultado.get("status") == "ok":
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)

@@ -33,7 +33,7 @@ _COOLDOWN_ERRO = 5 * 60         # pausa curta em erro genérico/instabilidade
 
 
 def ia_disponivel(api_key: str | None = None) -> bool:
-    return bool(api_key or settings.GEMINI_API_KEY)
+    return bool(api_key)   # só a chave do próprio usuário (sem fallback global)
 
 
 def ia_bloqueada() -> bool:
@@ -72,7 +72,7 @@ def embeddings(textos: list[str], timeout: int = 30,
     """Gera embeddings para uma lista de textos. Usa cache e chamada em lote.
     `api_key` permite usar a chave Gemini do próprio usuário (cai para a global
     se não vier). Retorna lista alinhada à entrada; sem vetor vem como None."""
-    chave = api_key or settings.GEMINI_API_KEY
+    chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return [None] * len(textos)
 
