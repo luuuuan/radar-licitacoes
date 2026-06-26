@@ -13,16 +13,18 @@ class Settings(BaseSettings):
     # Autenticação (HTTP Basic). Se ambos vazios, a API fica aberta (dev local).
     BASIC_AUTH_USER: str = ""
     BASIC_AUTH_PASS: str = ""
-    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
-    # Necessária porque a coleta passa a rodar no Render (que alcança o PNCP),
-    # disparada por um agendador externo (GitHub Actions) 1x/dia.
-    CRON_SECRET: str = ""
 
+    # Segurança multiusuário
+    # SECRET_KEY assina os tokens de sessão (JWT). Em produção, defina no Render!
+    SECRET_KEY: str = "troque-isto-em-producao-please-32+chars-aleatorios"
+    # APP_ENCRYPTION_KEY cifra dados sensíveis (chave Gemini, CPF/CNPJ). Se vazio,
+    # é derivada da SECRET_KEY. Defina no Render para algo estável e secreto.
+    APP_ENCRYPTION_KEY: str = ""
+    TOKEN_EXPIRA_HORAS: int = 24 * 7        # sessão dura 7 dias
+    # URL pública do app (para links de verificação de e-mail). Ex.: https://...onrender.com
+    APP_BASE_URL: str = ""
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
-
-    # Redis / Celery
-    REDIS_URL: str = "redis://redis:6379/0"
 
     # PNCP (API pública de consultas — Lei 14.133/2021)
     PNCP_BASE_URL: str = "https://pncp.gov.br/api/consulta"
@@ -34,6 +36,11 @@ class Settings(BaseSettings):
     PNCP_UFS: str = ""
     # Quantos dias à frente buscar editais com proposta em aberto
     PNCP_HORIZONTE_DIAS: int = 30
+
+    # Fonte extra: Portal da Transparência (licitações FEDERAIS). Opcional.
+    # Token gratuito em api.portaldatransparencia.gov.br (cadastro gov.br).
+    PORTAL_TRANSPARENCIA_TOKEN: str = ""
+    PORTAL_TRANSPARENCIA_ATIVO: bool = False
     PNCP_TAMANHO_PAGINA: int = 50
     # Atraso entre requisições para não sobrecarregar o portal (segundos)
     PNCP_DELAY: float = 0.3
@@ -58,9 +65,18 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     NOTIFICAR_EMAIL: str = ""  # destinatário dos alertas
 
+    # E-mail via API Brevo (HTTPS — funciona no Render, que bloqueia SMTP).
+    # Envia para qualquer destinatário sem precisar verificar domínio.
+    BREVO_API_KEY: str = ""
+    BREVO_FROM_EMAIL: str = ""   # ex.: "voce@gmail.com" (remetente verificado no Brevo)
+    BREVO_FROM_NOME: str = "Radar de Licitações"
+
     # Notificações por Telegram
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    # Bot compartilhado (multiusuário): username do bot e segredo do webhook
+    TELEGRAM_BOT_USERNAME: str = ""   # ex.: "RadarLicitacoesBot" (sem @)
+    TELEGRAM_WEBHOOK_SECRET: str = ""  # segredo que protege o endpoint do webhook
 
     # Só notifica matches deste nível pra cima: "forte" ou "medio"
     NOTIFICAR_NIVEL_MINIMO: str = "forte"

@@ -8,7 +8,13 @@ Entidades principais:
 - Match: vínculo entre um Edital e o catálogo, com pontuação e nível.
 - RegraExclusao: termos/categorias que o usuário quer ignorar.
 """
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+
+
+def utcnow() -> datetime:
+    """UTC atual, sem timezone (naive) — substitui o datetime.utcnow() depreciado,
+    mantendo o mesmo comportamento (compatível com as colunas DateTime existentes)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from sqlalchemy import (
     String, Integer, Float, Text, DateTime, Date, Boolean, ForeignKey, JSON,
     UniqueConstraint,
@@ -20,10 +26,34 @@ class Base(DeclarativeBase):
     pass
 
 
+class Usuario(Base):
+    __tablename__ = "usuarios"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(160))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    senha_hash: Mapped[str] = mapped_column(String(255))
+    # dados cadastrais (CPF/CNPJ e endereço guardados cifrados)
+    doc_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)       # CPF/CNPJ
+    endereco_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON cifrado
+    # verificação de e-mail
+    email_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
+    token_verificacao: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # integrações próprias do usuário (cifradas/preferências)
+    gemini_key_cifrada: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_codigo: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
+    notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Produto(Base):
     __tablename__ = "produtos"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     descricao: Mapped[str] = mapped_column(Text)
     # Códigos de classificação (qualquer um pode estar vazio)
     ncm: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -36,12 +66,16 @@ class Produto(Base):
     # Preços (para cálculo de margem)
     preco_custo: Mapped[float | None] = mapped_column(Float, nullable=True)   # quanto você paga
     preco_venda: Mapped[float | None] = mapped_column(Float, nullable=True)   # seu preço de venda
+    # Unidade de venda e quantos itens "soltos" cabem nela (ex.: resma = 500 folhas).
+    # Serve para comparar com o preço unitário do órgão sem distorcer a margem.
+    unidade_venda: Mapped[str | None] = mapped_column(String(20), nullable=True)   # ex.: resma, unidade, caixa
+    itens_por_unidade: Mapped[float | None] = mapped_column(Float, nullable=True)  # ex.: 500
     # Fornecedor
     fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_site: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
-    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Edital(Base):
@@ -65,7 +99,7 @@ class Edital(Base):
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    coletado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     itens: Mapped[list["ItemEdital"]] = relationship(
         back_populates="edital", cascade="all, delete-orphan"
@@ -93,9 +127,11 @@ class ItemEdital(Base):
 
 class Match(Base):
     __tablename__ = "matches"
+    __table_args__ = (UniqueConstraint("usuario_id", "edital_id", name="uq_match_user_edital"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), unique=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
     score: Mapped[float] = mapped_column(Float)           # 0..1
     nivel: Mapped[str] = mapped_column(String(10))        # fraco | medio | forte
     itens_compativeis: Mapped[int] = mapped_column(Integer, default=0)
@@ -106,7 +142,7 @@ class Match(Base):
     prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
-    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
 
@@ -115,6 +151,7 @@ class RegraExclusao(Base):
     __tablename__ = "regras_exclusao"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     # tipo: "termo" (palavra no objeto/item) ou "categoria" (código de categoria PNCP)
     tipo: Mapped[str] = mapped_column(String(20), default="termo")
     valor: Mapped[str] = mapped_column(String(120))
@@ -126,7 +163,7 @@ class LogColeta(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     fonte: Mapped[str] = mapped_column(String(40))
-    iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finalizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     editais_novos: Mapped[int] = mapped_column(Integer, default=0)
     editais_vistos: Mapped[int] = mapped_column(Integer, default=0)
@@ -149,6 +186,7 @@ class Documento(Base):
     __tablename__ = "documentos"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
     orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
     data_validade: Mapped[date] = mapped_column(Date)
@@ -156,7 +194,7 @@ class Documento(Base):
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
     avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)
-    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Proposta(Base):
@@ -166,10 +204,11 @@ class Proposta(Base):
     __table_args__ = (UniqueConstraint("edital_id", name="uq_proposta_edital"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"))
     # itens: [{descricao, quantidade, custo_unit, preco_unit}]
     itens: Mapped[list | None] = mapped_column(JSON, nullable=True)
     observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+        DateTime, default=utcnow, onupdate=utcnow)

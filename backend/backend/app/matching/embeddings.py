@@ -32,8 +32,8 @@ _COOLDOWN_429 = 6 * 3600        # pausa 6h ao estourar a cota
 _COOLDOWN_ERRO = 5 * 60         # pausa curta em erro genérico/instabilidade
 
 
-def ia_disponivel() -> bool:
-    return bool(settings.GEMINI_API_KEY)
+def ia_disponivel(api_key: str | None = None) -> bool:
+    return bool(api_key)   # só a chave do próprio usuário (sem fallback global)
 
 
 def ia_bloqueada() -> bool:
@@ -67,10 +67,13 @@ def cosseno(a: list[float], b: list[float]) -> float:
     return dot / (_norm(a) * _norm(b))
 
 
-def embeddings(textos: list[str], timeout: int = 30) -> list[list[float] | None]:
+def embeddings(textos: list[str], timeout: int = 30,
+               api_key: str | None = None) -> list[list[float] | None]:
     """Gera embeddings para uma lista de textos. Usa cache e chamada em lote.
-    Retorna lista alinhada à entrada; posições sem vetor vêm como None."""
-    if not ia_disponivel():
+    `api_key` permite usar a chave Gemini do próprio usuário (cai para a global
+    se não vier). Retorna lista alinhada à entrada; sem vetor vem como None."""
+    chave = api_key   # só a chave do próprio usuário (sem fallback global)
+    if not chave:
         return [None] * len(textos)
 
     # se a cota estourou recentemente, nem tenta — devolve o que tiver em cache
@@ -90,7 +93,7 @@ def embeddings(textos: list[str], timeout: int = 30) -> list[list[float] | None]
         } for t in faltando]}
         try:
             r = requests.post(url, json=body, timeout=timeout,
-                              headers={"x-goog-api-key": settings.GEMINI_API_KEY,
+                              headers={"x-goog-api-key": chave,
                                        "Content-Type": "application/json"})
             if r.status_code == 429:
                 _pausar(_COOLDOWN_429, "cota diária do plano gratuito atingida")

@@ -4,26 +4,31 @@ pontua -> notifica. É chamado pela tarefa diária (Celery) e pelos scripts.
 """
 import logging
 from datetime import datetime
+from .models import utcnow
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings, parse_csv_str
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Usuario
 from .connectors.base import BaseConnector, EditalColetado
 from .connectors.pncp import PNCPConnector
 from .matching.engine import (
     MatchingEngine, ProdutoCat, ItemEdt, aplicar_regras_exclusao,
 )
 from . import notifications
+from .notifications import email as email_mod, telegram as telegram_mod
 
 log = logging.getLogger("servico")
 
 NIVEIS_ORDEM = {"fraco": 0, "medio": 1, "forte": 2}
 
 
-def _carregar_catalogo(db: Session) -> list[ProdutoCat]:
-    produtos = db.execute(select(Produto).where(Produto.ativo == True)).scalars().all()  # noqa: E712
+def _carregar_catalogo(db: Session, usuario_id: int) -> list[ProdutoCat]:
+    produtos = db.execute(
+        select(Produto).where(Produto.ativo == True)              # noqa: E712
+        .where(Produto.usuario_id == usuario_id)
+    ).scalars().all()
     return [ProdutoCat(
         id=p.id, descricao=p.descricao, ncm=p.ncm or "", cest=p.cest or "",
         ean=p.ean or "", catmat=p.catmat or "", catser=p.catser or "",
@@ -31,8 +36,11 @@ def _carregar_catalogo(db: Session) -> list[ProdutoCat]:
     ) for p in produtos]
 
 
-def _carregar_exclusoes(db: Session) -> tuple[list[str], list[str]]:
-    regras = db.execute(select(RegraExclusao).where(RegraExclusao.ativo == True)).scalars().all()  # noqa: E712
+def _carregar_exclusoes(db: Session, usuario_id: int) -> tuple[list[str], list[str]]:
+    regras = db.execute(
+        select(RegraExclusao).where(RegraExclusao.ativo == True)   # noqa: E712
+        .where(RegraExclusao.usuario_id == usuario_id)
+    ).scalars().all()
     termos = [r.valor for r in regras if r.tipo == "termo"]
     categorias = [r.valor for r in regras if r.tipo == "categoria"]
     return termos, categorias
@@ -65,8 +73,96 @@ def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
     return ed
 
 
-def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None) -> dict:
-    """Executa a coleta completa e retorna um resumo."""
+def _usuarios_ativos(db: Session):
+    return db.execute(select(Usuario).where(Usuario.ativo == True)).scalars().all()  # noqa: E712
+
+
+def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False) -> dict:
+    """Gera/atualiza os matches de UM usuário contra os editais coletados,
+    usando o catálogo e as regras de exclusão dele. Isolado por usuário."""
+    catalogo = _carregar_catalogo(db, usuario.id)
+    termos_excl, categorias_excl = _carregar_exclusoes(db, usuario.id)
+    from . import configuracoes as cfg
+    from .auth import decifrar
+    usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
+    gemini_key = decifrar(usuario.gemini_key_cifrada)   # chave do próprio usuário
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia, gemini_key=gemini_key)
+
+    # mais relevantes primeiro (se a cota de IA acabar, os melhores já foram feitos)
+    editais = db.execute(
+        select(Edital).order_by(Edital.coletado_em.desc())
+    ).scalars().all()
+
+    resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
+    novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
+    for ed in editais:
+        existente = db.execute(
+            select(Match).where(Match.edital_id == ed.id,
+                                Match.usuario_id == usuario.id)
+        ).scalars().first()
+        if existente and not recalcular_todos:
+            continue
+        resumo["editais"] += 1
+
+        itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
+                             ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
+                     for i in ed.itens]
+        # exclusões do próprio usuário
+        if aplicar_regras_exclusao(ed.objeto or "", itens_edt, termos_excl, None, categorias_excl):
+            if existente:
+                db.delete(existente)
+            continue
+
+        era_novo = existente is None
+        resultado = engine.avaliar(ed.objeto or "", itens_edt)
+        m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
+        if existente is None:
+            db.add(m)
+        m.score = resultado.score
+        m.nivel = resultado.nivel
+        m.itens_compativeis = resultado.itens_compativeis
+        m.detalhe = {"itens": resultado.detalhe}
+        resumo["atualizados"] += 1
+        if resultado.nivel == "forte":
+            resumo["fortes"] += 1
+            if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
+                novos_fortes.append((ed.objeto or "Edital", ed.orgao or "", ed.link or ""))
+    db.commit()
+
+    if novos_fortes and not recalcular_todos:
+        _notificar_usuario(usuario, novos_fortes)
+    return resumo
+
+
+def _notificar_usuario(usuario, fortes: list[tuple]):
+    """Avisa o usuário, pelos próprios canais, sobre novas oportunidades fortes."""
+    n = len(fortes)
+    titulo = f"🎯 {n} nova(s) oportunidade(s) forte(s) no Radar"
+    linhas = []
+    for objeto, orgao, link in fortes[:10]:
+        item = f"• {objeto[:90]}"
+        if orgao:
+            item += f" ({orgao[:40]})"
+        if link:
+            item += f"\n  {link}"
+        linhas.append(item)
+    if n > 10:
+        linhas.append(f"... e mais {n - 10}.")
+    corpo = "\n".join(linhas)
+    try:
+        if usuario.notif_email and usuario.email:
+            email_mod.enviar_para(usuario.email, titulo, corpo)
+        if usuario.notif_telegram and usuario.telegram_chat_id:
+            telegram_mod.enviar_para_chat(usuario.telegram_chat_id, titulo, corpo)
+    except Exception:
+        log.exception("Falha ao notificar usuário %s", usuario.id)
+
+
+def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
+                     usuario_id: int | None = None) -> dict:
+    """Coleta editais do PNCP (compartilhados) e gera matches.
+    - usuario_id definido: gera matches só para esse usuário (coleta manual).
+    - usuario_id None: gera para todos os usuários já ativos (cron diário)."""
     if conectores is None:
         from . import configuracoes as cfg
         conectores = [PNCPConnector(
@@ -74,131 +170,71 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None)
             modalidades=cfg.obter(db, "PNCP_MODALIDADES"),
             horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS),
         )]
+        # fonte extra opcional: Portal da Transparência (licitações federais)
+        from .connectors.transparencia import TransparenciaConnector
+        transp = TransparenciaConnector(
+            horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS))
+        if transp.disponivel():
+            conectores.append(transp)
 
-    catalogo = _carregar_catalogo(db)
-    if not catalogo:
-        log.warning("Catálogo vazio — cadastre produtos antes de coletar.")
-    from . import configuracoes as cfg
-    usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
-    termos_excl, categorias_excl = _carregar_exclusoes(db)
-    nivel_min = NIVEIS_ORDEM.get(settings.NOTIFICAR_NIVEL_MINIMO, 2)
-
-    resumo = {"novos": 0, "vistos": 0, "fortes": 0, "notificados": 0}
+    resumo = {"novos": 0, "vistos": 0}
 
     for conector in conectores:
-        log_coleta = LogColeta(fonte=conector.nome, iniciado_em=datetime.utcnow())
+        log_coleta = LogColeta(fonte=conector.nome, iniciado_em=utcnow())
         db.add(log_coleta)
         db.commit()
-        base = {"novos": resumo["novos"], "vistos": resumo["vistos"], "fortes": resumo["fortes"]}
+        base = {"novos": resumo["novos"], "vistos": resumo["vistos"]}
         try:
             coletados = conector.coletar()
-        except Exception as e:  # não derruba os outros conectores
+        except Exception as e:
             log.exception("Erro no conector %s", conector.nome)
             log_coleta.erro = str(e)[:500]
-            log_coleta.finalizado_em = datetime.utcnow()
+            log_coleta.finalizado_em = utcnow()
             db.commit()
             continue
-
         try:
             for ec in coletados:
                 resumo["vistos"] += 1
                 try:
-                    _processar_edital(db, ec, engine, catalogo, engine and True,
-                                      termos_excl, categorias_excl, nivel_min, resumo)
+                    ed = _persistir_edital(db, ec)
+                    if ed is not None:
+                        resumo["novos"] += 1
+                        db.commit()
                 except Exception:
-                    # um edital problemático não interrompe os demais
-                    log.exception("Falha ao processar edital %s", getattr(ec, "id_externo", "?"))
+                    log.exception("Falha ao gravar edital %s", getattr(ec, "id_externo", "?"))
                     db.rollback()
         finally:
-            # o log é sempre escrito com os números reais, mesmo se algo falhar
             log_coleta.editais_vistos = resumo["vistos"] - base["vistos"]
             log_coleta.editais_novos = resumo["novos"] - base["novos"]
-            log_coleta.matches_fortes = resumo["fortes"] - base["fortes"]
-            log_coleta.finalizado_em = datetime.utcnow()
+            log_coleta.finalizado_em = utcnow()
             db.commit()
+
+    # gera matches: só para o usuário que pediu (manual), ou todos os ativos (cron)
+    if usuario_id is not None:
+        alvos = [u for u in [db.get(Usuario, usuario_id)] if u]
+    else:
+        # cron: atualiza apenas quem JÁ coletou alguma vez (tem ao menos 1 match),
+        # para não semear editais em contas novas que ainda não buscaram
+        ids_com_match = db.execute(
+            select(Match.usuario_id).where(Match.usuario_id.isnot(None)).distinct()
+        ).scalars().all()
+        alvos = [db.get(Usuario, uid) for uid in ids_com_match]
+        alvos = [u for u in alvos if u and u.ativo]
+    for u in alvos:
+        try:
+            r = _gerar_matches_usuario(db, u, recalcular_todos=False)
+            resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
+        except Exception:
+            log.exception("Falha ao gerar matches do usuário %s", u.id)
+            db.rollback()
 
     log.info("Coleta concluída: %s", resumo)
     return resumo
 
 
-def recalcular_matches(db: Session) -> dict:
-    """Reavalia TODOS os editais já coletados contra o catálogo ATUAL, atualizando
-    os matches gravados. Útil depois de adicionar/remover produtos: editais antigos
-    deixam de mostrar resultados defasados. Com catálogo vazio, zera tudo."""
-    catalogo = _carregar_catalogo(db)
-    from . import configuracoes as cfg
-    usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
-    # processa os mais relevantes primeiro: se a cota de IA acabar no meio,
-    # os editais que mais importam já terão sido refinados.
-    editais = db.execute(
-        select(Edital).join(Match, Match.edital_id == Edital.id, isouter=True)
-        .order_by(Match.score.desc().nullslast())
-    ).scalars().all()
-    resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
-
-    for ed in editais:
-        resumo["editais"] += 1
-        itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
-                             ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
-                     for i in ed.itens]
-        resultado = engine.avaliar(ed.objeto or "", itens_edt)
-
-        match = db.execute(
-            select(Match).where(Match.edital_id == ed.id)
-        ).scalars().first()
-        if match is None:
-            match = Match(edital_id=ed.id)
-            db.add(match)
-        match.score = resultado.score
-        match.nivel = resultado.nivel
-        match.itens_compativeis = resultado.itens_compativeis
-        match.detalhe = {"itens": resultado.detalhe}
-        resumo["atualizados"] += 1
-        if resultado.nivel == "forte":
-            resumo["fortes"] += 1
-
-    db.commit()
-    log.info("Recálculo de matches: %s", resumo)
-    return resumo
-
-
-def _processar_edital(db, ec, engine, catalogo, tem_catalogo,
-                      termos_excl, categorias_excl, nivel_min, resumo):
-    """Processa um único edital: exclusão -> persistência -> match -> notificação.
-    Commit por edital (resiliência: o que já entrou permanece se algo falhar depois)."""
-    itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
-                         ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
-                 for i in ec.itens]
-    if aplicar_regras_exclusao(ec.objeto or "", itens_edt,
-                               termos_excl, ec.categoria_pncp, categorias_excl):
-        return
-
-    ed = _persistir_edital(db, ec)
-    if ed is None:
-        return  # já existia
-    resumo["novos"] += 1
-
-    if not catalogo:
-        db.commit()
-        return
-
-    resultado = engine.avaliar(ec.objeto or "", itens_edt)
-    match = Match(
-        edital_id=ed.id, score=resultado.score, nivel=resultado.nivel,
-        itens_compativeis=resultado.itens_compativeis,
-        detalhe={"itens": resultado.detalhe},
-    )
-    db.add(match)
-    db.flush()
-
-    if resultado.nivel == "forte":
-        resumo["fortes"] += 1
-
-    if NIVEIS_ORDEM[resultado.nivel] >= nivel_min:
-        if notifications.notificar(ed, match):
-            match.notificado = True
-            resumo["notificados"] += 1
-
-    db.commit()
+def recalcular_matches(db: Session, usuario_id: int) -> dict:
+    """Reavalia todos os editais contra o catálogo ATUAL do usuário informado."""
+    u = db.get(Usuario, usuario_id)
+    if not u:
+        return {"editais": 0, "atualizados": 0, "fortes": 0}
+    return _gerar_matches_usuario(db, u, recalcular_todos=True)
