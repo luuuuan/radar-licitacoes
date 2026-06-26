@@ -190,6 +190,7 @@ class Documento(Base):
     nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
     orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
     data_validade: Mapped[date] = mapped_column(Date)
+    link: Mapped[str | None] = mapped_column(String(500), nullable=True)  # onde está o documento
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)

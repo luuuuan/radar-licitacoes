@@ -389,6 +389,9 @@
           <div class="field"><label>Validade</label>
             <input id="d-validade" type="date" style="width:100%"></div>
         </div>
+        <div class="field"><label>Link do documento (opcional)
+          <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
+          <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
         <div class="field"><label>Observação (opcional)</label>
           <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
         <div class="toolbar" style="margin-top:8px">
@@ -840,7 +843,7 @@ async function loadDocumentos(){
     if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
     else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
     return `<tr>
-      <td>${d.nome}</td><td class="muted">${d.orgao_emissor||'—'}</td>
+      <td>${d.nome}${d.link?` <a href="${d.link}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}</td><td class="muted">${d.orgao_emissor||'—'}</td>
       <td>${d.data_validade.split('-').reverse().join('/')}</td>
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
@@ -861,7 +864,7 @@ function fecharFormDocumento(){
 
 async function salvarDocumento(){
   const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
-    data_validade:$('#d-validade').value, observacao:$('#d-obs').value.trim()||null};
+    data_validade:$('#d-validade').value, link:$('#d-link').value.trim()||null, observacao:$('#d-obs').value.trim()||null};
   if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
   const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
   await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -870,7 +873,7 @@ async function salvarDocumento(){
 
 function editarDocumento(d){
   $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
-  $('#d-validade').value=d.data_validade; $('#d-obs').value=d.observacao||'';
+  $('#d-validade').value=d.data_validade; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
   editandoDocId=d.id;
   $('#doc-form-titulo').textContent='Editar documento';
   $('#btn-salvar-doc').textContent='Salvar alterações';
@@ -879,7 +882,7 @@ function editarDocumento(d){
 
 function cancelarEdicaoDoc(){
   editandoDocId=null;
-  ['d-nome','d-orgao','d-validade','d-obs'].forEach(i=>$('#'+i).value='');
+  ['d-nome','d-orgao','d-validade','d-link','d-obs'].forEach(i=>$('#'+i).value='');
   $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
   $('#btn-salvar-doc').textContent='Salvar documento';
 }

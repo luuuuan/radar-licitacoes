@@ -426,6 +426,7 @@ class DocumentoIn(BaseModel):
     nome: str
     orgao_emissor: str | None = None
     data_validade: date
+    link: str | None = None
     observacao: str | None = None
 
 
@@ -1226,7 +1227,7 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
         "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
         "data_validade": d.data_validade.isoformat(),
         "dias_para_vencer": (d.data_validade - hoje).days,
-        "observacao": d.observacao, "ativo": d.ativo,
+        "observacao": d.observacao, "link": d.link, "ativo": d.ativo,
     } for d in docs]
 
 

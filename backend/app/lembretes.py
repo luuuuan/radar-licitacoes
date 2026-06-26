@@ -80,6 +80,7 @@ def verificar_documentos(db: Session) -> int:
             f"Documento: {doc.nome}\n"
             f"Emissor: {doc.orgao_emissor or '-'}\n"
             f"Validade: {doc.data_validade} ({situacao})\n"
+            f"{('Link: ' + doc.link + chr(10)) if doc.link else ''}"
             f"{('Obs.: ' + doc.observacao) if doc.observacao else ''}\n"
         )
         if notificar_usuario_msg(usuario, titulo, corpo):
