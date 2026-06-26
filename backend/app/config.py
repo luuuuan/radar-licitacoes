@@ -23,16 +23,8 @@ class Settings(BaseSettings):
     TOKEN_EXPIRA_HORAS: int = 24 * 7        # sessão dura 7 dias
     # URL pública do app (para links de verificação de e-mail). Ex.: https://...onrender.com
     APP_BASE_URL: str = ""
-    # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
-    # Necessária porque a coleta passa a rodar no Render (que alcança o PNCP),
-    # disparada por um agendador externo (GitHub Actions) 1x/dia.
-    CRON_SECRET: str = ""
-
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
-
-    # Redis / Celery
-    REDIS_URL: str = "redis://redis:6379/0"
 
     # PNCP (API pública de consultas — Lei 14.133/2021)
     PNCP_BASE_URL: str = "https://pncp.gov.br/api/consulta"

@@ -23,6 +23,7 @@ import secrets
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
@@ -1008,7 +1009,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     if not ultimo:
         return {"estado": "nunca"}
 
-    agora = datetime.utcnow()
+    agora = _utcnow_main()
     em_andamento = ultimo.finalizado_em is None
     travado = False
     if em_andamento and ultimo.iniciado_em:

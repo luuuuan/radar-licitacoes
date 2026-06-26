@@ -10,6 +10,7 @@ Autenticação e segurança (multiusuário).
 from __future__ import annotations
 import base64
 import hashlib
+from functools import lru_cache
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -54,6 +55,7 @@ def validar_forca_senha(senha: str) -> str | None:
 
 
 # ---------------- Criptografia de dados sensíveis ----------------
+@lru_cache(maxsize=1)
 def _fernet() -> Fernet:
     base = settings.APP_ENCRYPTION_KEY or settings.SECRET_KEY
     chave = base64.urlsafe_b64encode(hashlib.sha256(base.encode()).digest())

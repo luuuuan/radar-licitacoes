@@ -4,6 +4,7 @@ pontua -> notifica. É chamado pela tarefa diária (Celery) e pelos scripts.
 """
 import logging
 from datetime import datetime
+from .models import utcnow
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -179,7 +180,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
     resumo = {"novos": 0, "vistos": 0}
 
     for conector in conectores:
-        log_coleta = LogColeta(fonte=conector.nome, iniciado_em=datetime.utcnow())
+        log_coleta = LogColeta(fonte=conector.nome, iniciado_em=utcnow())
         db.add(log_coleta)
         db.commit()
         base = {"novos": resumo["novos"], "vistos": resumo["vistos"]}
@@ -188,7 +189,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
         except Exception as e:
             log.exception("Erro no conector %s", conector.nome)
             log_coleta.erro = str(e)[:500]
-            log_coleta.finalizado_em = datetime.utcnow()
+            log_coleta.finalizado_em = utcnow()
             db.commit()
             continue
         try:
@@ -205,7 +206,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
         finally:
             log_coleta.editais_vistos = resumo["vistos"] - base["vistos"]
             log_coleta.editais_novos = resumo["novos"] - base["novos"]
-            log_coleta.finalizado_em = datetime.utcnow()
+            log_coleta.finalizado_em = utcnow()
             db.commit()
 
     # gera matches: só para o usuário que pediu (manual), ou todos os ativos (cron)
