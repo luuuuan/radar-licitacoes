@@ -134,6 +134,20 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     return resumo
 
 
+def notificar_usuario_msg(usuario, titulo: str, corpo: str) -> bool:
+    """Envia uma mensagem para o usuário pelos canais que ele ativou no perfil
+    (e-mail e/ou Telegram). Retorna True se ao menos um canal foi acionado."""
+    enviou = False
+    try:
+        if usuario.notif_email and usuario.email:
+            enviou = email_mod.enviar_para(usuario.email, titulo, corpo) or enviou
+        if usuario.notif_telegram and usuario.telegram_chat_id:
+            enviou = telegram_mod.enviar_para_chat(usuario.telegram_chat_id, titulo, corpo) or enviou
+    except Exception:
+        log.exception("Falha ao notificar usuário %s", usuario.id)
+    return enviou
+
+
 def _notificar_usuario(usuario, fortes: list[tuple]):
     """Avisa o usuário, pelos próprios canais, sobre novas oportunidades fortes."""
     n = len(fortes)
@@ -148,14 +162,7 @@ def _notificar_usuario(usuario, fortes: list[tuple]):
         linhas.append(item)
     if n > 10:
         linhas.append(f"... e mais {n - 10}.")
-    corpo = "\n".join(linhas)
-    try:
-        if usuario.notif_email and usuario.email:
-            email_mod.enviar_para(usuario.email, titulo, corpo)
-        if usuario.notif_telegram and usuario.telegram_chat_id:
-            telegram_mod.enviar_para_chat(usuario.telegram_chat_id, titulo, corpo)
-    except Exception:
-        log.exception("Falha ao notificar usuário %s", usuario.id)
+    notificar_usuario_msg(usuario, titulo, "\n".join(linhas))
 
 
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
