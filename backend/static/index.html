@@ -99,6 +99,19 @@
   .card-click{cursor:pointer;transition:border-color .15s, transform .05s}
   .card-click:hover{border-color:var(--accent)}
   .card-click:active{transform:scale(0.998)}
+  /* Tooltip de ajuda (?) — funciona no hover e no clique/toque */
+  .ajuda{position:relative;display:inline-flex;align-items:center;justify-content:center;
+    width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);
+    font-size:11px;font-weight:600;cursor:help;margin-left:5px;vertical-align:middle;user-select:none;flex-shrink:0}
+  .ajuda:hover{border-color:var(--accent);color:var(--accent)}
+  .ajuda .bolha{visibility:hidden;opacity:0;position:absolute;bottom:140%;left:50%;
+    transform:translateX(-50%);background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.4;
+    width:230px;max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    text-align:left;transition:opacity .15s;pointer-events:none}
+  .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
+  .ajuda .bolha::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:var(--line)}
   /* Toast (avisos) */
   #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
     z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
@@ -299,7 +312,7 @@
             <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
         </div>
 
-        <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
+        <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
           <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
 
         <div class="grid2">
@@ -409,7 +422,7 @@
       <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
         <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
         <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
-      <div class="field"><label>Horizonte de busca (dias à frente)</label>
+      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
         <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
       <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
         <label>Refinamento por IA (semântico)</label>
@@ -492,7 +505,10 @@
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
-      <th>Vistos</th><th>Novos</th><th>Fortes</th><th>Erro</th></tr></thead>
+      <th>Vistos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
+      <th>Novos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
+      <th>Fortes <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos deram match forte com o seu catálogo.</span></span></th>
+      <th>Erro</th></tr></thead>
       <tbody id="lista-logs"></tbody></table>
   </section>
 </div>
@@ -500,6 +516,15 @@
 <script>
 const $ = s => document.querySelector(s);
 const api = (u,o)=>fetch(u,o).then(r=>r.json());
+
+// Tooltip de ajuda: gera o HTML do "?" com a explicação
+function ajuda(texto){
+  return `<span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">${texto}</span></span>`;
+}
+// fecha tooltips abertos ao tocar fora (mobile)
+document.addEventListener('click', e=>{
+  if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(a=>a.classList.remove('aberto'));
+});
 
 // ---- Tema claro/escuro (lembra a escolha) ----
 const _icoSol='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
@@ -563,18 +588,18 @@ function tab(name){
 async function loadResumo(){
   const r = await api('/api/resumo');
   const cards = [
-    {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')"},
-    {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')"},
-    {n:r.fortes,    l:'Match forte',    cor:'var(--forte)', acao:"filtrarKpi('forte')"},
-    {n:r.medios,    l:'Match médio',    cor:'var(--medio)', acao:"filtrarKpi('medio')"},
-    {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')"},
-    {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')"},
+    {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')", aj:'Editais cuja sessão de disputa acontece hoje.'},
+    {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')", aj:'Editais com prazo ainda aberto que deram match com o seu catálogo.'},
+    {n:r.fortes,    l:'Match forte',    cor:'var(--forte)', acao:"filtrarKpi('forte')", aj:'Alta compatibilidade: o edital combina bem com seus produtos. Vale olhar.'},
+    {n:r.medios,    l:'Match médio',    cor:'var(--medio)', acao:"filtrarKpi('medio')", aj:'Compatibilidade parcial: pode valer, confira o detalhe.'},
+    {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')", aj:'Editais que você ainda não marcou como lidos.'},
+    {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')", aj:'Quantidade de produtos/serviços no seu catálogo.'},
   ];
   $('#kpis').innerHTML = cards.map(c=>{
     const borda = c.cor ? `border-color:${c.cor};` : '';
     const corN = c.cor ? `color:${c.cor};` : '';
     return `<div class="kpi" style="${borda}cursor:pointer" onclick="${c.acao}" title="Filtrar">
-      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}</div></div>`;
+      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}${ajuda(c.aj)}</div></div>`;
   }).join('');
 }
 
@@ -1172,9 +1197,9 @@ async function abrirDetalhe(id){
           cls=it.margem>=0?'margem-pos':'margem-neg';
         }
         bloco=`<div class="precos">
-            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
+            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
             <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
-            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial</div></div>
+            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
           </div>
           ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
           <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
