@@ -44,8 +44,8 @@ TEXTO DO EDITAL (pode estar truncado):
 \"\"\"{texto}\"\"\""""
 
 
-def ia_texto_disponivel(api_key: str | None = None) -> bool:
-    return bool(api_key)   # só a chave do próprio usuário (sem fallback global)
+def ia_texto_disponivel() -> bool:
+    return bool(settings.GEMINI_API_KEY)
 
 
 def _baixar_texto_pdf(url: str, timeout: int = 45,
@@ -77,10 +77,7 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
     return "\n".join(partes)[:max_chars]
 
 
-def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70):
-    chave = api_key   # só a chave do próprio usuário (sem fallback global)
-    if not chave:
-        return None, "sem_chave"
+def _gerar(prompt: str, timeout: int = 70):
     url = f"{_BASE}/{settings.IA_MODELO_TEXTO}:generateContent"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -88,7 +85,7 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70):
     }
     try:
         r = requests.post(url, json=body, timeout=timeout,
-                         headers={"x-goog-api-key": chave,
+                         headers={"x-goog-api-key": settings.GEMINI_API_KEY,
                                   "Content-Type": "application/json"})
     except requests.RequestException as e:
         return None, f"rede:{e}"
@@ -116,10 +113,9 @@ def _parse_json(txt: str):
     return None
 
 
-def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> dict:
-    """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
-    api_key: chave Gemini do próprio usuário (obrigatória, cai para a global)."""
-    if not ia_texto_disponivel(api_key):
+def analisar(objeto: str, arquivos: list[dict]) -> dict:
+    """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos)."""
+    if not ia_texto_disponivel():
         return {"status": "sem_ia"}
     if not arquivos:
         return {"status": "sem_arquivo"}
@@ -137,7 +133,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     if len(texto) < 300:
         return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
 
-    txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key)
+    txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto))
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)

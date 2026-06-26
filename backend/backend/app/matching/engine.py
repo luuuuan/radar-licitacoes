@@ -101,11 +101,9 @@ class ResultadoMatch:
 # Motor
 # ---------------------------------------------------------------------------
 class MatchingEngine:
-    def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False,
-                 gemini_key: str | None = None):
+    def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False):
         self.produtos = produtos
-        self.gemini_key = gemini_key
-        self.usar_ia = bool(usar_ia) and ia_disponivel(gemini_key) and len(produtos) > 0
+        self.usar_ia = bool(usar_ia) and ia_disponivel() and len(produtos) > 0
         self._prod_emb = None  # embeddings dos produtos (gerados sob demanda)
         self._textos_prod = [p.texto_busca() for p in produtos]
         self._vectorizer = None
@@ -236,7 +234,7 @@ class MatchingEngine:
     # ---- avalia um edital inteiro -----------------------------------------
     def _emb_produtos(self):
         if self._prod_emb is None:
-            self._prod_emb = _ia_embeddings(self._textos_prod, api_key=self.gemini_key)
+            self._prod_emb = _ia_embeddings(self._textos_prod)
         return self._prod_emb
 
     def _ia_score_item(self, item_emb) -> tuple[float, ProdutoCat | None]:
@@ -271,7 +269,7 @@ class MatchingEngine:
         if usar_ia_aqui:
             idxs = [i for i, (sc, _, _) in enumerate(base) if sc < settings.LIMIAR_FORTE]
             textos = [(alvos[i].texto_busca() or normalizar(objeto or "")) for i in idxs]
-            embs = _ia_embeddings(textos, api_key=self.gemini_key)
+            embs = _ia_embeddings(textos)
             for k, i in enumerate(idxs):
                 item_embs[i] = embs[k]
 

@@ -28,21 +28,3 @@ class TelegramNotifier(BaseNotifier):
         except Exception as e:
             log.warning("Falha ao enviar Telegram: %s", e)
             return False
-
-
-def enviar_para_chat(chat_id: str, titulo: str, corpo: str) -> bool:
-    """Envia uma mensagem para um chat específico (Telegram do próprio usuário).
-    Usa o bot global do sistema (TELEGRAM_BOT_TOKEN)."""
-    if not (settings.TELEGRAM_BOT_TOKEN and chat_id):
-        return False
-    try:
-        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-        r = requests.post(url, json={
-            "chat_id": chat_id,
-            "text": f"{titulo}\n\n{corpo}",
-            "disable_web_page_preview": True,
-        }, timeout=20)
-        return r.status_code == 200
-    except Exception as e:
-        log.warning("Falha ao enviar Telegram para %s: %s", chat_id, e)
-        return False

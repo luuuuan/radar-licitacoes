@@ -23,7 +23,6 @@ import secrets
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime
-from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
@@ -47,11 +46,33 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Radar de Licitações", version="2.0", lifespan=lifespan)
+app = FastAPI(title="Radar de Licitações", version="1.1", lifespan=lifespan)
 
-# Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
-_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar"}
-_PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
+# Caminhos liberados sem autenticação Basic (health/keep-alive e cron com chave própria)
+_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron"}
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    """Protege tudo com HTTP Basic quando BASIC_AUTH_USER/PASS estão definidos."""
+    async def dispatch(self, request, call_next):
+        if not (settings.BASIC_AUTH_USER and settings.BASIC_AUTH_PASS):
+            return await call_next(request)
+        if request.url.path in _ROTAS_PUBLICAS:
+            return await call_next(request)
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                user, _, pwd = base64.b64decode(header[6:]).decode().partition(":")
+                if (secrets.compare_digest(user, settings.BASIC_AUTH_USER) and
+                        secrets.compare_digest(pwd, settings.BASIC_AUTH_PASS)):
+                    return await call_next(request)
+            except Exception:
+                pass
+        return Response("Autenticação necessária", status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="Radar de Licitacoes"'})
+
+
+app.add_middleware(BasicAuthMiddleware)
 
 BASE_DIR = os.path.dirname(__file__)
 # A pasta static fica em backend/static (um nível acima de backend/app)
@@ -72,328 +93,6 @@ def health():
     return {"ok": True}
 
 
-# =========================== AUTENTICAÇÃO ============================ #
-import json as _json_auth
-import secrets as _secrets_auth
-from email_validator import validate_email, EmailNotValidError
-from fastapi import Response as _Resp
-from .models import Usuario
-from . import auth as _auth
-from .notifications import email as _email_mod
-
-
-class CadastroIn(BaseModel):
-    nome: str
-    email: str
-    senha: str
-    documento: str | None = None       # CPF ou CNPJ
-
-
-def _email_html_verificacao(nome: str, link: str) -> str:
-    """E-mail de confirmação em HTML simples e sóbrio (melhora a entrega)."""
-    return f"""\
-<!DOCTYPE html>
-<html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#1a2129">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 0">
-    <tr><td align="center">
-      <table role="presentation" width="480" cellpadding="0" cellspacing="0"
-             style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
-        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
-          Radar de Licitações
-        </td></tr>
-        <tr><td style="padding:28px">
-          <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
-          <p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#3b4654">
-            Falta só um passo para ativar a sua conta. Clique no botão abaixo para
-            confirmar o seu e-mail.
-          </p>
-          <p style="margin:0 0 24px;text-align:center">
-            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
-               padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
-              Confirmar meu e-mail
-            </a>
-          </p>
-          <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
-            Se o botão não funcionar, copie e cole este endereço no navegador:
-          </p>
-          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
-          <p style="margin:0;font-size:12px;color:#94a3b8">
-            Se você não criou esta conta, é só ignorar esta mensagem.
-          </p>
-        </td></tr>
-      </table>
-      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
-    </td></tr>
-  </table>
-</body></html>"""
-
-
-class LoginIn(BaseModel):
-    email: str
-    senha: str
-
-
-def _set_cookie_sessao(resp: _Resp, usuario_id: int):
-    token = _auth.criar_token(usuario_id)
-    seguro = settings.APP_BASE_URL.startswith("https")
-    resp.set_cookie(_auth.COOKIE_NOME, token, httponly=True, samesite="lax",
-                    secure=seguro, max_age=settings.TOKEN_EXPIRA_HORAS * 3600,
-                    path="/")
-
-
-@app.post("/api/auth/cadastro")
-def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
-                  db: Session = Depends(get_session)):
-    # valida e-mail
-    try:
-        email = validate_email(dados.email, check_deliverability=False).normalized.lower()
-    except EmailNotValidError:
-        raise HTTPException(400, "E-mail inválido.")
-    # força da senha
-    erro = _auth.validar_forca_senha(dados.senha)
-    if erro:
-        raise HTTPException(400, erro)
-    if not (dados.nome or "").strip():
-        raise HTTPException(400, "Informe seu nome.")
-    # e-mail único
-    existe = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
-    if existe:
-        raise HTTPException(409, "Já existe uma conta com este e-mail.")
-
-    primeiro = db.scalar(select(func.count(Usuario.id))) == 0
-    smtp_ok = _email_mod.smtp_configurado()
-
-    u = Usuario(
-        nome=dados.nome.strip(), email=email,
-        senha_hash=_auth.hash_senha(dados.senha),
-        doc_cifrado=_auth.cifrar((dados.documento or "").strip() or None),
-        email_verificado=not smtp_ok,   # sem SMTP, libera direto; com SMTP, exige verificar
-        token_verificacao=_secrets_auth.token_urlsafe(32) if smtp_ok else None,
-    )
-    db.add(u)
-    db.flush()
-
-    # o primeiro usuário "adota" os dados que já existiam (sem dono)
-    if primeiro:
-        for tabela in (Produto, Match, Documento, RegraExclusao, Proposta):
-            db.query(tabela).filter(tabela.usuario_id.is_(None)).update(
-                {tabela.usuario_id: u.id}, synchronize_session=False)
-
-    db.commit()
-
-    if smtp_ok:
-        base = settings.APP_BASE_URL.rstrip("/")
-        link = f"{base}/verificar?token={u.token_verificacao}"
-        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a sua conta no "
-                 f"Radar de Licitações:\n{link}\n\n"
-                 "Se você não criou esta conta, ignore esta mensagem.\n\n"
-                 "— Radar de Licitações")
-        html = _email_html_verificacao(u.nome, link)
-        # envia em segundo plano: o cadastro responde na hora, sem esperar o e-mail
-        bg.add_task(_email_mod.enviar_para, email,
-                    "Confirme seu cadastro — Radar de Licitações", corpo, html)
-        return {"ok": True, "verificar_email": True,
-                "mensagem": "Enviamos um link de confirmação para o seu e-mail. "
-                            "Confira também a caixa de spam."}
-
-    _set_cookie_sessao(resp, u.id)
-    return {"ok": True, "verificar_email": False}
-
-
-@app.post("/api/auth/login")
-def auth_login(dados: LoginIn, resp: _Resp, db: Session = Depends(get_session)):
-    email = (dados.email or "").strip().lower()
-    u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
-    if not u or not _auth.conferir_senha(dados.senha, u.senha_hash):
-        raise HTTPException(401, "E-mail ou senha incorretos.")
-    if not u.ativo:
-        raise HTTPException(403, "Conta desativada.")
-    if not u.email_verificado:
-        raise HTTPException(403, "Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.")
-    _set_cookie_sessao(resp, u.id)
-    return {"ok": True}
-
-
-@app.post("/api/auth/logout")
-def auth_logout(resp: _Resp):
-    resp.delete_cookie(_auth.COOKIE_NOME, path="/")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-def auth_me(user: Usuario = Depends(_auth.get_current_user)):
-    return {"id": user.id, "nome": user.nome, "email": user.email,
-            "documento": _auth.decifrar(user.doc_cifrado),
-            "tem_gemini": bool(user.gemini_key_cifrada),
-            "telegram_chat_id": user.telegram_chat_id or "",
-            "notif_email": user.notif_email, "notif_telegram": user.notif_telegram}
-
-
-@app.get("/api/auth/verificar")
-def auth_verificar(token: str, db: Session = Depends(get_session)):
-    u = db.execute(select(Usuario).where(Usuario.token_verificacao == token)).scalars().first()
-    if not u:
-        raise HTTPException(400, "Link de verificação inválido ou já usado.")
-    u.email_verificado = True
-    u.token_verificacao = None
-    db.commit()
-    return {"ok": True}
-
-
-# =========================== PERFIL ============================ #
-class PerfilIn(BaseModel):
-    nome: str | None = None
-    documento: str | None = None
-    gemini_key: str | None = None       # "" limpa; None mantém
-    telegram_chat_id: str | None = None
-    notif_email: bool | None = None
-    notif_telegram: bool | None = None
-    endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
-
-
-@app.get("/api/perfil")
-def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
-    import json as _j
-    end = _auth.decifrar(user.endereco_cifrado)
-    try:
-        endereco = _j.loads(end) if end else {}
-    except ValueError:
-        endereco = {}
-    return {
-        "nome": user.nome, "email": user.email,
-        "documento": _auth.decifrar(user.doc_cifrado) or "",
-        "tem_gemini": bool(user.gemini_key_cifrada),
-        "telegram_chat_id": user.telegram_chat_id or "",
-        "notif_email": user.notif_email, "notif_telegram": user.notif_telegram,
-        "endereco": endereco,
-    }
-
-
-@app.post("/api/perfil")
-def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    import json as _j
-    if dados.nome is not None and dados.nome.strip():
-        user.nome = dados.nome.strip()
-    if dados.documento is not None:
-        user.doc_cifrado = _auth.cifrar(dados.documento.strip() or None)
-    # chave Gemini: None = manter; "" = remover; texto = cifrar e guardar
-    if dados.gemini_key is not None:
-        user.gemini_key_cifrada = _auth.cifrar(dados.gemini_key.strip() or None)
-    if dados.telegram_chat_id is not None:
-        user.telegram_chat_id = dados.telegram_chat_id.strip() or None
-    if dados.notif_email is not None:
-        user.notif_email = dados.notif_email
-    if dados.notif_telegram is not None:
-        user.notif_telegram = dados.notif_telegram
-    if dados.endereco is not None:
-        user.endereco_cifrado = _auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False))
-    db.commit()
-    return {"ok": True}
-
-
-@app.get("/api/cep/{cep}")
-def consultar_cep(cep: str, user: Usuario = Depends(_auth.get_current_user)):
-    """Autopreenchimento de endereço pelo CEP (ViaCEP, gratuito)."""
-    limpo = "".join(c for c in cep if c.isdigit())
-    if len(limpo) != 8:
-        raise HTTPException(400, "CEP deve ter 8 dígitos.")
-    try:
-        r = requests.get(f"https://viacep.com.br/ws/{limpo}/json/", timeout=10)
-        dados = r.json()
-    except Exception:
-        raise HTTPException(502, "Não foi possível consultar o CEP agora.")
-    if dados.get("erro"):
-        raise HTTPException(404, "CEP não encontrado.")
-    return {
-        "cep": dados.get("cep", ""), "logradouro": dados.get("logradouro", ""),
-        "bairro": dados.get("bairro", ""), "cidade": dados.get("localidade", ""),
-        "uf": dados.get("uf", ""), "complemento": dados.get("complemento", ""),
-    }
-
-
-# ===================== VÍNCULO DO TELEGRAM (multiusuário) ===================== #
-@app.get("/api/telegram/vinculo")
-def telegram_vinculo(user: Usuario = Depends(_auth.get_current_user),
-                     db: Session = Depends(get_session)):
-    """Devolve o link para o usuário conectar o Telegram dele ao bot do Radar.
-    Gera um código único na primeira vez."""
-    if not user.telegram_codigo:
-        user.telegram_codigo = _secrets_auth.token_urlsafe(8)
-        db.commit()
-    bot = settings.TELEGRAM_BOT_USERNAME
-    disponivel = bool(settings.TELEGRAM_BOT_TOKEN and bot)
-    link = f"https://t.me/{bot}?start={user.telegram_codigo}" if disponivel else ""
-    return {
-        "disponivel": disponivel,
-        "bot": bot,
-        "codigo": user.telegram_codigo,
-        "link": link,
-        "conectado": bool(user.telegram_chat_id),
-    }
-
-
-@app.post("/api/telegram/desvincular")
-def telegram_desvincular(user: Usuario = Depends(_auth.get_current_user),
-                         db: Session = Depends(get_session)):
-    user.telegram_chat_id = None
-    db.commit()
-    return {"ok": True}
-
-
-@app.post("/api/telegram/webhook/{secret}")
-async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_session)):
-    """Recebe as mensagens do Telegram. Quando alguém manda /start CÓDIGO,
-    vincula o chat_id daquele usuário. Protegido por um segredo na URL."""
-    if not settings.TELEGRAM_WEBHOOK_SECRET or secret != settings.TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(404, "not found")
-    try:
-        update = await req.json()
-    except Exception:
-        return {"ok": True}
-    msg = (update or {}).get("message") or {}
-    texto = (msg.get("text") or "").strip()
-    chat = msg.get("chat") or {}
-    chat_id = str(chat.get("id") or "")
-    if texto.startswith("/start") and chat_id:
-        partes = texto.split(maxsplit=1)
-        codigo = partes[1].strip() if len(partes) > 1 else ""
-        if codigo:
-            u = db.execute(select(Usuario).where(Usuario.telegram_codigo == codigo)).scalars().first()
-            if u:
-                u.telegram_chat_id = chat_id
-                u.notif_telegram = True
-                db.commit()
-                from .notifications import telegram as _tg
-                _tg.enviar_para_chat(
-                    chat_id, "✅ Telegram conectado!",
-                    f"Pronto, {u.nome}! Você vai receber aqui os avisos de novas "
-                    "oportunidades do Radar de Licitações.")
-                return {"ok": True}
-        from .notifications import telegram as _tg
-        _tg.enviar_para_chat(
-            chat_id, "Radar de Licitações",
-            "Para conectar, abra o link de vínculo na tela 'Meu perfil' do sistema.")
-    return {"ok": True}
-
-
-@app.post("/api/telegram/registrar-webhook")
-def telegram_registrar_webhook(user: Usuario = Depends(_auth.get_current_user)):
-    """Registra o webhook no Telegram (rodar uma vez após configurar o bot)."""
-    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_WEBHOOK_SECRET and settings.APP_BASE_URL):
-        raise HTTPException(400, "Configure TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET e APP_BASE_URL.")
-    url = f"{settings.APP_BASE_URL.rstrip('/')}/api/telegram/webhook/{settings.TELEGRAM_WEBHOOK_SECRET}"
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
-            json={"url": url, "allowed_updates": ["message"]}, timeout=15)
-        return {"ok": r.status_code == 200, "resposta": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Falha ao registrar webhook: {e}")
-
-
 # --------------------------- Schemas ---------------------------------- #
 class ProdutoIn(BaseModel):
     descricao: str
@@ -405,8 +104,6 @@ class ProdutoIn(BaseModel):
     palavras_chave: str | None = None
     preco_custo: float | None = None
     preco_venda: float | None = None
-    unidade_venda: str | None = None
-    itens_por_unidade: float | None = None
     fornecedor_nome: str | None = None
     fornecedor_contato: str | None = None
     fornecedor_site: str | None = None
@@ -436,7 +133,6 @@ def _produto_dict(p: Produto) -> dict:
         "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
         "palavras_chave": p.palavras_chave, "ativo": p.ativo,
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
-        "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
         "fornecedor_site": p.fornecedor_site,
     }
@@ -446,13 +142,11 @@ def _produto_dict(p: Produto) -> dict:
 def listar_produtos(
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(100, ge=1, le=500),
-    user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
 ):
-    cond = Produto.usuario_id == user.id
-    total = db.scalar(select(func.count(Produto.id)).where(cond)) or 0
+    total = db.scalar(select(func.count(Produto.id))) or 0
     produtos = db.execute(
-        select(Produto).where(cond).order_by(Produto.id.desc())
+        select(Produto).order_by(Produto.id.desc())
         .limit(por_pagina).offset((pagina - 1) * por_pagina)
     ).scalars().all()
     return {
@@ -463,7 +157,7 @@ def listar_produtos(
 
 
 @app.get("/api/produtos/modelo.xlsx")
-def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
+def modelo_produtos():
     """Planilha-modelo para importação de produtos."""
     import openpyxl
     wb = openpyxl.Workbook()
@@ -490,23 +184,17 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
         headers={"Content-Disposition": "attachment; filename=modelo_produtos.xlsx"})
 
 
-def _produto_do_usuario(db, produto_id, user) -> Produto:
-    p = db.get(Produto, produto_id)
-    if not p or p.usuario_id != user.id:
-        raise HTTPException(404, "Produto não encontrado")
-    return p
-
-
 @app.get("/api/produtos/{produto_id}")
-def obter_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    return _produto_dict(_produto_do_usuario(db, produto_id, user))
+def obter_produto(produto_id: int, db: Session = Depends(get_session)):
+    p = db.get(Produto, produto_id)
+    if not p:
+        raise HTTPException(404, "Produto não encontrado")
+    return _produto_dict(p)
 
 
 @app.post("/api/produtos")
-def criar_produto(dados: ProdutoIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    p = Produto(**dados.model_dump(), usuario_id=user.id)
+def criar_produto(dados: ProdutoIn, db: Session = Depends(get_session)):
+    p = Produto(**dados.model_dump())
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -514,10 +202,10 @@ def criar_produto(dados: ProdutoIn, user: Usuario = Depends(_auth.get_current_us
 
 
 @app.put("/api/produtos/{produto_id}")
-def atualizar_produto(produto_id: int, dados: ProdutoIn,
-                      user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    p = _produto_do_usuario(db, produto_id, user)
+def atualizar_produto(produto_id: int, dados: ProdutoIn, db: Session = Depends(get_session)):
+    p = db.get(Produto, produto_id)
+    if not p:
+        raise HTTPException(404, "Produto não encontrado")
     for campo, valor in dados.model_dump().items():
         setattr(p, campo, valor)
     db.commit()
@@ -555,7 +243,6 @@ def _num_br(v):
 
 @app.post("/api/produtos/importar")
 async def importar_produtos(arquivo: UploadFile = File(...),
-                            user: Usuario = Depends(_auth.get_current_user),
                             db: Session = Depends(get_session)):
     """Importa produtos de uma planilha .xlsx. Atualiza quando a descrição já
     existe; caso contrário, cria. Retorna um resumo do que foi feito."""
@@ -597,10 +284,9 @@ async def importar_produtos(arquivo: UploadFile = File(...),
         if not desc:
             ignorados += 1
             continue
-        # atualizar se a descrição já existe NESTE usuário (case-insensitive)
+        # atualizar se a descrição já existe (case-insensitive)
         existente = db.execute(
-            select(Produto).where(Produto.usuario_id == user.id)
-            .where(func.lower(Produto.descricao) == desc.lower())
+            select(Produto).where(func.lower(Produto.descricao) == desc.lower())
         ).scalars().first()
         try:
             if existente:
@@ -609,7 +295,7 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                         setattr(existente, campo, valor)
                 atualizados += 1
             else:
-                db.add(Produto(**dados, usuario_id=user.id))
+                db.add(Produto(**dados))
                 criados += 1
         except Exception as e:
             erros.append(f"linha {n}: {e}")
@@ -619,9 +305,10 @@ async def importar_produtos(arquivo: UploadFile = File(...),
 
 
 @app.delete("/api/produtos/{produto_id}")
-def remover_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    p = _produto_do_usuario(db, produto_id, user)
+def remover_produto(produto_id: int, db: Session = Depends(get_session)):
+    p = db.get(Produto, produto_id)
+    if not p:
+        raise HTTPException(404, "Produto não encontrado")
     db.delete(p)
     db.commit()
     return {"ok": True}
@@ -645,15 +332,13 @@ def listar_editais(
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
     hoje: bool = Query(False),
-    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
-    user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
 ):
     hoje_data = date.today()
     base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
-    filtro = [Match.usuario_id == user.id]
+    filtro = []
     if nivel:
         filtro.append(Match.nivel == nivel)
     if uf:
@@ -663,15 +348,7 @@ def listar_editais(
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
     if hoje:
-        filtro.append(Edital.data_abertura == date.today())
-    # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
-    if tipo != "todos":
-        from .models import ItemEdital
-        prefixo = "m" if tipo == "produtos" else "s"
-        sub = (select(ItemEdital.edital_id)
-               .where(ItemEdital.edital_id == Edital.id)
-               .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
-        filtro.append(sub.exists())
+        filtro.append(Edital.coletado_em >= _inicio_hoje_utc())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)
@@ -716,18 +393,11 @@ def listar_editais(
     }
 
 
-def _match_do_usuario(db, match_id, user) -> Match:
-    m = db.get(Match, match_id)
-    if not m or m.usuario_id != user.id:
-        raise HTTPException(404, "Match não encontrado")
-    return m
-
-
 @app.post("/api/editais/{match_id}/marcar")
-def marcar(match_id: int, dados: MarcarIn,
-           user: Usuario = Depends(_auth.get_current_user),
-           db: Session = Depends(get_session)):
-    m = _match_do_usuario(db, match_id, user)
+def marcar(match_id: int, dados: MarcarIn, db: Session = Depends(get_session)):
+    m = db.get(Match, match_id)
+    if not m:
+        raise HTTPException(404, "Match não encontrado")
     if dados.lido is not None:
         m.lido = dados.lido
     if dados.interessante is not None:
@@ -744,27 +414,25 @@ class StatusIn(BaseModel):
 
 
 @app.post("/api/editais/{match_id}/status")
-def mudar_status(match_id: int, dados: StatusIn,
-                 user: Usuario = Depends(_auth.get_current_user),
-                 db: Session = Depends(get_session)):
+def mudar_status(match_id: int, dados: StatusIn, db: Session = Depends(get_session)):
     if dados.status not in STATUS_VALIDOS:
         raise HTTPException(400, f"Status inválido. Use um de: {', '.join(sorted(STATUS_VALIDOS))}")
-    m = _match_do_usuario(db, match_id, user)
+    m = db.get(Match, match_id)
+    if not m:
+        raise HTTPException(404, "Match não encontrado")
     m.status = dados.status
     db.commit()
     return {"ok": True}
 
 
 @app.get("/api/editais/{edital_id}/detalhe")
-def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
+def edital_detalhe(edital_id: int, db: Session = Depends(get_session)):
     """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
     compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    match = db.execute(select(Match).where(Match.edital_id == edital_id)
-                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)).scalar_one_or_none()
 
     # item (número) -> produto_id, a partir do detalhe do match
     mapa: dict = {}
@@ -782,31 +450,18 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     for it in ed.itens:
         prod = produtos.get(mapa.get(it.numero))
         margem = margem_pct = None
-        custo_comparavel = None
-        alerta_unidade = False
         if prod and it.valor_unitario is not None and prod.preco_custo is not None:
-            # custo na MESMA base do órgão: se o produto é vendido em embalagem
-            # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
-            por_unid = prod.itens_por_unidade if (prod.itens_por_unidade or 0) > 0 else 1
-            custo_comparavel = round(prod.preco_custo / por_unid, 4)
-            margem = round(it.valor_unitario - custo_comparavel, 4)
+            margem = round(it.valor_unitario - prod.preco_custo, 2)
             if it.valor_unitario:
                 margem_pct = round(margem / it.valor_unitario * 100, 1)
-            # se a margem ainda é absurda, provavelmente as unidades não batem
-            if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
-                alerta_unidade = True
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
             "compativel": prod is not None,
             "margem": margem, "margem_pct": margem_pct,
-            "custo_comparavel": custo_comparavel,
-            "alerta_unidade": alerta_unidade,
             "produto": None if not prod else {
                 "id": prod.id, "descricao": prod.descricao,
                 "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,
-                "unidade_venda": prod.unidade_venda,
-                "itens_por_unidade": prod.itens_por_unidade,
                 "fornecedor_nome": prod.fornecedor_nome,
                 "fornecedor_contato": prod.fornecedor_contato,
                 "fornecedor_site": prod.fornecedor_site,
@@ -831,37 +486,33 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
 
 # --------------------------- Regras de exclusão ----------------------- #
 @app.get("/api/regras")
-def listar_regras(user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    regras = db.execute(select(RegraExclusao)
-                        .where(RegraExclusao.usuario_id == user.id)).scalars().all()
+def listar_regras(db: Session = Depends(get_session)):
+    regras = db.execute(select(RegraExclusao)).scalars().all()
     return [{"id": r.id, "tipo": r.tipo, "valor": r.valor, "ativo": r.ativo} for r in regras]
 
 
 @app.post("/api/regras")
-def criar_regra(dados: RegraIn, user: Usuario = Depends(_auth.get_current_user),
-                db: Session = Depends(get_session)):
-    r = RegraExclusao(tipo=dados.tipo, valor=dados.valor, usuario_id=user.id)
+def criar_regra(dados: RegraIn, db: Session = Depends(get_session)):
+    r = RegraExclusao(tipo=dados.tipo, valor=dados.valor)
     db.add(r)
     db.commit()
     return {"id": r.id}
 
 
 @app.delete("/api/regras/{regra_id}")
-def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
+def remover_regra(regra_id: int, db: Session = Depends(get_session)):
     r = db.get(RegraExclusao, regra_id)
-    if r and r.usuario_id == user.id:
+    if r:
         db.delete(r)
         db.commit()
     return {"ok": True}
 
 
 # --------------------------- Coleta / Logs / Resumo ------------------- #
-def _rodar_coleta_bg(usuario_id: int | None = None):
+def _rodar_coleta_bg():
     db = SessionLocal()
     try:
-        processar_coleta(db, usuario_id=usuario_id)
+        processar_coleta(db)
         # após coletar, verifica prazos encerrando e documentos vencendo
         from .lembretes import verificar_todos
         verificar_todos(db)
@@ -870,25 +521,17 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
 
 
 @app.post("/api/coletar")
-def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    # precisa ter produtos cadastrados para a coleta fazer sentido
-    tem_produtos = db.scalar(
-        select(func.count(Produto.id)).where(Produto.usuario_id == user.id)) or 0
-    if not tem_produtos:
-        return {"ok": False, "sem_produtos": True,
-                "mensagem": "Cadastre ao menos um produto antes de buscar editais."}
-    # coleta manual gera matches só para quem clicou
-    bg.add_task(_rodar_coleta_bg, user.id)
+def coletar_agora(bg: BackgroundTasks):
+    bg.add_task(_rodar_coleta_bg)
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
 @app.post("/api/recalcular")
-def recalcular(user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    """Reavalia os editais já coletados contra o catálogo atual DESTE usuário."""
+def recalcular(db: Session = Depends(get_session)):
+    """Reavalia os editais já coletados contra o catálogo atual (corrige
+    resultados defasados depois de adicionar/remover produtos)."""
     from .service import recalcular_matches
-    return recalcular_matches(db, usuario_id=user.id)
+    return recalcular_matches(db)
 
 
 def _ref_pncp(ed: Edital):
@@ -944,8 +587,7 @@ def _listar_arquivos_pncp(ed: Edital) -> dict:
 
 
 @app.get("/api/editais/{edital_id}/documentos")
-def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
+def documentos_edital(edital_id: int, db: Session = Depends(get_session)):
     """Lista os arquivos/anexos do edital publicados no PNCP para download."""
     ed = db.get(Edital, edital_id)
     if not ed:
@@ -955,7 +597,6 @@ def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_
 
 @app.get("/api/editais/{edital_id}/analise")
 def analise_edital(edital_id: int, forcar: bool = Query(False),
-                   user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
     """Análise do edital por IA (resumo, exigências, prazos, pontos de atenção).
     Resultado fica em cache; use ?forcar=true para refazer."""
@@ -964,7 +605,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    # análise já feita: mostra do cache (é leitura, não consome IA)
+    if not ia.ia_texto_disponivel():
+        return {"status": "sem_ia"}
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
@@ -972,12 +614,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             return cache
         except ValueError:
             pass
-    # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
-    chave = _auth.decifrar(user.gemini_key_cifrada)
-    if not ia.ia_texto_disponivel(chave):
-        return {"status": "sem_ia"}
     docs = _listar_arquivos_pncp(ed)
-    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [])
     if resultado.get("status") == "ok":
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
@@ -1000,8 +638,7 @@ def coletar_cron(bg: BackgroundTasks, request: Request):
 
 
 @app.get("/api/coleta/status")
-def coleta_status(user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
+def coleta_status(db: Session = Depends(get_session)):
     """Estado da coleta para o indicador do dashboard."""
     ultimo = db.execute(
         select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
@@ -1009,7 +646,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     if not ultimo:
         return {"estado": "nunca"}
 
-    agora = _utcnow_main()
+    agora = datetime.utcnow()
     em_andamento = ultimo.finalizado_em is None
     travado = False
     if em_andamento and ultimo.iniciado_em:
@@ -1037,8 +674,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 
 
 @app.get("/api/logs")
-def logs(user: Usuario = Depends(_auth.get_current_user),
-         db: Session = Depends(get_session)):
+def logs(db: Session = Depends(get_session)):
     regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
     return [{
         "id": l.id, "fonte": l.fonte,
@@ -1050,34 +686,30 @@ def logs(user: Usuario = Depends(_auth.get_current_user),
 
 
 @app.get("/api/resumo")
-def resumo(user: Usuario = Depends(_auth.get_current_user),
-           db: Session = Depends(get_session)):
+def resumo(db: Session = Depends(get_session)):
     hoje = date.today()
+    # "ativo" = sem data de encerramento ou com prazo ainda não vencido
     ativo = (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje)
-    meu = Match.usuario_id == user.id
 
-    total_prod = db.scalar(
-        select(func.count(Produto.id)).where(Produto.usuario_id == user.id)) or 0
-    # editais ativos que ESTE usuário tem como match
+    total_prod = db.scalar(select(func.count(Produto.id))) or 0
     total_editais = db.scalar(
-        select(func.count(Match.id)).join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu)
+        select(func.count(Edital.id)).where(ativo)
     ) or 0
     por_nivel = dict(db.execute(
         select(Match.nivel, func.count(Match.id))
         .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu)
+        .where(ativo)
         .group_by(Match.nivel)
     ).all())
     nao_lidos = db.scalar(
         select(func.count(Match.id))
         .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Match.lido == False)  # noqa: E712
+        .where(ativo).where(Match.lido == False)  # noqa: E712
     ) or 0
+    # editais que entraram hoje no sistema (coletados hoje), ainda ativos
     do_dia = db.scalar(
-        select(func.count(Match.id))
-        .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Edital.data_abertura == hoje)
+        select(func.count(Edital.id))
+        .where(ativo).where(Edital.coletado_em >= _inicio_hoje_utc())
     ) or 0
     return {
         "produtos": total_prod, "editais": total_editais,
@@ -1117,27 +749,22 @@ def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
 
 
 @app.get("/api/editais/{edital_id}/proposta")
-def obter_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
+def obter_proposta(edital_id: int, db: Session = Depends(get_session)):
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
     return _proposta_payload(ed, prop)
 
 
 @app.post("/api/editais/{edital_id}/proposta")
-def salvar_proposta(edital_id: int, dados: PropostaIn,
-                    user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
+def salvar_proposta(edital_id: int, dados: PropostaIn, db: Session = Depends(get_session)):
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
     if prop is None:
-        prop = Proposta(edital_id=edital_id, usuario_id=user.id)
+        prop = Proposta(edital_id=edital_id)
         db.add(prop)
     prop.itens = dados.itens
     prop.observacoes = dados.observacoes
@@ -1147,13 +774,11 @@ def salvar_proposta(edital_id: int, dados: PropostaIn,
 
 
 @app.get("/api/editais/{edital_id}/proposta.csv")
-def exportar_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
+def exportar_proposta(edital_id: int, db: Session = Depends(get_session)):
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)).scalars().first()
     p = _proposta_payload(ed, prop)
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
@@ -1173,11 +798,8 @@ def exportar_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_
 
 
 @app.get("/api/export.csv")
-def export_csv(nivel: str | None = None,
-               user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-        .where(Match.usuario_id == user.id)
+def export_csv(nivel: str | None = None, db: Session = Depends(get_session)):
+    q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
     if nivel:
         q = q.where(Match.nivel == nivel)
     q = q.order_by(Match.score.desc())
@@ -1203,7 +825,6 @@ def buscar_catmat(
     descricao: str = Query(..., min_length=2),
     tipo: str = Query("material", pattern="^(material|servico)$"),
     debug: bool = Query(False),
-    user: Usuario = Depends(_auth.get_current_user),
 ):
     """Busca códigos CATMAT (material) ou CATSER (serviço) na API oficial
     de dados abertos do Compras.gov.br, ranqueados por relevância.
@@ -1217,10 +838,8 @@ def buscar_catmat(
 
 # --------------------------- Documentos (habilitação) ----------------- #
 @app.get("/api/documentos")
-def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    docs = db.execute(select(Documento).where(Documento.usuario_id == user.id)
-                      .order_by(Documento.data_validade.asc())).scalars().all()
+def listar_documentos(db: Session = Depends(get_session)):
+    docs = db.execute(select(Documento).order_by(Documento.data_validade.asc())).scalars().all()
     hoje = date.today()
     return [{
         "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
@@ -1231,26 +850,18 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
 
 
 @app.post("/api/documentos")
-def criar_documento(dados: DocumentoIn, user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    d = Documento(**dados.model_dump(), usuario_id=user.id)
+def criar_documento(dados: DocumentoIn, db: Session = Depends(get_session)):
+    d = Documento(**dados.model_dump())
     db.add(d)
     db.commit()
     return {"id": d.id}
 
 
-def _documento_do_usuario(db, doc_id, user) -> Documento:
-    d = db.get(Documento, doc_id)
-    if not d or d.usuario_id != user.id:
-        raise HTTPException(404, "Documento não encontrado")
-    return d
-
-
 @app.put("/api/documentos/{doc_id}")
-def atualizar_documento(doc_id: int, dados: DocumentoIn,
-                        user: Usuario = Depends(_auth.get_current_user),
-                        db: Session = Depends(get_session)):
-    d = _documento_do_usuario(db, doc_id, user)
+def atualizar_documento(doc_id: int, dados: DocumentoIn, db: Session = Depends(get_session)):
+    d = db.get(Documento, doc_id)
+    if not d:
+        raise HTTPException(404, "Documento não encontrado")
     for campo, valor in dados.model_dump().items():
         setattr(d, campo, valor)
     d.avisado_para = None  # validade mudou -> permite avisar de novo
@@ -1259,11 +870,11 @@ def atualizar_documento(doc_id: int, dados: DocumentoIn,
 
 
 @app.delete("/api/documentos/{doc_id}")
-def remover_documento(doc_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    d = _documento_do_usuario(db, doc_id, user)
-    db.delete(d)
-    db.commit()
+def remover_documento(doc_id: int, db: Session = Depends(get_session)):
+    d = db.get(Documento, doc_id)
+    if d:
+        db.delete(d)
+        db.commit()
     return {"ok": True}
 
 
@@ -1290,22 +901,18 @@ class ConfigIn(BaseModel):
 
 
 @app.get("/api/config")
-def obter_config(user: Usuario = Depends(_auth.get_current_user),
-                 db: Session = Depends(get_session)):
+def obter_config(db: Session = Depends(get_session)):
     from . import configuracoes
     from .matching.embeddings import ia_disponivel, ia_bloqueada, segundos_para_liberar
     dados = configuracoes.todas(db)
-    chave_user = _auth.decifrar(user.gemini_key_cifrada)
-    dados["IA_DISPONIVEL"] = "1" if ia_disponivel(chave_user) else "0"  # chave (do user ou global)?
-    dados["IA_CHAVE_PROPRIA"] = "1" if chave_user else "0"             # usa chave própria?
-    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"            # cota diária estourou?
+    dados["IA_DISPONIVEL"] = "1" if ia_disponivel() else "0"  # chave configurada?
+    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"    # cota diária estourou?
     dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar() / 60))
     return dados
 
 
 @app.post("/api/config")
-def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
+def salvar_config(dados: ConfigIn, db: Session = Depends(get_session)):
     from . import configuracoes
     for chave, valor in dados.model_dump().items():
         if valor is not None:
@@ -1315,20 +922,18 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 
 # --------------------------- Inteligência de preço -------------------- #
 @app.get("/api/inteligencia-preco")
-def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
-                       db: Session = Depends(get_session)):
+def inteligencia_preco(db: Session = Depends(get_session)):
     """Para cada produto, estatísticas dos valores estimados dos editais já
     coletados em que ele apareceu como compatível. Dá uma referência de mercado
     com base no histórico que o próprio sistema acumulou.
 
     Obs.: usa o valor ESTIMADO do edital (não o preço homologado do vencedor —
     isso exigiria puxar os resultados/atas do PNCP, um passo futuro)."""
-    produtos = db.execute(select(Produto).where(Produto.usuario_id == user.id)).scalars().all()
+    produtos = db.execute(select(Produto)).scalars().all()
     saida = []
     for p in produtos:
-        # editais cujos matches DESTE usuário citam este produto no detalhe
-        q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-            .where(Match.usuario_id == user.id)
+        # editais cujos matches citam este produto no detalhe
+        q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
         valores = []
         for match, ed in db.execute(q).all():
             if ed.valor_estimado is None:
@@ -1359,17 +964,6 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
 def index():
     return FileResponse(
         os.path.join(STATIC_DIR, "index.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-@app.get("/login")
-@app.get("/cadastro")
-@app.get("/verificar")
-def pagina_login():
-    """Página única de login/cadastro/verificação (decide pela URL no JS)."""
-    return FileResponse(
-        os.path.join(STATIC_DIR, "login.html"),
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 

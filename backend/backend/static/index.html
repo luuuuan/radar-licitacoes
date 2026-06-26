@@ -99,30 +99,6 @@
   .card-click{cursor:pointer;transition:border-color .15s, transform .05s}
   .card-click:hover{border-color:var(--accent)}
   .card-click:active{transform:scale(0.998)}
-  /* Tooltip de ajuda (?) — funciona no hover e no clique/toque */
-  .ajuda{position:relative;display:inline-flex;align-items:center;justify-content:center;
-    width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);
-    font-size:11px;font-weight:600;cursor:help;margin-left:5px;vertical-align:middle;user-select:none;flex-shrink:0}
-  .ajuda:hover{border-color:var(--accent);color:var(--accent)}
-  .ajuda .bolha{visibility:hidden;opacity:0;position:absolute;bottom:140%;left:50%;
-    transform:translateX(-50%);background:var(--panel2);color:var(--txt);border:1px solid var(--line);
-    border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.4;
-    width:230px;max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
-    text-align:left;transition:opacity .15s;pointer-events:none}
-  .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
-  .ajuda .bolha::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
-    border:5px solid transparent;border-top-color:var(--line)}
-  /* Toast (avisos) */
-  #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-    z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
-  .toast{background:var(--panel);border:1px solid var(--line);color:var(--txt);
-    padding:12px 16px;border-radius:10px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);
-    display:flex;align-items:center;gap:10px;animation:toastIn .2s ease}
-  .toast.aviso{border-color:var(--medio)}
-  .toast.erro{border-color:var(--fraco)}
-  .toast.ok{border-color:var(--forte)}
-  .toast .ic{flex-shrink:0;display:flex}
-  @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   .status-sel{font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer}
   .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
   .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
@@ -198,16 +174,12 @@
 <header>
   <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
   <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Radar de Licitações</h1>
-  
+  <span class="badge">PNCP + Lei 14.133/2021</span>
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
   <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
   <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
   <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
-  <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
-    <span id="user-nome" class="badge" title="Sua conta">—</span>
-    <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
-  </span>
 </header>
 
 <div class="wrap">
@@ -223,7 +195,6 @@
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
     <button data-tab="config" onclick="tab('config')">Configurações</button>
-    <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
   </nav>
 
@@ -235,11 +206,6 @@
         <option value="forte">Forte</option>
         <option value="medio">Médio</option>
         <option value="fraco">Fraco</option>
-      </select>
-      <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
-        <option value="todos">Produtos e serviços</option>
-        <option value="produtos">Só produtos</option>
-        <option value="servicos">Só serviços</option>
       </select>
       <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
              oninput="this.value=this.value.toUpperCase()">
@@ -262,7 +228,7 @@
         <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
       </label>
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
-        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia
+        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> novos hoje
       </label>
       <span style="flex:1"></span>
       <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
@@ -312,7 +278,7 @@
             <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
         </div>
 
-        <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
+        <div class="field"><label>Palavras-chave (separadas por vírgula)</label>
           <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
 
         <div class="grid2">
@@ -320,13 +286,6 @@
             <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
           <div class="field"><label>Meu preço de venda (R$)</label>
             <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
-        </div>
-        <div class="grid2">
-          <div class="field"><label>Unidade de venda</label>
-            <input id="p-unidade" style="width:100%" placeholder="ex: resma, unidade, caixa"></div>
-          <div class="field"><label>Itens por unidade
-            <span class="muted" style="font-size:11px">(ex.: resma = 500 folhas)</span></label>
-            <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
         </div>
         <div class="grid2">
           <div class="field"><label>Fornecedor</label>
@@ -416,13 +375,13 @@
   <section id="t-config" class="hidden">
     <div class="card">
       <h3 style="margin-top:0">Configurações de monitoramento</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora. Vazio em UFs = todas.</p>
+      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora, sem precisar mexer no servidor. Vazio em UFs = todas.</p>
       <div class="field"><label>UFs (siglas separadas por vírgula)</label>
         <input id="c-ufs" style="width:100%" placeholder="ex: PR,SP  (vazio = todas)"></div>
       <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
         <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
         <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
-      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
+      <div class="field"><label>Horizonte de busca (dias à frente)</label>
         <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
       <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
         <label>Refinamento por IA (semântico)</label>
@@ -436,79 +395,10 @@
     </div>
   </section>
 
-  <!-- PERFIL -->
-  <section id="t-perfil" class="hidden">
-    <div class="card">
-      <h3 style="margin-top:0">Meus dados</h3>
-      <div class="grid2">
-        <div class="field"><label>Nome ou razão social</label><input id="pf-nome" style="width:100%"></div>
-        <div class="field"><label>CPF ou CNPJ</label><input id="pf-doc" style="width:100%" placeholder="só números"></div>
-      </div>
-      <div class="field"><label>E-mail (login)</label><input id="pf-email" style="width:100%" disabled></div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Endereço</h3>
-      <div class="grid2">
-        <div class="field"><label>CEP</label>
-          <input id="pf-cep" style="width:100%" placeholder="00000-000" onblur="buscarCep()">
-          <span class="muted" id="cep-status" style="font-size:11px"></span>
-        </div>
-        <div class="field"><label>Cidade / UF</label><input id="pf-cidade" style="width:100%" disabled></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label>Logradouro</label><input id="pf-logradouro" style="width:100%"></div>
-        <div class="field"><label>Número</label><input id="pf-numero" style="width:100%"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label>Bairro</label><input id="pf-bairro" style="width:100%"></div>
-        <div class="field"><label>Complemento</label><input id="pf-compl" style="width:100%"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Chave da IA (Gemini)</h3>
-      <div class="field"><label>Sua chave Gemini</label>
-        <input id="pf-gemini" style="width:100%" placeholder="cole aqui sua chave (AIza...)" autocomplete="off">
-        <span class="muted" id="gemini-status" style="font-size:11px"></span>
-      </div>
-      <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank"
-         style="font-size:12px;padding:5px 12px">Criar/obter minha chave Gemini ↗︎</a>
-      <p class="muted" style="font-size:11px;margin-bottom:0">
-        Dica: ao criar, restrinja a chave à "Generative Language API" por segurança.
-      </p>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Notificações</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade forte nova.</p>
-      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
-        <span>Por e-mail <span class="muted" style="font-size:12px">(no seu e-mail de login)</span></span>
-        <label class="switch"><input type="checkbox" id="pf-notif-email"><span class="slider"></span></label>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
-        <span>Por Telegram</span>
-        <label class="switch"><input type="checkbox" id="pf-notif-tg"><span class="slider"></span></label>
-      </div>
-      <div id="tg-box" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:6px">
-        <div id="tg-status" class="muted" style="font-size:13px">—</div>
-        <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
-      </div>
-    </div>
-
-    <div class="toolbar">
-      <button class="btn" onclick="salvarPerfil()">Salvar perfil</button>
-      <span id="perfil-msg" class="muted" style="margin-left:10px"></span>
-    </div>
-  </section>
-
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
-      <th>Vistos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
-      <th>Novos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
-      <th>Fortes <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos deram match forte com o seu catálogo.</span></span></th>
-      <th>Erro</th></tr></thead>
+      <th>Vistos</th><th>Novos</th><th>Fortes</th><th>Erro</th></tr></thead>
       <tbody id="lista-logs"></tbody></table>
   </section>
 </div>
@@ -516,15 +406,6 @@
 <script>
 const $ = s => document.querySelector(s);
 const api = (u,o)=>fetch(u,o).then(r=>r.json());
-
-// Tooltip de ajuda: gera o HTML do "?" com a explicação
-function ajuda(texto){
-  return `<span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">${texto}</span></span>`;
-}
-// fecha tooltips abertos ao tocar fora (mobile)
-document.addEventListener('click', e=>{
-  if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(a=>a.classList.remove('aberto'));
-});
 
 // ---- Tema claro/escuro (lembra a escolha) ----
 const _icoSol='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
@@ -571,7 +452,7 @@ function toggleMenu(){
 
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','encerrados','catalogo','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','catalogo','precos','regras','documentos','config','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
@@ -581,43 +462,24 @@ function tab(name){
   if(name==='regras') loadRegras();
   if(name==='documentos') loadDocumentos();
   if(name==='config') loadConfig();
-  if(name==='perfil') loadPerfil();
   if(name==='logs') loadLogs();
 }
 
 async function loadResumo(){
   const r = await api('/api/resumo');
-  const cards = [
-    {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')", aj:'Editais cuja sessão de disputa acontece hoje.'},
-    {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')", aj:'Editais com prazo ainda aberto que deram match com o seu catálogo.'},
-    {n:r.fortes,    l:'Match forte',    cor:'var(--forte)', acao:"filtrarKpi('forte')", aj:'Alta compatibilidade: o edital combina bem com seus produtos. Vale olhar.'},
-    {n:r.medios,    l:'Match médio',    cor:'var(--medio)', acao:"filtrarKpi('medio')", aj:'Compatibilidade parcial: pode valer, confira o detalhe.'},
-    {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')", aj:'Editais que você ainda não marcou como lidos.'},
-    {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')", aj:'Quantidade de produtos/serviços no seu catálogo.'},
-  ];
-  $('#kpis').innerHTML = cards.map(c=>{
-    const borda = c.cor ? `border-color:${c.cor};` : '';
-    const corN = c.cor ? `color:${c.cor};` : '';
-    return `<div class="kpi" style="${borda}cursor:pointer" onclick="${c.acao}" title="Filtrar">
-      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}${ajuda(c.aj)}</div></div>`;
-  }).join('');
+  const kpiDia = `<div class="kpi" style="border-color:var(--accent);cursor:pointer" onclick="filtrarDoDia()" title="Ver editais que entraram hoje">
+    <div class="n" style="color:var(--accent)">${r.do_dia||0}</div><div class="l">Novos hoje</div></div>`;
+  $('#kpis').innerHTML = kpiDia + [
+    ['Editais ativos',r.editais],['Match forte',r.fortes],['Match médio',r.medios],
+    ['Não lidos',r.nao_lidos],['Produtos',r.produtos]
+  ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
 }
 
-// Aplica o filtro correspondente ao card clicado e leva para a aba Editais
-function filtrarKpi(tipo){
+function filtrarDoDia(){
   tab('editais');
-  // zera filtros
-  $('#f-hoje').checked = false;
-  $('#f-naolidos').checked = false;
-  const fn=$('#f-nivel'); if(fn) fn.value='';
-  if(tipo==='hoje') $('#f-hoje').checked = true;
-  else if(tipo==='naolidos') $('#f-naolidos').checked = true;
-  else if(tipo==='forte' || tipo==='medio'){ if(fn) fn.value=tipo; }
-  // 'ativos' = sem filtro (mostra todos os ativos)
-  paginaEditais = 1;
+  $('#f-hoje').checked = true;
   loadEditais();
 }
-function filtrarDoDia(){ filtrarKpi('hoje'); }
 
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
@@ -687,7 +549,6 @@ async function loadEditais(resetPagina=true){
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
-  const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
@@ -776,7 +637,6 @@ async function salvarProduto(){
   const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
     catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
     preco_custo:num('p-custo'), preco_venda:num('p-venda'),
-    unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site')};
   if(!body.descricao){alert('Informe a descrição');return;}
   const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
@@ -792,7 +652,6 @@ async function editarProduto(id){
   set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
   set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
   set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
-  set('p-unidade',p.unidade_venda); set('p-itens-unid',p.itens_por_unidade);
   set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
   editandoId = id;
   $('#form-titulo').textContent = 'Editar produto';
@@ -802,7 +661,7 @@ async function editarProduto(id){
 
 function cancelarEdicao(){
   editandoId = null;
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
@@ -913,7 +772,7 @@ async function loadConfig(){
   $('#c-ia').checked = c.IA_ATIVA==='1' && disp;
   $('#c-ia').disabled = !disp;
   let txt;
-  if(!disp) txt='Informe a sua chave da IA (Gemini) em "Meu perfil" para ativar.';
+  if(!disp) txt='Chave GEMINI_API_KEY não configurada no servidor';
   else if(c.IA_BLOQUEADA==='1'){
     const min=+c.IA_LIBERA_EM_MIN||0;
     const h=Math.floor(min/60), m=min%60;
@@ -974,22 +833,8 @@ async function loadColetaStatus(){
   }catch(e){}
 }
 
-function toast(msg, tipo='aviso', ms=4000){
-  let box=document.getElementById('toasts');
-  if(!box){ box=document.createElement('div'); box.id='toasts'; document.body.appendChild(box); }
-  const t=document.createElement('div'); t.className='toast '+tipo;
-  const ic={aviso:ICN.alerta||'', erro:ICN.alerta||'', ok:ICN.check||''}[tipo]||'';
-  t.innerHTML=`<span class="ic">${ic}</span><span>${msg}</span>`;
-  box.appendChild(t);
-  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(),300); }, ms);
-}
-
 async function coletar(){
-  const r=await api('/api/coletar',{method:'POST'});
-  if(r && r.sem_produtos){
-    toast(r.mensagem || 'Cadastre ao menos um produto antes de buscar editais.', 'aviso', 5000);
-    return;
-  }
+  await api('/api/coletar',{method:'POST'});
   const el=$('#coleta-status');
   el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
   // acompanha de perto por alguns minutos, depois volta ao ritmo normal
@@ -1038,8 +883,7 @@ async function analisarEdital(id, forcar){
           <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
         </div>`;
     } else {
-      const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
-        sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
+      const msgs={sem_ia:'A IA não está configurada. Ligue o toggle em Configurações e adicione a chave GEMINI_API_KEY no servidor.',
         sem_ref:'Não foi possível localizar este edital no PNCP.',
         sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
         vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
@@ -1186,22 +1030,14 @@ async function abrirDetalhe(id){
       if(it.compativel && it.produto){
         const f=it.produto;
         const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
-        const temConv = f.itens_por_unidade && f.itens_por_unidade>1;
-        const cu = it.custo_comparavel!=null ? fmtMoeda(it.custo_comparavel) : (f.preco_custo!=null?fmtMoeda(f.preco_custo):'—');
-        const cuLabel = temConv ? `meu custo / ${f.unidade_venda||'unid.'}` : 'meu custo';
+        const cu=f.preco_custo!=null?fmtMoeda(f.preco_custo):'—';
         let mg='—',cls='';
-        if(it.alerta_unidade){
-          mg='⚠ conferir'; cls='margem-neg';
-        } else if(it.margem!=null){
-          mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'');
-          cls=it.margem>=0?'margem-pos':'margem-neg';
-        }
+        if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); cls=it.margem>=0?'margem-pos':'margem-neg'; }
         bloco=`<div class="precos">
-            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
-            <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
-            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
+            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
+            <div class="preco-box"><div class="v">${cu}</div><div class="l">meu custo</div></div>
+            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial</div></div>
           </div>
-          ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
           <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
         if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
           bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
@@ -1231,128 +1067,11 @@ async function abrirDetalhe(id){
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
 
-// ---- Perfil ----
-async function loadPerfil(){
-  const p = await api('/api/perfil');
-  $('#pf-nome').value = p.nome||'';
-  $('#pf-doc').value = p.documento||'';
-  $('#pf-email').value = p.email||'';
-  const e = p.endereco||{};
-  $('#pf-cep').value = e.cep||'';
-  $('#pf-logradouro').value = e.logradouro||'';
-  $('#pf-numero').value = e.numero||'';
-  $('#pf-bairro').value = e.bairro||'';
-  $('#pf-compl').value = e.complemento||'';
-  $('#pf-cidade').value = (e.cidade||'') + (e.uf?(' / '+e.uf):'');
-  $('#pf-cidade').dataset.cidade = e.cidade||'';
-  $('#pf-cidade').dataset.uf = e.uf||'';
-  $('#pf-gemini').value = '';
-  $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
-  $('#pf-notif-email').checked = !!p.notif_email;
-  $('#pf-notif-tg').checked = !!p.notif_telegram;
-  carregarVinculoTelegram();
-}
-
-async function carregarVinculoTelegram(){
-  const st=$('#tg-status'), ac=$('#tg-acoes');
-  try{
-    const v = await api('/api/telegram/vinculo');
-    if(!v.disponivel){
-      st.textContent = 'Conexão com o Telegram indisponível no momento.';
-      ac.innerHTML=''; return;
-    }
-    if(v.conectado){
-      st.innerHTML = '✓ <b style="color:var(--forte)">Telegram conectado</b> — você receberá os avisos por aqui.';
-      ac.innerHTML = `<button class="btn ghost" onclick="desconectarTelegram()">Desconectar</button>`;
-    } else {
-      st.innerHTML = 'Telegram <b>não conectado</b>.';
-      ac.innerHTML = `<a class="btn" href="${v.link}" target="_blank" onclick="aguardarConexaoTelegram()">Conectar meu Telegram ↗︎</a>`;
-    }
-  }catch(e){ st.textContent='Não foi possível carregar o status do Telegram.'; }
-}
-
-function aguardarConexaoTelegram(){
-  // após abrir o bot, fica checando alguns segundos se a conexão chegou
-  toast('Abra o bot e toque em Iniciar. Estou aguardando a conexão...', 'aviso', 6000);
-  let n=0;
-  const t=setInterval(async()=>{
-    const v=await api('/api/telegram/vinculo');
-    if(v.conectado){ clearInterval(t); carregarVinculoTelegram(); toast('Telegram conectado!', 'ok', 4000); }
-    if(++n>20) clearInterval(t);  // ~60s
-  }, 3000);
-}
-
-async function desconectarTelegram(){
-  await api('/api/telegram/desvincular',{method:'POST'});
-  carregarVinculoTelegram();
-  toast('Telegram desconectado.', 'aviso', 3000);
-}
-
-async function buscarCep(){
-  const cep = ($('#pf-cep').value||'').replace(/\D/g,'');
-  if(cep.length!==8){ return; }
-  $('#cep-status').textContent = 'Buscando...';
-  try{
-    const r = await fetch('/api/cep/'+cep);
-    if(!r.ok){ $('#cep-status').textContent = 'CEP não encontrado.'; return; }
-    const d = await r.json();
-    $('#pf-logradouro').value = d.logradouro||'';
-    $('#pf-bairro').value = d.bairro||'';
-    $('#pf-compl').value = d.complemento|| $('#pf-compl').value;
-    $('#pf-cidade').value = (d.cidade||'') + (d.uf?(' / '+d.uf):'');
-    $('#pf-cidade').dataset.cidade = d.cidade||'';
-    $('#pf-cidade').dataset.uf = d.uf||'';
-    $('#cep-status').textContent = '✓ Endereço preenchido';
-    $('#pf-numero').focus();
-  }catch(e){ $('#cep-status').textContent = 'Erro ao consultar o CEP.'; }
-}
-
-async function salvarPerfil(){
-  const body = {
-    nome: $('#pf-nome').value, documento: $('#pf-doc').value,
-    notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
-    endereco: {
-      cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,
-      numero: $('#pf-numero').value, bairro: $('#pf-bairro').value,
-      complemento: $('#pf-compl').value,
-      cidade: $('#pf-cidade').dataset.cidade||'', uf: $('#pf-cidade').dataset.uf||'',
-    },
-  };
-  const g = $('#pf-gemini').value.trim();
-  if(g) body.gemini_key = g;   // só envia se digitou algo (em branco mantém a atual)
-  await api('/api/perfil',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  $('#perfil-msg').textContent = 'Perfil salvo!';
-  toast('Perfil salvo com sucesso.', 'ok', 3000);
-  setTimeout(()=>{ $('#perfil-msg').textContent=''; }, 3000);
-  loadPerfil();
-}
-
-// ---- Portão de sessão: exige login para usar o dashboard ----
-let USUARIO = null;
-async function exigirLogin(){
-  try{
-    const r = await fetch('/api/auth/me');
-    if(r.status===401 || r.status===403){ location.href='/login'; return false; }
-    USUARIO = await r.json();
-    const el = document.getElementById('user-nome');
-    if(el) el.textContent = USUARIO.nome;
-    return true;
-  }catch(e){ location.href='/login'; return false; }
-}
-async function sair(){
-  await fetch('/api/auth/logout', {method:'POST'});
-  location.href='/login';
-}
-
-// inicialização: primeiro confirma a sessão, depois carrega os dados
-(async function(){
-  const ok = await exigirLogin();
-  if(!ok) return;   // já redirecionou para /login
-  Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
-    setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
-  });
-  setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
-})();
+// inicialização + esconder a tela de carregamento
+Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+  setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+});
+setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
 </script>
 </body>
 </html>
