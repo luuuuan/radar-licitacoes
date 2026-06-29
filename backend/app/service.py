@@ -227,10 +227,22 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
         ).scalars().all()
         alvos = [db.get(Usuario, uid) for uid in ids_com_match]
         alvos = [u for u in alvos if u and u.ativo]
+    # rótulo das fontes usadas (ex.: "PNCP" ou "PNCP + Transparência")
+    fonte_label = " + ".join(c.nome.upper() for c in conectores)
+    inicio_user = utcnow()
     for u in alvos:
         try:
             r = _gerar_matches_usuario(db, u, recalcular_todos=False)
             resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
+            # registra no Histórico DESTE usuário o que entrou na conta dele
+            db.add(LogColeta(
+                usuario_id=u.id, fonte=fonte_label,
+                iniciado_em=inicio_user, finalizado_em=utcnow(),
+                editais_vistos=r.get("editais", 0),
+                editais_novos=r.get("atualizados", 0),
+                matches_fortes=r.get("fortes", 0),
+            ))
+            db.commit()
         except Exception:
             log.exception("Falha ao gerar matches do usuário %s", u.id)
             db.rollback()

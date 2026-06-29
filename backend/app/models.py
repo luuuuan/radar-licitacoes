@@ -162,6 +162,7 @@ class LogColeta(Base):
     __tablename__ = "logs_coleta"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     fonte: Mapped[str] = mapped_column(String(40))
     iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finalizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -71,6 +71,9 @@ for _t in ("produtos", "matches", "documentos", "regras_exclusao", "propostas"):
         _COLUNAS_NOVAS[_t].append(("usuario_id", "INTEGER"))
 _COLUNAS_NOVAS.pop("produtos_user", None)
 _COLUNAS_NOVAS["usuarios"] = [("telegram_codigo", "VARCHAR(32)")]
+_COLUNAS_NOVAS.setdefault("logs_coleta", [])
+if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS["logs_coleta"]:
+    _COLUNAS_NOVAS["logs_coleta"].append(("usuario_id", "INTEGER"))
 _COLUNAS_NOVAS.setdefault("documentos", [])
 if ("link", "VARCHAR(500)") not in _COLUNAS_NOVAS["documentos"]:
     _COLUNAS_NOVAS["documentos"].append(("link", "VARCHAR(500)"))
