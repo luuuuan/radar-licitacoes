@@ -1,0 +1,30 @@
+name: Manter o Render acordado (horário comercial)
+
+# O plano gratuito do Render "dorme" após 15 min sem acesso, e o próximo
+# acesso espera ~30-50s pra acordar. Este job dá um "ping" leve no /health
+# a cada 10 minutos, das 7h às 19h (Brasília), evitando o cold start no horário
+# em que o sistema é usado. De madrugada deixa dormir (economiza as 750h/mês).
+#
+# Usa a Variable RENDER_URL (Settings → Secrets and variables → Actions → Variables).
+
+on:
+  schedule:
+    # A cada 10 min, somente nas horas 10–22 UTC (= 07h–19h de Brasília).
+    - cron: "*/10 10-22 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health para evitar o cold start
+        run: |
+          URL="${{ vars.RENDER_URL }}"
+          if [ -z "$URL" ]; then
+            echo "RENDER_URL não configurada — pulando."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "${URL%/}/health")
+          echo "Ping /health: HTTP $code"
+          # não falha o workflow se o ping não responder (evita ruído de alertas)
+          exit 0
