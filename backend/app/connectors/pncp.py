@@ -69,16 +69,24 @@ class PNCPConnector(BaseConnector):
         self.http = session or requests.Session()
         self.http.headers.update({"Accept": "application/json",
                                   "User-Agent": "RadarLicitacoes/1.0"})
+        self._falhas_seguidas = 0
+        self._abortado = False
 
     def _get_com_retry(self, url: str, params: dict, timeout: int):
         """GET com re-tentativas em falhas transitórias (timeout, 5xx, 429).
-        Espera progressiva entre tentativas. Retorna a resposta ou None."""
+        Para 429, respeita o tempo pedido pelo servidor (Retry-After) e espera
+        mais entre tentativas. Retorna a resposta ou None."""
         ultimo_erro = None
         for tentativa in range(1, self.tentativas + 1):
             try:
                 resp = self.http.get(url, params=params, timeout=timeout)
                 if resp.status_code in (500, 502, 503, 504, 429):
                     ultimo_erro = f"HTTP {resp.status_code}"
+                    if resp.status_code == 429 and tentativa < self.tentativas:
+                        # respeita o tempo pedido pelo PNCP, ou espera progressiva (mais longa)
+                        espera = self._retry_after(resp) or min(30, 2 * (2 ** tentativa))
+                        time.sleep(espera)
+                        continue
                     raise requests.RequestException(ultimo_erro)
                 return resp
             except requests.RequestException as e:
@@ -88,19 +96,41 @@ class PNCPConnector(BaseConnector):
         log.warning("Desisti após %d tentativa(s): %s", self.tentativas, ultimo_erro)
         return None
 
+    @staticmethod
+    def _retry_after(resp) -> float | None:
+        """Lê o header Retry-After (segundos) que o servidor manda no 429."""
+        v = resp.headers.get("Retry-After")
+        if not v:
+            return None
+        try:
+            return min(60.0, float(v))   # nunca espera mais que 60s por tentativa
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------------ #
     def coletar(self) -> list[EditalColetado]:
         data_final = (date.today() + timedelta(days=self.horizonte)).strftime("%Y%m%d")
         alvos_uf = self.ufs or [None]  # None => não filtra por UF
         editais: dict[str, EditalColetado] = {}
+        self._falhas_seguidas = 0
+        self._abortado = False
 
         for modalidade in self.modalidades:
+            if self._abortado:
+                break
             for uf in alvos_uf:
+                if self._abortado:
+                    break
                 self._coletar_modalidade_uf(modalidade, uf, data_final, editais)
 
+        if self._abortado:
+            log.warning("PNCP recusou muitas vezes seguidas (429/erro). Coleta "
+                        "interrompida — os editais já obtidos foram mantidos. "
+                        "Tente novamente em alguns minutos.")
         lista = list(editais.values())
         self._coletar_itens_paralelo(lista)
-        log.info("PNCP: %d editais coletados", len(lista))
+        log.info("PNCP: %d editais coletados%s", len(lista),
+                 " (parcial)" if self._abortado else "")
         return lista
 
     def _coletar_itens_paralelo(self, editais: list[EditalColetado]) -> None:
@@ -134,7 +164,12 @@ class PNCPConnector(BaseConnector):
             resp = self._get_com_retry(f"{self.base}/v1/contratacoes/proposta",
                                        params, timeout=40)
             if resp is None:
-                break  # falhou mesmo após as re-tentativas
+                # falhou mesmo após as re-tentativas: conta para o disjuntor
+                self._falhas_seguidas += 1
+                if self._falhas_seguidas >= 5:
+                    self._abortado = True   # PNCP está recusando demais; para tudo
+                break
+            self._falhas_seguidas = 0  # sucesso reseta o contador
 
             if resp.status_code == 204:  # sem conteúdo
                 break

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     PORTAL_TRANSPARENCIA_ATIVO: bool = False
     PNCP_TAMANHO_PAGINA: int = 50
     # Atraso entre requisições para não sobrecarregar o portal (segundos)
-    PNCP_DELAY: float = 0.3
+    PNCP_DELAY: float = 0.5
     # Re-tentativas quando o PNCP falha/instabiliza (timeout, 5xx, 429)
     PNCP_TENTATIVAS: int = 3
 
