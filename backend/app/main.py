@@ -1304,8 +1304,8 @@ def obter_config(user: Usuario = Depends(_auth.get_current_user),
     chave_user = _auth.decifrar(user.gemini_key_cifrada)
     dados["IA_DISPONIVEL"] = "1" if ia_disponivel(chave_user) else "0"  # chave (do user ou global)?
     dados["IA_CHAVE_PROPRIA"] = "1" if chave_user else "0"             # usa chave própria?
-    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada() else "0"            # cota diária estourou?
-    dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar() / 60))
+    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada(chave_user) else "0"  # cota diária ESTOUROU PRA ESSE USUÁRIO?
+    dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar(chave_user) / 60))
     return dados
 
 
