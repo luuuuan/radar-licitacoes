@@ -1,17 +1,11 @@
 name: Coleta automática de licitações
 
-# A coleta roda DENTRO do Render (que alcança o PNCP). Aqui o GitHub só
-# "cutuca" o Render via HTTP, 2x ao dia (07h e 12h de Brasília) — o que o IP
-# do GitHub consegue fazer (ele só não consegue falar direto com o pncp.gov.br).
-#
-# Configure no GitHub:
-#   - Variable RENDER_URL  (Settings → Secrets and variables → Actions → Variables)
-#   - Secret   CRON_SECRET (a mesma chave definida no Render)
+
 on:
   schedule:
     # Horários em UTC. Brasília = UTC-3.
-    - cron: "0 10 * * *"     # 10:00 UTC = 07:00 Brasília
-    - cron: "0 15 * * *"     # 15:00 UTC = 12:00 Brasília
+    - cron: "0 9 * * *"    
+    - cron: "0 14 * * *"     
   workflow_dispatch: {}
 
 jobs:
