@@ -1031,8 +1031,12 @@ async function analisarEdital(id, forcar){
       const flags=[];
       if(r.exige_amostra) flags.push('Exige amostra');
       if(r.exige_visita) flags.push('Exige visita técnica');
+      if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+      if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
+      else if(r.julgamento==='item') flags.push('Julgamento por item');
       corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
         ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
+        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${r.garantia_contratual}</p>`:''}
         ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
         ${_listaHTML('Prazos', r.prazos)}
         ${_listaHTML('Pontos de atenção', r.pontos_atencao)}

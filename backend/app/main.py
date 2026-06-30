@@ -20,6 +20,7 @@ import io
 import os
 import base64
 import secrets
+import threading
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime
@@ -859,7 +860,18 @@ def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user)
 
 
 # --------------------------- Coleta / Logs / Resumo ------------------- #
+# Trava para impedir coletas simultâneas (evita condição de corrida que
+# duplica matches). Só uma coleta roda por vez; as demais são ignoradas.
+_coleta_lock = threading.Lock()
+
+
 def _rodar_coleta_bg(usuario_id: int | None = None):
+    # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
+    if not _coleta_lock.acquire(blocking=False):
+        import logging
+        logging.getLogger("coleta").info(
+            "Coleta já em andamento — ignorando novo disparo.")
+        return
     db = SessionLocal()
     try:
         processar_coleta(db, usuario_id=usuario_id)
@@ -868,6 +880,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
         verificar_todos(db)
     finally:
         db.close()
+        _coleta_lock.release()
 
 
 @app.post("/api/coletar")
@@ -965,12 +978,15 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    # análise já feita: mostra do cache (é leitura, não consome IA)
+    # análise já feita: mostra do cache (é leitura, não consome IA), desde que
+    # tenha sido gerada com a versão atual do prompt. Versão antiga -> refaz.
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
-            cache["cache"] = True
-            return cache
+            if cache.get("versao") == ia.VERSAO_PROMPT:
+                cache["cache"] = True
+                return cache
+            # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
             pass
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
@@ -1005,8 +1021,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
     """Estado da coleta para o indicador do dashboard."""
     ultimo = db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id)
-        .order_by(LogColeta.id.desc()).limit(1)
+        select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
     if not ultimo:
         return {"estado": "nunca"}
@@ -1020,8 +1035,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 
     # última coleta concluída (pode ser anterior à que está rodando)
     ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id,
-                                LogColeta.finalizado_em.is_not(None))
+        select(LogColeta).where(LogColeta.finalizado_em.is_not(None))
         .order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
 
@@ -1042,10 +1056,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 @app.get("/api/logs")
 def logs(user: Usuario = Depends(_auth.get_current_user),
          db: Session = Depends(get_session)):
-    regs = db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id)
-        .order_by(LogColeta.id.desc()).limit(30)
-    ).scalars().all()
+    regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
     return [{
         "id": l.id, "fonte": l.fonte,
         "iniciado_em": _brt(l.iniciado_em),

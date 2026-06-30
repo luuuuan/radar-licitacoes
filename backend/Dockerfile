@@ -4,9 +4,13 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# Dependências do sistema (psycopg2 etc.)
+# Dependências do sistema:
+# - gcc, libpq-dev: para o psycopg2
+# - tesseract-ocr + tesseract-ocr-por: OCR de PDFs escaneados (em português)
+# - poppler-utils: converte PDF em imagem (pdf2image) para o OCR
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+    gcc libpq-dev tesseract-ocr tesseract-ocr-por poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
