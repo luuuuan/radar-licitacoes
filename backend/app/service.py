@@ -7,6 +7,7 @@ from datetime import datetime
 from .models import utcnow
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings, parse_csv_str
@@ -93,13 +94,18 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
         select(Edital).order_by(Edital.coletado_em.desc())
     ).scalars().all()
 
+    # carrega de uma vez os matches que o usuário já tem (mais rápido que consultar
+    # um a um, e evita tentar criar duplicata na mesma rodada)
+    existentes_map = {
+        m.edital_id: m for m in db.execute(
+            select(Match).where(Match.usuario_id == usuario.id)
+        ).scalars().all()
+    }
+
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
     novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
     for ed in editais:
-        existente = db.execute(
-            select(Match).where(Match.edital_id == ed.id,
-                                Match.usuario_id == usuario.id)
-        ).scalars().first()
+        existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
         resumo["editais"] += 1
@@ -118,6 +124,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
             db.add(m)
+            existentes_map[ed.id] = m   # evita recriar na mesma rodada
         m.score = resultado.score
         m.nivel = resultado.nivel
         m.itens_compativeis = resultado.itens_compativeis
@@ -127,7 +134,14 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
             resumo["fortes"] += 1
             if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
                 novos_fortes.append((ed.objeto or "Edital", ed.orgao or "", ed.link or ""))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # rede de segurança: se outra coleta criou os mesmos matches em paralelo,
+        # desfaz e não derruba o processo (a próxima coleta completa o que faltar)
+        db.rollback()
+        log.warning("Conflito de matches em paralelo (usuário %s) — ignorado.", usuario.id)
+        return {"editais": 0, "atualizados": 0, "fortes": 0}
 
     if novos_fortes and not recalcular_todos:
         _notificar_usuario(usuario, novos_fortes)
@@ -151,7 +165,7 @@ def notificar_usuario_msg(usuario, titulo: str, corpo: str) -> bool:
 def _notificar_usuario(usuario, fortes: list[tuple]):
     """Avisa o usuário, pelos próprios canais, sobre novas oportunidades fortes."""
     n = len(fortes)
-    titulo = f"🎯 {n} nova(s) oportunidade(s) forte(s) no Radar"
+    titulo = f"🎯 {n} nova(s) oportunidade(s) de alta compatibilidade no Radar"
     linhas = []
     for objeto, orgao, link in fortes[:10]:
         item = f"• {objeto[:90]}"

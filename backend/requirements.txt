@@ -23,3 +23,5 @@ bcrypt>=4.1
 email-validator>=2.1
 PyJWT>=2.8
 cryptography>=42.0
+pytesseract>=0.3.10
+pdf2image>=1.17

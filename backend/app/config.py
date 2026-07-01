@@ -96,9 +96,21 @@ class Settings(BaseSettings):
     # piso de similaridade: cosseno abaixo disso conta como 0 (evita que a
     # "linha de base" alta dos embeddings infle itens sem relação).
     IA_FLOOR: float = 0.5
-    # sinal textual mínimo do edital para valer a pena gastar IA nele.
-    # Editais sem nenhuma relação (texto ~0) não chamam a IA -> economiza cota.
+    # sinal textual mínimo do edital para a IA REFINAR um candidato (já tem texto).
     IA_MIN_SINAL: float = 0.12
+    # Exploração de SINÔNIMOS: editais sem sinal textual (ex.: "notebook" vs
+    # "computador portátil", TF-IDF ~0) também recebem IA, mas só até um teto por
+    # coleta — assim a IA pega sinônimos puros sem estourar a cota gratuita.
+    IA_EXPLORAR_SEM_SINAL: bool = True
+    IA_ORCAMENTO_EXPLORACAO: int = 60   # nº máx. de editais sem sinal que recebem IA por coleta
+
+    # OCR de PDF escaneado (Tesseract, grátis e local). Pesado: limites apertados.
+    # Requer no servidor os pacotes de sistema 'tesseract-ocr', 'tesseract-ocr-por'
+    # e 'poppler-utils' (ver render/Dockerfile).
+    OCR_ATIVO: bool = True
+    OCR_MAX_PAGINAS: int = 5     # só as primeiras N páginas (controla custo de CPU)
+    OCR_DPI: int = 200           # resolução do raster (menor = mais rápido)
+    OCR_IDIOMA: str = "por"      # português
 
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.

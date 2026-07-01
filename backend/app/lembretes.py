@@ -92,8 +92,49 @@ def verificar_documentos(db: Session) -> int:
     return avisados
 
 
+def verificar_aberturas(db: Session) -> int:
+    """Avisa cada usuário sobre editais com match FORTE que vão ABRIR em breve,
+    com a antecedência (em dias) que o próprio usuário definiu no perfil.
+    Serve para dar tempo de preparar documentação e decidir a participação."""
+    hoje = date.today()
+    avisados = 0
+    q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+         .where(Match.abertura_avisada == False)           # noqa: E712
+         .where(Match.nivel == "forte")
+         .where(Match.usuario_id.is_not(None))
+         .where(Edital.data_abertura.is_not(None))
+         .where(Edital.data_abertura >= hoje))             # só abertura futura
+    for match, ed in db.execute(q).all():
+        usuario = db.get(Usuario, match.usuario_id)
+        if not usuario or not usuario.ativo or not usuario.avisar_abertura:
+            continue
+        dias = (ed.data_abertura - hoje).days
+        # avisa quando entrar na janela escolhida pelo usuário (ex.: faltam <= 2)
+        if dias > max(0, usuario.dias_antecedencia):
+            continue
+        quando = "hoje" if dias == 0 else f"em {dias} dia(s)"
+        titulo = f"📢 Abre {quando}: {ed.orgao or 'Edital'}"
+        corpo = (
+            f"Um edital compatível com seus produtos vai abrir {quando}.\n\n"
+            f"Órgão: {ed.orgao}\n"
+            f"Objeto: {(ed.objeto or '')[:300]}\n"
+            f"Abertura: {ed.data_abertura} ({quando})\n"
+            f"Encerra em: {ed.data_encerramento or '-'}\n"
+            f"Local: {ed.municipio or ''}/{ed.uf or ''}\n"
+            f"Link: {ed.link or ''}\n"
+        )
+        if notificar_usuario_msg(usuario, titulo, corpo):
+            match.abertura_avisada = True
+            avisados += 1
+    db.commit()
+    if avisados:
+        log.info("Avisos de abertura enviados: %d", avisados)
+    return avisados
+
+
 def verificar_todos(db: Session) -> dict:
     return {
+        "aberturas": verificar_aberturas(db),
         "prazos": verificar_prazos(db),
         "documentos": verificar_documentos(db),
     }
