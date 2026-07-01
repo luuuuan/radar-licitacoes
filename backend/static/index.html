@@ -497,6 +497,20 @@
         <div id="tg-status" class="muted" style="font-size:13px">—</div>
         <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+      <h3 style="margin:0 0 2px">Aviso de abertura
+        <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Avisa, com alguns dias de antecedência, quando um edital compatível (match forte) vai abrir. Dá tempo de preparar a documentação e decidir se vai participar. Chega pelos canais que você ligou acima.</span></span>
+      </h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba um aviso antes de um edital forte abrir.</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar antes da abertura</span>
+        <label class="switch"><input type="checkbox" id="pf-avisar-abertura"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar com quantos dias de antecedência</span>
+        <input id="pf-dias-ante" type="number" min="0" max="30" style="width:80px" value="2">
+      </div>
     </div>
 
     <div class="toolbar">
@@ -1031,8 +1045,12 @@ async function analisarEdital(id, forcar){
       const flags=[];
       if(r.exige_amostra) flags.push('Exige amostra');
       if(r.exige_visita) flags.push('Exige visita técnica');
+      if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+      if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
+      else if(r.julgamento==='item') flags.push('Julgamento por item');
       corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
         ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
+        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${r.garantia_contratual}</p>`:''}
         ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
         ${_listaHTML('Prazos', r.prazos)}
         ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
@@ -1253,6 +1271,8 @@ async function loadPerfil(){
   $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
   $('#pf-notif-email').checked = !!p.notif_email;
   $('#pf-notif-tg').checked = !!p.notif_telegram;
+  $('#pf-avisar-abertura').checked = p.avisar_abertura !== false;
+  if(p.dias_antecedencia != null) $('#pf-dias-ante').value = p.dias_antecedencia;
   carregarVinculoTelegram();
 }
 
@@ -1314,6 +1334,8 @@ async function salvarPerfil(){
   const body = {
     nome: $('#pf-nome').value, documento: $('#pf-doc').value,
     notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
+    avisar_abertura: $('#pf-avisar-abertura').checked,
+    dias_antecedencia: parseInt($('#pf-dias-ante').value || '2', 10),
     endereco: {
       cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,
       numero: $('#pf-numero').value, bairro: $('#pf-bairro').value,

@@ -106,6 +106,10 @@ class MatchingEngine:
         self.produtos = produtos
         self.gemini_key = gemini_key
         self.usar_ia = bool(usar_ia) and ia_disponivel(gemini_key) and len(produtos) > 0
+        # orçamento de exploração de sinônimos por coleta (editais sem sinal textual)
+        self._orcamento_exploracao = (
+            settings.IA_ORCAMENTO_EXPLORACAO
+            if (self.usar_ia and settings.IA_EXPLORAR_SEM_SINAL) else 0)
         self._prod_emb = None  # embeddings dos produtos (gerados sob demanda)
         self._textos_prod = [p.texto_busca() for p in produtos]
         self._vectorizer = None
@@ -263,10 +267,19 @@ class MatchingEngine:
         base = [self._score_item(it) for it in alvos]   # (sc, prod, motivo)
         max_txt = max((b[0] for b in base), default=0.0)
 
-        # 2) IA só quando ligada E o edital tem sinal textual mínimo. Assim os
-        #    milhares de editais sem relação não gastam cota. Dentro de um edital
-        #    relevante, só embeda os itens que a IA ainda pode mudar (não-fortes).
-        usar_ia_aqui = self.usar_ia and max_txt >= settings.IA_MIN_SINAL
+        # 2) Quando rodar a IA semântica:
+        #    a) edital COM sinal textual (>= IA_MIN_SINAL): refina o candidato.
+        #    b) edital SEM sinal (texto ~0): pode ser sinônimo puro que o texto não
+        #       pega ("notebook" vs "computador portátil"). Roda IA mesmo assim,
+        #       mas só enquanto houver orçamento de exploração nesta coleta.
+        tem_sinal = max_txt >= settings.IA_MIN_SINAL
+        usar_ia_aqui = False
+        if self.usar_ia:
+            if tem_sinal:
+                usar_ia_aqui = True
+            elif self._orcamento_exploracao > 0:
+                usar_ia_aqui = True
+                self._orcamento_exploracao -= 1
         item_embs = [None] * len(alvos)
         if usar_ia_aqui:
             idxs = [i for i, (sc, _, _) in enumerate(base) if sc < settings.LIMIAR_FORTE]
