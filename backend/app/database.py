@@ -70,7 +70,14 @@ for _t in ("produtos", "matches", "documentos", "regras_exclusao", "propostas"):
     if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS[_t]:
         _COLUNAS_NOVAS[_t].append(("usuario_id", "INTEGER"))
 _COLUNAS_NOVAS.pop("produtos_user", None)
-_COLUNAS_NOVAS["usuarios"] = [("telegram_codigo", "VARCHAR(32)")]
+_COLUNAS_NOVAS["usuarios"] = [
+    ("telegram_codigo", "VARCHAR(32)"),
+    ("avisar_abertura", "BOOLEAN DEFAULT TRUE"),
+    ("dias_antecedencia", "INTEGER DEFAULT 2"),
+]
+_COLUNAS_NOVAS.setdefault("matches", [])
+if ("abertura_avisada", "BOOLEAN DEFAULT FALSE") not in _COLUNAS_NOVAS["matches"]:
+    _COLUNAS_NOVAS["matches"].append(("abertura_avisada", "BOOLEAN DEFAULT FALSE"))
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])
 if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("usuario_id", "INTEGER"))

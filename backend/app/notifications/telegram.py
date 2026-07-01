@@ -30,18 +30,26 @@ class TelegramNotifier(BaseNotifier):
             return False
 
 
-def enviar_para_chat(chat_id: str, titulo: str, corpo: str) -> bool:
+def enviar_para_chat(chat_id: str, titulo: str, corpo: str,
+                     botao_url: str | None = None, botao_texto: str = "Abrir edital") -> bool:
     """Envia uma mensagem para um chat específico (Telegram do próprio usuário).
+    Aceita HTML (negrito etc.) e um botão opcional com link.
     Usa o bot global do sistema (TELEGRAM_BOT_TOKEN)."""
     if not (settings.TELEGRAM_BOT_TOKEN and chat_id):
         return False
     try:
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-        r = requests.post(url, json={
+        payload = {
             "chat_id": chat_id,
-            "text": f"{titulo}\n\n{corpo}",
+            "text": f"{titulo}\n\n{corpo}" if titulo else corpo,
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
-        }, timeout=20)
+        }
+        if botao_url:
+            payload["reply_markup"] = {
+                "inline_keyboard": [[{"text": botao_texto, "url": botao_url}]]
+            }
+        r = requests.post(url, json=payload, timeout=20)
         return r.status_code == 200
     except Exception as e:
         log.warning("Falha ao enviar Telegram para %s: %s", chat_id, e)

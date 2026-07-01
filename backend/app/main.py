@@ -20,6 +20,7 @@ import io
 import os
 import base64
 import secrets
+import threading
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime
@@ -250,6 +251,8 @@ class PerfilIn(BaseModel):
     telegram_chat_id: str | None = None
     notif_email: bool | None = None
     notif_telegram: bool | None = None
+    avisar_abertura: bool | None = None
+    dias_antecedencia: int | None = None
     endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
 
 
@@ -267,6 +270,8 @@ def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
         "tem_gemini": bool(user.gemini_key_cifrada),
         "telegram_chat_id": user.telegram_chat_id or "",
         "notif_email": user.notif_email, "notif_telegram": user.notif_telegram,
+        "avisar_abertura": user.avisar_abertura,
+        "dias_antecedencia": user.dias_antecedencia,
         "endereco": endereco,
     }
 
@@ -288,6 +293,10 @@ def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_use
         user.notif_email = dados.notif_email
     if dados.notif_telegram is not None:
         user.notif_telegram = dados.notif_telegram
+    if dados.avisar_abertura is not None:
+        user.avisar_abertura = dados.avisar_abertura
+    if dados.dias_antecedencia is not None:
+        user.dias_antecedencia = max(0, min(30, dados.dias_antecedencia))  # 0 a 30 dias
     if dados.endereco is not None:
         user.endereco_cifrado = _auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False))
     db.commit()
@@ -859,7 +868,18 @@ def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user)
 
 
 # --------------------------- Coleta / Logs / Resumo ------------------- #
+# Trava para impedir coletas simultâneas (evita condição de corrida que
+# duplica matches). Só uma coleta roda por vez; as demais são ignoradas.
+_coleta_lock = threading.Lock()
+
+
 def _rodar_coleta_bg(usuario_id: int | None = None):
+    # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
+    if not _coleta_lock.acquire(blocking=False):
+        import logging
+        logging.getLogger("coleta").info(
+            "Coleta já em andamento — ignorando novo disparo.")
+        return
     db = SessionLocal()
     try:
         processar_coleta(db, usuario_id=usuario_id)
@@ -868,6 +888,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
         verificar_todos(db)
     finally:
         db.close()
+        _coleta_lock.release()
 
 
 @app.post("/api/coletar")
@@ -965,12 +986,15 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    # análise já feita: mostra do cache (é leitura, não consome IA)
+    # análise já feita: mostra do cache (é leitura, não consome IA), desde que
+    # tenha sido gerada com a versão atual do prompt. Versão antiga -> refaz.
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
-            cache["cache"] = True
-            return cache
+            if cache.get("versao") == ia.VERSAO_PROMPT:
+                cache["cache"] = True
+                return cache
+            # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
             pass
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário

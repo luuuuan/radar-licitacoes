@@ -45,6 +45,9 @@ class Usuario(Base):
     telegram_codigo: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
     notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
+    # aviso de editais fortes que vão ABRIR em breve (X dias antes da abertura)
+    avisar_abertura: Mapped[bool] = mapped_column(Boolean, default=True)
+    dias_antecedencia: Mapped[int] = mapped_column(Integer, default=2)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -140,6 +143,7 @@ class Match(Base):
     interessante: Mapped[bool] = mapped_column(Boolean, default=False)
     notificado: Mapped[bool] = mapped_column(Boolean, default=False)
     prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
+    abertura_avisada: Mapped[bool] = mapped_column(Boolean, default=False)  # aviso de abertura próxima já enviado
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

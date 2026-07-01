@@ -7,6 +7,7 @@ from datetime import datetime
 from .models import utcnow
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings, parse_csv_str
@@ -18,6 +19,7 @@ from .matching.engine import (
 )
 from . import notifications
 from .notifications import email as email_mod, telegram as telegram_mod
+from .notifications import formato
 
 log = logging.getLogger("servico")
 
@@ -93,13 +95,18 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
         select(Edital).order_by(Edital.coletado_em.desc())
     ).scalars().all()
 
+    # carrega de uma vez os matches que o usuário já tem (mais rápido que consultar
+    # um a um, e evita tentar criar duplicata na mesma rodada)
+    existentes_map = {
+        m.edital_id: m for m in db.execute(
+            select(Match).where(Match.usuario_id == usuario.id)
+        ).scalars().all()
+    }
+
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
     novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
     for ed in editais:
-        existente = db.execute(
-            select(Match).where(Match.edital_id == ed.id,
-                                Match.usuario_id == usuario.id)
-        ).scalars().first()
+        existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
         resumo["editais"] += 1
@@ -118,6 +125,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
             db.add(m)
+            existentes_map[ed.id] = m   # evita recriar na mesma rodada
         m.score = resultado.score
         m.nivel = resultado.nivel
         m.itens_compativeis = resultado.itens_compativeis
@@ -127,7 +135,14 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
             resumo["fortes"] += 1
             if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
                 novos_fortes.append((ed.objeto or "Edital", ed.orgao or "", ed.link or ""))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # rede de segurança: se outra coleta criou os mesmos matches em paralelo,
+        # desfaz e não derruba o processo (a próxima coleta completa o que faltar)
+        db.rollback()
+        log.warning("Conflito de matches em paralelo (usuário %s) — ignorado.", usuario.id)
+        return {"editais": 0, "atualizados": 0, "fortes": 0}
 
     if novos_fortes and not recalcular_todos:
         _notificar_usuario(usuario, novos_fortes)
@@ -135,8 +150,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
 
 
 def notificar_usuario_msg(usuario, titulo: str, corpo: str) -> bool:
-    """Envia uma mensagem para o usuário pelos canais que ele ativou no perfil
-    (e-mail e/ou Telegram). Retorna True se ao menos um canal foi acionado."""
+    """Envia uma mensagem simples para o usuário pelos canais que ele ativou."""
     enviou = False
     try:
         if usuario.notif_email and usuario.email:
@@ -148,21 +162,39 @@ def notificar_usuario_msg(usuario, titulo: str, corpo: str) -> bool:
     return enviou
 
 
+def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict]) -> bool:
+    """Envia UM aviso agrupado com vários editais.
+    - E-mail: um único e-mail com todos os editais em cartões (botão 'Abrir edital').
+    - Telegram: uma mensagem por edital (com botão), pois fica mais legível no app.
+    """
+    if not itens:
+        return False
+    enviou = False
+    try:
+        if usuario.notif_email and usuario.email:
+            html = formato.email_html(titulo, intro, itens)
+            texto = formato.email_texto(intro, itens)
+            enviou = email_mod.enviar_para(usuario.email, titulo, texto, html=html) or enviou
+        if usuario.notif_telegram and usuario.telegram_chat_id:
+            for it in itens:
+                tit, corpo, link = formato.telegram_item(titulo, it)
+                telegram_mod.enviar_para_chat(usuario.telegram_chat_id, tit, corpo,
+                                              botao_url=link)
+            enviou = True
+    except Exception:
+        log.exception("Falha ao notificar (lote) usuário %s", usuario.id)
+    return enviou
+
+
 def _notificar_usuario(usuario, fortes: list[tuple]):
-    """Avisa o usuário, pelos próprios canais, sobre novas oportunidades fortes."""
-    n = len(fortes)
-    titulo = f"🎯 {n} nova(s) oportunidade(s) forte(s) no Radar"
-    linhas = []
-    for objeto, orgao, link in fortes[:10]:
-        item = f"• {objeto[:90]}"
-        if orgao:
-            item += f" ({orgao[:40]})"
-        if link:
-            item += f"\n  {link}"
-        linhas.append(item)
-    if n > 10:
-        linhas.append(f"... e mais {n - 10}.")
-    notificar_usuario_msg(usuario, titulo, "\n".join(linhas))
+    """Avisa o usuário sobre novas oportunidades de alta compatibilidade — agrupado."""
+    itens = [{"objeto": objeto, "orgao": orgao, "link": link}
+             for objeto, orgao, link in fortes]
+    n = len(itens)
+    titulo = (f"🎯 {n} novas oportunidades de alta compatibilidade"
+              if n > 1 else "🎯 Nova oportunidade de alta compatibilidade")
+    intro = "Encontramos no Radar editais que combinam bem com os seus produtos."
+    notificar_usuario_lote(usuario, titulo, intro, itens)
 
 
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,

@@ -232,9 +232,9 @@
     <div class="toolbar">
       <select id="f-nivel" onchange="loadEditais()">
         <option value="">Todos os níveis</option>
-        <option value="forte">Forte</option>
-        <option value="medio">Médio</option>
-        <option value="fraco">Fraco</option>
+        <option value="forte">Alta compatibilidade</option>
+        <option value="medio">Média compatibilidade</option>
+        <option value="fraco">Baixa compatibilidade</option>
       </select>
       <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
         <option value="todos">Produtos e serviços</option>
@@ -484,7 +484,7 @@
 
     <div class="card">
       <h3 style="margin-top:0">Notificações</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade forte nova.</p>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade de alta compatibilidade nova.</p>
       <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
         <span>Por e-mail <span class="muted" style="font-size:12px">(no seu e-mail de login)</span></span>
         <label class="switch"><input type="checkbox" id="pf-notif-email"><span class="slider"></span></label>
@@ -496,6 +496,20 @@
       <div id="tg-box" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:6px">
         <div id="tg-status" class="muted" style="font-size:13px">—</div>
         <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+      <h3 style="margin:0 0 2px">Aviso de abertura
+        <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Avisa, com alguns dias de antecedência, quando um edital de alta compatibilidade vai abrir. Dá tempo de preparar a documentação e decidir se vai participar. Chega pelos canais que você ligou acima.</span></span>
+      </h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba um aviso antes de um edital de alta compatibilidade abrir.</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar antes da abertura</span>
+        <label class="switch"><input type="checkbox" id="pf-avisar-abertura"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar com quantos dias de antecedência</span>
+        <input id="pf-dias-ante" type="number" min="0" max="30" style="width:80px" value="2">
       </div>
     </div>
 
@@ -510,7 +524,7 @@
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
       <th>Vistos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
       <th>Novos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
-      <th>Fortes <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos deram match forte com o seu catálogo.</span></span></th>
+      <th>Alta compat. <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos ficaram com alta compatibilidade com o seu catálogo.</span></span></th>
       <th>Erro</th></tr></thead>
       <tbody id="lista-logs"></tbody></table>
   </section>
@@ -593,8 +607,8 @@ async function loadResumo(){
   const cards = [
     {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')", aj:'Editais cuja sessão de disputa acontece hoje.'},
     {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')", aj:'Editais com prazo ainda aberto que deram match com o seu catálogo.'},
-    {n:r.fortes,    l:'Match forte',    cor:'var(--forte)', acao:"filtrarKpi('forte')", aj:'Alta compatibilidade: o edital combina bem com seus produtos. Vale olhar.'},
-    {n:r.medios,    l:'Match médio',    cor:'var(--medio)', acao:"filtrarKpi('medio')", aj:'Compatibilidade parcial: pode valer, confira o detalhe.'},
+    {n:r.fortes,    l:'Alta compatibilidade',    cor:'var(--forte)', acao:"filtrarKpi('forte')", aj:'Alta compatibilidade: o edital combina bem com seus produtos. Vale olhar.'},
+    {n:r.medios,    l:'Média compatibilidade',    cor:'var(--medio)', acao:"filtrarKpi('medio')", aj:'Compatibilidade parcial: pode valer, confira o detalhe.'},
     {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')", aj:'Editais que você ainda não marcou como lidos.'},
     {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')", aj:'Quantidade de produtos/serviços no seu catálogo.'},
   ];
@@ -622,6 +636,9 @@ function filtrarKpi(tipo){
 }
 function filtrarDoDia(){ filtrarKpi('hoje'); }
 
+function rotuloNivel(n){
+  return {forte:'Alta compatibilidade', medio:'Média compatibilidade', fraco:'Baixa compatibilidade'}[n] || n;
+}
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
@@ -634,7 +651,7 @@ function cardEdital(e){
   return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
     <div class="ed-top">
       <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
-      <span class="pill ${e.nivel}">${e.nivel} · ${e.score}</span>
+      <span class="pill ${e.nivel}">${rotuloNivel(e.nivel)} · ${e.score}</span>
     </div>
     <div class="ed-obj">${e.objeto||''}</div>
     <div class="ed-meta">
@@ -1008,7 +1025,7 @@ async function recalcular(){
   el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
   try{
     const r=await api('/api/recalcular',{method:'POST'});
-    el.textContent=`Recalculados ${r.atualizados} edital(is) · ${r.fortes} forte(s)`;
+    el.textContent=`Recalculados ${r.atualizados} edital(is) · ${r.fortes} de alta compatibilidade`;
     el.style.color='var(--muted)';
     loadEditais(); loadResumo();
   }catch(e){
@@ -1031,8 +1048,12 @@ async function analisarEdital(id, forcar){
       const flags=[];
       if(r.exige_amostra) flags.push('Exige amostra');
       if(r.exige_visita) flags.push('Exige visita técnica');
+      if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+      if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
+      else if(r.julgamento==='item') flags.push('Julgamento por item');
       corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
         ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
+        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${r.garantia_contratual}</p>`:''}
         ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
         ${_listaHTML('Prazos', r.prazos)}
         ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
@@ -1253,6 +1274,8 @@ async function loadPerfil(){
   $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
   $('#pf-notif-email').checked = !!p.notif_email;
   $('#pf-notif-tg').checked = !!p.notif_telegram;
+  $('#pf-avisar-abertura').checked = p.avisar_abertura !== false;
+  if(p.dias_antecedencia != null) $('#pf-dias-ante').value = p.dias_antecedencia;
   carregarVinculoTelegram();
 }
 
@@ -1314,6 +1337,8 @@ async function salvarPerfil(){
   const body = {
     nome: $('#pf-nome').value, documento: $('#pf-doc').value,
     notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
+    avisar_abertura: $('#pf-avisar-abertura').checked,
+    dias_antecedencia: parseInt($('#pf-dias-ante').value || '2', 10),
     endereco: {
       cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,
       numero: $('#pf-numero').value, bairro: $('#pf-bairro').value,
