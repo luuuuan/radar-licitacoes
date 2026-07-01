@@ -1029,8 +1029,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
     """Estado da coleta para o indicador do dashboard."""
     ultimo = db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id)
-        .order_by(LogColeta.id.desc()).limit(1)
+        select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
     if not ultimo:
         return {"estado": "nunca"}
@@ -1044,8 +1043,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 
     # última coleta concluída (pode ser anterior à que está rodando)
     ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id,
-                                LogColeta.finalizado_em.is_not(None))
+        select(LogColeta).where(LogColeta.finalizado_em.is_not(None))
         .order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
 
@@ -1066,10 +1064,7 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 @app.get("/api/logs")
 def logs(user: Usuario = Depends(_auth.get_current_user),
          db: Session = Depends(get_session)):
-    regs = db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id)
-        .order_by(LogColeta.id.desc()).limit(30)
-    ).scalars().all()
+    regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
     return [{
         "id": l.id, "fonte": l.fonte,
         "iniciado_em": _brt(l.iniciado_em),
