@@ -80,7 +80,8 @@ def _usuarios_ativos(db: Session):
     return db.execute(select(Usuario).where(Usuario.ativo == True)).scalars().all()  # noqa: E712
 
 
-def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False) -> dict:
+def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
+                           forcar_usar_ia: bool | None = None, progresso=None) -> dict:
     """Gera/atualiza os matches de UM usuário contra os editais coletados,
     usando o catálogo e as regras de exclusão dele. Isolado por usuário."""
     catalogo = _carregar_catalogo(db, usuario.id)
@@ -88,6 +89,8 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     from . import configuracoes as cfg
     from .auth import decifrar
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
+    if forcar_usar_ia is not None:   # recálculo pode forçar sem IA (rápido)
+        usar_ia = forcar_usar_ia
     gemini_key = decifrar(usuario.gemini_key_cifrada)   # chave do próprio usuário
     engine = MatchingEngine(catalogo, usar_ia=usar_ia, gemini_key=gemini_key)
 
@@ -95,6 +98,9 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
     editais = db.execute(
         select(Edital).order_by(Edital.coletado_em.desc())
     ).scalars().all()
+    total = len(editais)
+    if progresso:
+        progresso(0, total)
 
     # carrega de uma vez os matches que o usuário já tem (mais rápido que consultar
     # um a um, e evita tentar criar duplicata na mesma rodada)
@@ -106,7 +112,9 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
 
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
     novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
-    for ed in editais:
+    for _i, ed in enumerate(editais):
+        if progresso and _i % 50 == 0:
+            progresso(_i, total)
         existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
@@ -147,6 +155,8 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False)
 
     if novos_fortes and not recalcular_todos:
         _notificar_usuario(usuario, novos_fortes)
+    if progresso:
+        progresso(total, total)
     return resumo
 
 
@@ -284,9 +294,14 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
     return resumo
 
 
-def recalcular_matches(db: Session, usuario_id: int) -> dict:
-    """Reavalia todos os editais contra o catálogo ATUAL do usuário informado."""
+def recalcular_matches(db: Session, usuario_id: int, usar_ia: bool | None = None,
+                       progresso=None) -> dict:
+    """Reavalia todos os editais contra o catálogo ATUAL do usuário.
+    - usar_ia=None: respeita a configuração; usar_ia=False: força recálculo só por
+      texto (rápido, sem gastar cota — recomendado para a base inteira).
+    - progresso(feito, total): callback opcional para reportar andamento."""
     u = db.get(Usuario, usuario_id)
     if not u:
         return {"editais": 0, "atualizados": 0, "fortes": 0}
-    return _gerar_matches_usuario(db, u, recalcular_todos=True)
+    return _gerar_matches_usuario(db, u, recalcular_todos=True,
+                                  forcar_usar_ia=usar_ia, progresso=progresso)

@@ -16,8 +16,11 @@
     --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
   }
   *{box-sizing:border-box}
+  html,body{max-width:100%;overflow-x:hidden}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     background:var(--bg);color:var(--txt);font-size:14px}
+  /* imagens nunca ultrapassam a largura disponível (ícones SVG têm tamanho fixo) */
+  img{max-width:100%;height:auto}
   header{padding:16px 24px;border-bottom:1px solid var(--line);
     display:flex;align-items:center;gap:14px;background:var(--panel)}
   header h1{font-size:18px;margin:0;font-weight:600}
@@ -180,6 +183,15 @@
     .modal-card{padding:16px;max-width:100%}
     .acoes .btn,.acoes .status-sel{flex:1 1 auto}
     .acoes a{flex-basis:100%}
+    /* nenhum campo/elemento pode ser mais largo que a tela */
+    .wrap,section,.card{max-width:100%}
+    input,select,textarea{max-width:100%}
+    /* inputs com largura fixa (ex.: 320px) passam a ocupar a linha toda */
+    .card input[style*="width:320px"],.card input[style*="width:120px"],
+    .card input[style*="width:90px"]{width:100% !important}
+    .ed-meta{gap:8px}
+    /* toolbar não empurra a largura */
+    .toolbar{max-width:100%}
   }
   /* Celular pequeno */
   @media (max-width:400px){
@@ -202,7 +214,7 @@
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
   <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
-  <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+  <button class="btn ghost" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
   <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
   <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
     <span id="user-nome" class="badge" title="Sua conta">—</span>
@@ -1171,11 +1183,30 @@ async function coletar(){
   }, 8000);
 }
 
-async function recalcular(){
+function abrirRecalcular(){
+  const mount=$('#modal-mount');
+  mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:460px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0">Recalcular editais</h3>
+        <button class="btn ghost" onclick="fecharModal()">fechar</button>
+      </div>
+      <p class="muted" style="font-size:13px;margin-top:0">Reavalia todos os editais já coletados contra o seu catálogo atual. Como você tem muitos editais, isso pode demorar.</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+        <button class="btn" onclick="recalcular(false)">⚡ Recalcular rápido (sem IA)</button>
+        <span class="muted" style="font-size:12px;margin-top:-6px">Recomendado para a base inteira. Usa só texto — rápido e não gasta cota da IA.</span>
+        <button class="btn ghost" onclick="recalcular(true)">✨ Recalcular com IA</button>
+        <span class="muted" style="font-size:12px;margin-top:-6px">Mais preciso, porém bem mais lento e pode esgotar a cota diária do Gemini.</span>
+      </div>
+    </div></div>`;
+}
+
+async function recalcular(comIA){
+  fecharModal();
   const el=$('#coleta-status');
   let r;
   try{
-    r=await api('/api/recalcular',{method:'POST'});
+    r=await api('/api/recalcular?com_ia='+(comIA?'true':'false'),{method:'POST'});
   }catch(e){
     el.textContent='Erro ao recalcular'; el.style.color='#f87171';
     return;
@@ -1185,24 +1216,30 @@ async function recalcular(){
     return;
   }
   el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
-  // roda em segundo plano no servidor; aqui só consultamos o status
   let n=0;
   const t=setInterval(async()=>{
     let s;
     try{ s=await api('/api/recalcular/status'); }catch(e){ return; }
     if(s.rodando){
-      if(++n>120) clearInterval(t);     // ~20 min de segurança
+      // mostra progresso (X de Y) quando disponível
+      if(s.total){
+        const pct = Math.min(100, Math.round((s.feito||0)/s.total*100));
+        el.innerHTML=`${ICN.relogio} Recalculando… ${pct}% (${s.feito||0}/${s.total})`;
+      }
+      if(++n>360) clearInterval(t);     // ~60 min de segurança
       return;
     }
     clearInterval(t);
     if(s.erro){
       el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+      toast('O recálculo falhou: '+s.erro, 'erro', 6000);
     } else {
-      el.textContent=`Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
+      el.textContent=`✓ Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
       el.style.color='var(--muted)';
+      toast('Recálculo concluído!', 'ok', 4000);
     }
     loadEditais(); loadResumo();
-  }, 10000);
+  }, 5000);
 }
 
 function _listaHTML(titulo, itens){

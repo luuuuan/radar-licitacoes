@@ -983,14 +983,21 @@ def _lock_recalculo(usuario_id: int) -> threading.Lock:
     return _recalculo_locks.setdefault(usuario_id, threading.Lock())
 
 
-def _rodar_recalculo_bg(usuario_id: int):
+def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
     lock = _lock_recalculo(usuario_id)
     if not lock.acquire(blocking=False):
         return
     db = SessionLocal()
     try:
         from .service import recalcular_matches
-        resultado = recalcular_matches(db, usuario_id=usuario_id)
+
+        def _prog(feito, total):
+            st = _recalculo_status.get(usuario_id, {})
+            st.update({"rodando": True, "erro": None, "feito": feito, "total": total})
+            _recalculo_status[usuario_id] = st
+
+        resultado = recalcular_matches(db, usuario_id=usuario_id,
+                                       usar_ia=usar_ia, progresso=_prog)
         _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
     except Exception as e:
         db.rollback()
@@ -1002,16 +1009,20 @@ def _rodar_recalculo_bg(usuario_id: int):
 
 
 @app.post("/api/recalcular")
-def recalcular(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user)):
+def recalcular(bg: BackgroundTasks, com_ia: bool = Query(True),
+               user: Usuario = Depends(_auth.get_current_user)):
     """Dispara, em segundo plano, a reavaliação de todos os editais já coletados
     contra o catálogo atual DESTE usuário. Retorna na hora; o resultado é
-    consultado em /api/recalcular/status."""
+    consultado em /api/recalcular/status.
+    com_ia=false recalcula só por texto (rápido, sem gastar cota)."""
     lock = _lock_recalculo(user.id)
     if lock.locked():
         return {"ok": False, "em_andamento": True,
                 "mensagem": "Já existe um recálculo em andamento."}
-    _recalculo_status[user.id] = {"rodando": True, "erro": None}
-    bg.add_task(_rodar_recalculo_bg, user.id)
+    _recalculo_status[user.id] = {"rodando": True, "erro": None, "feito": 0, "total": 0}
+    # com_ia=True respeita a config; com_ia=False força sem IA
+    usar_ia = None if com_ia else False
+    bg.add_task(_rodar_recalculo_bg, user.id, usar_ia)
     return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
 
 
