@@ -19,6 +19,7 @@ import csv
 import io
 import os
 import base64
+import logging
 import secrets
 import threading
 import requests
@@ -40,6 +41,8 @@ from .database import get_session, init_db, SessionLocal
 from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta
 from .service import processar_coleta
 from .catalogo import catmat
+
+log = logging.getLogger("recalculo")
 
 
 @asynccontextmanager
@@ -905,12 +908,57 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
+# --------------------------- Recalcular (background) ------------------- #
+# Recalcular todos os editais já coletados pode demorar bastante (percorre
+# TODOS os editais, não só os novos, refazendo TF-IDF/fuzzy e, se ativa, IA).
+# Rodar isso dentro da própria request HTTP estourava o timeout do proxy
+# (Render free) antes de terminar, e o front recebia uma resposta que não
+# era JSON -> "Erro ao recalcular". Agora roda em background, com o mesmo
+# padrão de /api/coletar, e o front consulta o status por polling.
+_recalculo_locks: dict[int, threading.Lock] = {}
+_recalculo_status: dict[int, dict] = {}
+
+
+def _lock_recalculo(usuario_id: int) -> threading.Lock:
+    return _recalculo_locks.setdefault(usuario_id, threading.Lock())
+
+
+def _rodar_recalculo_bg(usuario_id: int):
+    lock = _lock_recalculo(usuario_id)
+    if not lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        from .service import recalcular_matches
+        resultado = recalcular_matches(db, usuario_id=usuario_id)
+        _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
+    except Exception as e:
+        db.rollback()
+        log.exception("Erro ao recalcular matches (usuário %s)", usuario_id)
+        _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
+    finally:
+        db.close()
+        lock.release()
+
+
 @app.post("/api/recalcular")
-def recalcular(user: Usuario = Depends(_auth.get_current_user),
+def recalcular(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
                db: Session = Depends(get_session)):
-    """Reavalia os editais já coletados contra o catálogo atual DESTE usuário."""
-    from .service import recalcular_matches
-    return recalcular_matches(db, usuario_id=user.id)
+    """Dispara, em segundo plano, a reavaliação de todos os editais já
+    coletados contra o catálogo atual DESTE usuário. Retorna na hora; o
+    resultado é consultado em /api/recalcular/status."""
+    lock = _lock_recalculo(user.id)
+    if lock.locked():
+        return {"ok": False, "em_andamento": True,
+                "mensagem": "Já existe um recálculo em andamento."}
+    _recalculo_status[user.id] = {"rodando": True, "erro": None}
+    bg.add_task(_rodar_recalculo_bg, user.id)
+    return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
+
+
+@app.get("/api/recalcular/status")
+def recalcular_status(user: Usuario = Depends(_auth.get_current_user)):
+    return _recalculo_status.get(user.id, {"rodando": False, "erro": None})
 
 
 def _ref_pncp(ed: Edital):
