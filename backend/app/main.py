@@ -969,12 +969,55 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
+# --------------------------- Recalcular (background) ------------------- #
+# Recalcular percorre TODOS os editais já coletados (podem ser dezenas de
+# milhares) contra o catálogo. Rodar isso dentro da request HTTP estoura o
+# timeout do proxy do Render antes de terminar (o front recebe resposta cortada
+# e o "Recalculando" morre na hora). Por isso roda em segundo plano, com o
+# mesmo padrão da coleta, e o front acompanha por polling em /api/recalcular/status.
+_recalculo_locks: dict[int, threading.Lock] = {}
+_recalculo_status: dict[int, dict] = {}
+
+
+def _lock_recalculo(usuario_id: int) -> threading.Lock:
+    return _recalculo_locks.setdefault(usuario_id, threading.Lock())
+
+
+def _rodar_recalculo_bg(usuario_id: int):
+    lock = _lock_recalculo(usuario_id)
+    if not lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        from .service import recalcular_matches
+        resultado = recalcular_matches(db, usuario_id=usuario_id)
+        _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
+    except Exception as e:
+        db.rollback()
+        log.exception("Erro ao recalcular matches (usuário %s)", usuario_id)
+        _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
+    finally:
+        db.close()
+        lock.release()
+
+
 @app.post("/api/recalcular")
-def recalcular(user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    """Reavalia os editais já coletados contra o catálogo atual DESTE usuário."""
-    from .service import recalcular_matches
-    return recalcular_matches(db, usuario_id=user.id)
+def recalcular(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user)):
+    """Dispara, em segundo plano, a reavaliação de todos os editais já coletados
+    contra o catálogo atual DESTE usuário. Retorna na hora; o resultado é
+    consultado em /api/recalcular/status."""
+    lock = _lock_recalculo(user.id)
+    if lock.locked():
+        return {"ok": False, "em_andamento": True,
+                "mensagem": "Já existe um recálculo em andamento."}
+    _recalculo_status[user.id] = {"rodando": True, "erro": None}
+    bg.add_task(_rodar_recalculo_bg, user.id)
+    return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
+
+
+@app.get("/api/recalcular/status")
+def recalcular_status(user: Usuario = Depends(_auth.get_current_user)):
+    return _recalculo_status.get(user.id, {"rodando": False, "erro": None})
 
 
 def _ref_pncp(ed: Edital):
@@ -1307,42 +1350,6 @@ def buscar_catmat(
     if "debug" in r:
         saida["debug"] = r["debug"]
     return saida
-
-
-@app.get("/api/catmat/sugerir-ia")
-def sugerir_catmat_ia(
-    descricao: str = Query(..., min_length=2),
-    tipo: str = Query("material", pattern="^(material|servico)$"),
-    user: Usuario = Depends(_auth.get_current_user),
-):
-    """Usa a IA (chave Gemini do usuário) para sugerir termos de busca melhores
-    para o catálogo oficial CATMAT/CATSER. NÃO inventa códigos — devolve termos
-    e palavras-chave que o usuário confirma no catálogo oficial."""
-    from . import analise_edital as ia
-    import json as _json
-    chave = _auth.decifrar(user.gemini_key_cifrada)
-    if not ia.ia_texto_disponivel(chave):
-        return {"status": "sem_ia"}
-    catalogo = "CATMAT (materiais)" if tipo == "material" else "CATSER (serviços)"
-    prompt = (
-        f"Você conhece o catálogo oficial brasileiro {catalogo} de compras públicas.\n"
-        f"Para o item descrito abaixo, responda APENAS um JSON válido (sem ```), no formato:\n"
-        f'{{"termos": ["termo1", "termo2", "termo3"], "observacao": "texto curto"}}\n'
-        f'- "termos": 2 a 4 termos de busca curtos e objetivos, do MAIS provável ao menos, '
-        f'usando a nomenclatura que costuma aparecer no {catalogo} (ex.: para "papel A4" -> '
-        f'"papel sulfite", "papel A4"). NÃO invente códigos numéricos.\n'
-        f'- "observacao": no máximo uma frase orientando a busca.\n\n'
-        f"ITEM: {descricao[:300]}"
-    )
-    txt, st = ia._gerar(prompt, api_key=chave, timeout=40)
-    if st != "ok" or not txt:
-        return {"status": "erro_ia", "detalhe": st}
-    data = ia._parse_json(txt)
-    if not isinstance(data, dict) or not data.get("termos"):
-        return {"status": "resposta_invalida"}
-    termos = [str(t) for t in (data.get("termos") or [])][:4]
-    return {"status": "ok", "termos": termos,
-            "observacao": str(data.get("observacao") or "")}
 
 
 # --------------------------- Documentos (habilitação) ----------------- #

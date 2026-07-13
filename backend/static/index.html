@@ -308,11 +308,9 @@
           <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
           <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
           <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%">
-            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button>
-            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="sugerirCatalogoIA('material')">✨ Sugerir com IA</button></div>
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button></div>
           <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%">
-            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button>
-            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="sugerirCatalogoIA('servico')">✨ Sugerir com IA</button></div>
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
         </div>
 
         <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
@@ -989,36 +987,6 @@ async function delFornecedor(id){
   await fetch('/api/fornecedores/'+id,{method:'DELETE'}); loadFornecedores();
 }
 
-async function sugerirCatalogoIA(tipo){
-  const desc = ($('#p-desc').value||'').trim();
-  if(desc.length<2){ toast('Escreva a descrição do produto primeiro.', 'aviso'); return; }
-  toast('Consultando a IA…', 'aviso', 2500);
-  try{
-    const r = await api(`/api/catmat/sugerir-ia?descricao=${encodeURIComponent(desc)}&tipo=${tipo}`);
-    if(r.status==='sem_ia'){
-      toast('Informe sua chave Gemini em "Meu perfil" para usar a IA.', 'aviso', 5000); return;
-    }
-    if(r.status!=='ok' || !r.termos || !r.termos.length){
-      toast('A IA não conseguiu sugerir agora. Tente o catálogo oficial.', 'aviso', 4000); return;
-    }
-    // mostra os termos sugeridos; ao clicar, abre o catálogo oficial com aquele termo
-    const mount=$('#modal-mount');
-    const alvo = tipo==='material' ? 'CATMAT' : 'CATSER';
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
-      <div class="modal-card" style="max-width:520px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <h3 style="margin:0">Sugestões de busca ${alvo} (IA)</h3>
-          <button class="btn ghost" onclick="fecharModal()">fechar</button>
-        </div>
-        <p class="muted" style="font-size:12px;margin-top:0">A IA sugere termos de busca — ela não inventa códigos. Clique num termo para procurá-lo no catálogo oficial e copiar o código correto de lá.</p>
-        ${r.observacao?`<p style="font-size:13px">${r.observacao}</p>`:''}
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-          ${r.termos.map(t=>`<button class="btn ghost" style="text-align:left" onclick="window.open('https://catalogo.compras.gov.br/cnbs-web/busca?pesquisa=${encodeURIComponent(t)}','_blank')">${ICN.busca} ${t}</button>`).join('')}
-        </div>
-      </div></div>`;
-  }catch(e){ toast('Erro ao consultar a IA.', 'erro'); }
-}
-
 async function loadRegras(){
   const rs=await api('/api/regras');
   $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${r.tipo}</td><td>${r.valor}</td>
@@ -1205,15 +1173,36 @@ async function coletar(){
 
 async function recalcular(){
   const el=$('#coleta-status');
-  el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
+  let r;
   try{
-    const r=await api('/api/recalcular',{method:'POST'});
-    el.textContent=`Recalculados ${r.atualizados} edital(is) · ${r.fortes} de alta compatibilidade`;
-    el.style.color='var(--muted)';
-    loadEditais(); loadResumo();
+    r=await api('/api/recalcular',{method:'POST'});
   }catch(e){
     el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+    return;
   }
+  if(r && r.em_andamento){
+    toast(r.mensagem || 'Já existe um recálculo em andamento.', 'aviso');
+    return;
+  }
+  el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
+  // roda em segundo plano no servidor; aqui só consultamos o status
+  let n=0;
+  const t=setInterval(async()=>{
+    let s;
+    try{ s=await api('/api/recalcular/status'); }catch(e){ return; }
+    if(s.rodando){
+      if(++n>120) clearInterval(t);     // ~20 min de segurança
+      return;
+    }
+    clearInterval(t);
+    if(s.erro){
+      el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+    } else {
+      el.textContent=`Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
+      el.style.color='var(--muted)';
+    }
+    loadEditais(); loadResumo();
+  }, 10000);
 }
 
 function _listaHTML(titulo, itens){
