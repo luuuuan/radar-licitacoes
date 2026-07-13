@@ -19,7 +19,6 @@ import csv
 import io
 import os
 import base64
-import logging
 import secrets
 import threading
 import requests
@@ -38,11 +37,9 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta
+from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor
 from .service import processar_coleta
 from .catalogo import catmat
-
-log = logging.getLogger("recalculo")
 
 
 @asynccontextmanager
@@ -422,6 +419,7 @@ class ProdutoIn(BaseModel):
     fornecedor_nome: str | None = None
     fornecedor_contato: str | None = None
     fornecedor_site: str | None = None
+    fornecedor_id: int | None = None
 
 
 class RegraIn(BaseModel):
@@ -442,6 +440,69 @@ class DocumentoIn(BaseModel):
     observacao: str | None = None
 
 
+class FornecedorIn(BaseModel):
+    nome: str
+    telefone: str | None = None
+    whatsapp: str | None = None
+    email: str | None = None
+    site: str | None = None
+    observacao: str | None = None
+
+
+def _fornecedor_dict(f: Fornecedor) -> dict:
+    return {"id": f.id, "nome": f.nome, "telefone": f.telefone,
+            "whatsapp": f.whatsapp, "email": f.email, "site": f.site,
+            "observacao": f.observacao}
+
+
+@app.get("/api/fornecedores")
+def listar_fornecedores(user: Usuario = Depends(_auth.get_current_user),
+                        db: Session = Depends(get_session)):
+    fs = db.execute(select(Fornecedor).where(Fornecedor.usuario_id == user.id,
+                    Fornecedor.ativo == True).order_by(Fornecedor.nome.asc())  # noqa: E712
+                    ).scalars().all()
+    return [_fornecedor_dict(f) for f in fs]
+
+
+@app.post("/api/fornecedores")
+def criar_fornecedor(dados: FornecedorIn, user: Usuario = Depends(_auth.get_current_user),
+                     db: Session = Depends(get_session)):
+    if not (dados.nome or "").strip():
+        raise HTTPException(400, "Informe o nome do fornecedor.")
+    f = Fornecedor(**dados.model_dump(), usuario_id=user.id)
+    db.add(f)
+    db.commit()
+    db.refresh(f)
+    return _fornecedor_dict(f)
+
+
+def _fornecedor_do_usuario(db, fid, user) -> Fornecedor:
+    f = db.get(Fornecedor, fid)
+    if not f or f.usuario_id != user.id:
+        raise HTTPException(404, "Fornecedor não encontrado")
+    return f
+
+
+@app.put("/api/fornecedores/{fid}")
+def atualizar_fornecedor(fid: int, dados: FornecedorIn,
+                         user: Usuario = Depends(_auth.get_current_user),
+                         db: Session = Depends(get_session)):
+    f = _fornecedor_do_usuario(db, fid, user)
+    for campo, valor in dados.model_dump().items():
+        setattr(f, campo, valor)
+    db.commit()
+    return _fornecedor_dict(f)
+
+
+@app.delete("/api/fornecedores/{fid}")
+def remover_fornecedor(fid: int, user: Usuario = Depends(_auth.get_current_user),
+                       db: Session = Depends(get_session)):
+    f = _fornecedor_do_usuario(db, fid, user)
+    f.ativo = False   # soft delete: produtos que apontam pra ele não quebram
+    db.commit()
+    return {"ok": True}
+
+
 # --------------------------- Produtos --------------------------------- #
 def _produto_dict(p: Produto) -> dict:
     return {
@@ -451,7 +512,7 @@ def _produto_dict(p: Produto) -> dict:
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
         "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
-        "fornecedor_site": p.fornecedor_site,
+        "fornecedor_site": p.fornecedor_site, "fornecedor_id": p.fornecedor_id,
     }
 
 
@@ -908,57 +969,12 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
-# --------------------------- Recalcular (background) ------------------- #
-# Recalcular todos os editais já coletados pode demorar bastante (percorre
-# TODOS os editais, não só os novos, refazendo TF-IDF/fuzzy e, se ativa, IA).
-# Rodar isso dentro da própria request HTTP estourava o timeout do proxy
-# (Render free) antes de terminar, e o front recebia uma resposta que não
-# era JSON -> "Erro ao recalcular". Agora roda em background, com o mesmo
-# padrão de /api/coletar, e o front consulta o status por polling.
-_recalculo_locks: dict[int, threading.Lock] = {}
-_recalculo_status: dict[int, dict] = {}
-
-
-def _lock_recalculo(usuario_id: int) -> threading.Lock:
-    return _recalculo_locks.setdefault(usuario_id, threading.Lock())
-
-
-def _rodar_recalculo_bg(usuario_id: int):
-    lock = _lock_recalculo(usuario_id)
-    if not lock.acquire(blocking=False):
-        return
-    db = SessionLocal()
-    try:
-        from .service import recalcular_matches
-        resultado = recalcular_matches(db, usuario_id=usuario_id)
-        _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
-    except Exception as e:
-        db.rollback()
-        log.exception("Erro ao recalcular matches (usuário %s)", usuario_id)
-        _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
-    finally:
-        db.close()
-        lock.release()
-
-
 @app.post("/api/recalcular")
-def recalcular(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
+def recalcular(user: Usuario = Depends(_auth.get_current_user),
                db: Session = Depends(get_session)):
-    """Dispara, em segundo plano, a reavaliação de todos os editais já
-    coletados contra o catálogo atual DESTE usuário. Retorna na hora; o
-    resultado é consultado em /api/recalcular/status."""
-    lock = _lock_recalculo(user.id)
-    if lock.locked():
-        return {"ok": False, "em_andamento": True,
-                "mensagem": "Já existe um recálculo em andamento."}
-    _recalculo_status[user.id] = {"rodando": True, "erro": None}
-    bg.add_task(_rodar_recalculo_bg, user.id)
-    return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
-
-
-@app.get("/api/recalcular/status")
-def recalcular_status(user: Usuario = Depends(_auth.get_current_user)):
-    return _recalculo_status.get(user.id, {"rodando": False, "erro": None})
+    """Reavalia os editais já coletados contra o catálogo atual DESTE usuário."""
+    from .service import recalcular_matches
+    return recalcular_matches(db, usuario_id=user.id)
 
 
 def _ref_pncp(ed: Edital):
@@ -1077,7 +1093,8 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
     """Estado da coleta para o indicador do dashboard."""
     ultimo = db.execute(
-        select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
+        select(LogColeta).where(LogColeta.usuario_id == user.id)
+        .order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
     if not ultimo:
         return {"estado": "nunca"}
@@ -1091,7 +1108,8 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 
     # última coleta concluída (pode ser anterior à que está rodando)
     ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
-        select(LogColeta).where(LogColeta.finalizado_em.is_not(None))
+        select(LogColeta).where(LogColeta.usuario_id == user.id,
+                                LogColeta.finalizado_em.is_not(None))
         .order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
 
@@ -1112,7 +1130,10 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
 @app.get("/api/logs")
 def logs(user: Usuario = Depends(_auth.get_current_user),
          db: Session = Depends(get_session)):
-    regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
+    regs = db.execute(
+        select(LogColeta).where(LogColeta.usuario_id == user.id)
+        .order_by(LogColeta.id.desc()).limit(30)
+    ).scalars().all()
     return [{
         "id": l.id, "fonte": l.fonte,
         "iniciado_em": _brt(l.iniciado_em),
@@ -1286,6 +1307,42 @@ def buscar_catmat(
     if "debug" in r:
         saida["debug"] = r["debug"]
     return saida
+
+
+@app.get("/api/catmat/sugerir-ia")
+def sugerir_catmat_ia(
+    descricao: str = Query(..., min_length=2),
+    tipo: str = Query("material", pattern="^(material|servico)$"),
+    user: Usuario = Depends(_auth.get_current_user),
+):
+    """Usa a IA (chave Gemini do usuário) para sugerir termos de busca melhores
+    para o catálogo oficial CATMAT/CATSER. NÃO inventa códigos — devolve termos
+    e palavras-chave que o usuário confirma no catálogo oficial."""
+    from . import analise_edital as ia
+    import json as _json
+    chave = _auth.decifrar(user.gemini_key_cifrada)
+    if not ia.ia_texto_disponivel(chave):
+        return {"status": "sem_ia"}
+    catalogo = "CATMAT (materiais)" if tipo == "material" else "CATSER (serviços)"
+    prompt = (
+        f"Você conhece o catálogo oficial brasileiro {catalogo} de compras públicas.\n"
+        f"Para o item descrito abaixo, responda APENAS um JSON válido (sem ```), no formato:\n"
+        f'{{"termos": ["termo1", "termo2", "termo3"], "observacao": "texto curto"}}\n'
+        f'- "termos": 2 a 4 termos de busca curtos e objetivos, do MAIS provável ao menos, '
+        f'usando a nomenclatura que costuma aparecer no {catalogo} (ex.: para "papel A4" -> '
+        f'"papel sulfite", "papel A4"). NÃO invente códigos numéricos.\n'
+        f'- "observacao": no máximo uma frase orientando a busca.\n\n'
+        f"ITEM: {descricao[:300]}"
+    )
+    txt, st = ia._gerar(prompt, api_key=chave, timeout=40)
+    if st != "ok" or not txt:
+        return {"status": "erro_ia", "detalhe": st}
+    data = ia._parse_json(txt)
+    if not isinstance(data, dict) or not data.get("termos"):
+        return {"status": "resposta_invalida"}
+    termos = [str(t) for t in (data.get("termos") or [])][:4]
+    return {"status": "ok", "termos": termos,
+            "observacao": str(data.get("observacao") or "")}
 
 
 # --------------------------- Documentos (habilitação) ----------------- #

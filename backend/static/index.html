@@ -1,1450 +1,1572 @@
-"""
-API FastAPI do Radar de Licitações + dashboard estático.
-
-Rotas principais:
-  GET  /api/produtos            lista catálogo
-  POST /api/produtos            cadastra produto
-  DEL  /api/produtos/{id}       remove produto
-  GET  /api/editais             lista editais com match (filtros: nivel, uf, lido)
-  POST /api/editais/{id}/marcar marca lido/interessante
-  GET  /api/regras              lista regras de exclusão
-  POST /api/regras              cria regra
-  DEL  /api/regras/{id}         remove regra
-  POST /api/coletar             dispara coleta manual (em background)
-  GET  /api/export.csv          exporta matches em CSV
-  GET  /api/logs                histórico de coletas
-  GET  /api/resumo              KPIs do dashboard
-"""
-import csv
-import io
-import os
-import base64
-import logging
-import secrets
-import threading
-import requests
-from contextlib import asynccontextmanager
-from datetime import date, datetime
-from .models import utcnow as _utcnow_main
-from zoneinfo import ZoneInfo
-
-from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel
-from sqlalchemy import select, func
-from sqlalchemy.orm import Session
-
-from .config import settings
-from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta
-from .service import processar_coleta
-from .catalogo import catmat
-
-log = logging.getLogger("recalculo")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    yield
-
-
-app = FastAPI(title="Radar de Licitações", version="2.0", lifespan=lifespan)
-
-# Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
-_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar"}
-_PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
-
-BASE_DIR = os.path.dirname(__file__)
-# A pasta static fica em backend/static (um nível acima de backend/app)
-STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
-
-BR_TZ = ZoneInfo("America/Sao_Paulo")
-
-
-def _brt(dt: datetime | None) -> str | None:
-    """Converte um datetime UTC (naive) para o horário de Brasília em ISO."""
-    if not dt:
-        return None
-    return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(BR_TZ).isoformat()
-
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-
-# =========================== AUTENTICAÇÃO ============================ #
-import json as _json_auth
-import secrets as _secrets_auth
-from email_validator import validate_email, EmailNotValidError
-from fastapi import Response as _Resp
-from .models import Usuario
-from . import auth as _auth
-from .notifications import email as _email_mod
-
-
-class CadastroIn(BaseModel):
-    nome: str
-    email: str
-    senha: str
-    documento: str | None = None       # CPF ou CNPJ
-
-
-def _email_html_verificacao(nome: str, link: str) -> str:
-    """E-mail de confirmação em HTML simples e sóbrio (melhora a entrega)."""
-    return f"""\
 <!DOCTYPE html>
-<html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#1a2129">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 0">
-    <tr><td align="center">
-      <table role="presentation" width="480" cellpadding="0" cellspacing="0"
-             style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
-        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
-          Radar de Licitações
-        </td></tr>
-        <tr><td style="padding:28px">
-          <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
-          <p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#3b4654">
-            Falta só um passo para ativar a sua conta. Clique no botão abaixo para
-            confirmar o seu e-mail.
-          </p>
-          <p style="margin:0 0 24px;text-align:center">
-            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
-               padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
-              Confirmar meu e-mail
-            </a>
-          </p>
-          <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
-            Se o botão não funcionar, copie e cole este endereço no navegador:
-          </p>
-          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
-          <p style="margin:0;font-size:12px;color:#94a3b8">
-            Se você não criou esta conta, é só ignorar esta mensagem.
-          </p>
-        </td></tr>
-      </table>
-      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
-    </td></tr>
-  </table>
-</body></html>"""
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radar de Licitações</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
+    --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
+    --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
+    --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--txt);font-size:14px}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:14px;background:var(--panel)}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
+    padding:2px 8px;border-radius:20px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .kpi .n{font-size:24px;font-weight:700}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
+  nav{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+  nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
+    padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
+  nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  /* elementos do menu lateral (só aparecem no mobile) */
+  .hamburger{display:none;background:transparent;border:none;color:var(--txt);cursor:pointer;padding:4px;margin-right:4px}
+  .nav-head{display:none}
+  .nav-overlay{display:none}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  select,input,textarea{background:var(--panel2);border:1px solid var(--line);
+    color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
+  .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
+    border-radius:7px;cursor:pointer;font-size:13px}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px;margin-bottom:12px}
+  .ed-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase}
+  .pill.forte{background:rgba(34,197,94,.15);color:var(--forte)}
+  .pill.medio{background:rgba(234,179,8,.15);color:var(--medio)}
+  .pill.fraco{background:rgba(100,116,139,.15);color:var(--fraco)}
+  .ed-meta{color:var(--muted);font-size:12px;margin:8px 0;display:flex;gap:14px;flex-wrap:wrap}
+  .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
+  .prazo{font-weight:600}
+  .prazo.urg{color:#f87171}
+  .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
+  .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  .muted{color:var(--muted)}
+  .hidden{display:none}
+  .det{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .field{margin-bottom:10px}
 
+  /* ---- Tela de carregamento ---- */
+  #splash{position:fixed;inset:0;background:var(--bg);z-index:9999;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    transition:opacity .4s ease}
+  #splash.out{opacity:0;pointer-events:none}
+  .radar{width:90px;height:90px;border-radius:50%;position:relative;
+    border:2px solid var(--line);overflow:hidden}
+  .radar::before{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0 280deg, rgba(59,130,246,.55) 360deg);
+    animation:spin 1.3s linear infinite}
+  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle, transparent 30%, rgba(59,130,246,.08) 31%, transparent 32%,
+      transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
 
-class LoginIn(BaseModel):
-    email: str
-    senha: str
+  /* ---- Modal de detalhes ---- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:5000;
+    display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
+  .modal.hidden{display:none}
+  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    width:100%;max-width:780px;padding:22px}
+  .modal-card h2{margin:0 0 4px;font-size:18px}
+  .close-x{float:right;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:none;background:none}
+  .item-row{border:1px solid var(--line);border-radius:9px;padding:12px;margin:10px 0}
+  .item-row.match{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.05)}
+  .precos{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+  .preco-box{background:var(--panel2);border-radius:8px;padding:8px 10px}
+  .preco-box .v{font-size:16px;font-weight:700}
+  .preco-box .l{font-size:11px;color:var(--muted)}
+  .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .card-click{cursor:pointer;transition:border-color .15s, transform .05s}
+  .card-click:hover{border-color:var(--accent)}
+  .card-click:active{transform:scale(0.998)}
+  /* Tooltip de ajuda (?) — funciona no hover e no clique/toque */
+  .ajuda{position:relative;display:inline-flex;align-items:center;justify-content:center;
+    width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);
+    font-size:11px;font-weight:600;cursor:help;margin-left:5px;vertical-align:middle;user-select:none;flex-shrink:0}
+  .ajuda:hover{border-color:var(--accent);color:var(--accent)}
+  .ajuda .bolha{visibility:hidden;opacity:0;position:absolute;bottom:140%;left:50%;
+    transform:translateX(-50%);background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.4;
+    width:230px;max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    text-align:left;transition:opacity .15s;pointer-events:none}
+  .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
+  .ajuda .bolha::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:var(--line)}
+  /* Toast (avisos) */
+  #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+    z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
+  .toast{background:var(--panel);border:1px solid var(--line);color:var(--txt);
+    padding:12px 16px;border-radius:10px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);
+    display:flex;align-items:center;gap:10px;animation:toastIn .2s ease}
+  .toast.aviso{border-color:var(--medio)}
+  .toast.erro{border-color:var(--fraco)}
+  .toast.ok{border-color:var(--forte)}
+  .toast .ic{flex-shrink:0;display:flex}
+  @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .status-sel{font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer}
+  .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
+  .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
+  .status-sel.st-ganho{border-color:var(--forte);color:var(--forte)}
+  .status-sel.st-perdido,.status-sel.st-descartado{border-color:#f87171;color:#f87171}
+  .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
+  .forn a{color:var(--accent);text-decoration:none}
+  /* switch liga/desliga */
+  .switch{position:relative;display:inline-block;width:46px;height:26px}
+  .switch input{opacity:0;width:0;height:0}
+  .switch .slider{position:absolute;inset:0;background:var(--panel2);border:1px solid var(--line);
+    border-radius:26px;cursor:pointer;transition:.2s}
+  .switch .slider::before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;
+    background:var(--muted);border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--accent);border-color:var(--accent)}
+  .switch input:checked + .slider::before{transform:translateX(20px);background:#fff}
+  .switch input:disabled + .slider{opacity:.5;cursor:not-allowed}
 
+  /* ---- Responsivo ---- */
+  /* Tablet */
+  @media (max-width:1024px){
+    .wrap{padding:18px}
+    .kpis{grid-template-columns:repeat(3,1fr)}
+    .modal-card{max-width:92vw}
+  }
+  /* Celular */
+  @media (max-width:680px){
+    header{flex-wrap:wrap;padding:12px 16px;gap:8px}
+    header h1{font-size:16px}
+    .wrap{padding:12px}
+    .kpis{grid-template-columns:repeat(2,1fr);gap:8px}
+    .kpi{padding:11px}
+    .kpi .n{font-size:20px}
+    .grid2{grid-template-columns:1fr}
+    .precos{grid-template-columns:1fr}
+    /* menu lateral (gaveta) no mobile */
+    .hamburger{display:inline-flex;align-items:center}
+    .nav-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:5500}
+    nav{position:fixed;top:0;left:0;height:100%;width:80%;max-width:300px;
+      margin:0;flex-direction:column;flex-wrap:nowrap;gap:4px;background:var(--panel);
+      border-right:1px solid var(--line);padding:14px;z-index:6000;
+      transform:translateX(-100%);transition:transform .25s ease;overflow-y:auto}
+    nav.open{transform:translateX(0)}
+    nav button{width:100%;text-align:left;padding:12px 14px;font-size:14px}
+    .nav-head{display:flex;justify-content:space-between;align-items:center;
+      font-weight:600;font-size:15px;margin-bottom:8px;color:var(--txt)}
+    .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px}
+    .ed-top{flex-direction:column;gap:6px}
+    .toolbar{gap:8px}
+    .toolbar input,.toolbar select{flex:1 1 auto;min-width:0}
+    .toolbar .btn,.toolbar a.btn{flex:1 1 auto;text-align:center}
+    /* tabelas rolam na horizontal em vez de estourar a tela */
+    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+    .modal{padding:14px 8px}
+    .modal-card{padding:16px;max-width:100%}
+    .acoes .btn,.acoes .status-sel{flex:1 1 auto}
+    .acoes a{flex-basis:100%}
+  }
+  /* Celular pequeno */
+  @media (max-width:400px){
+    body{font-size:13px}
+    .kpi .n{font-size:18px}
+    nav button{padding:6px 10px}
+  }
+</style>
+</head>
+<body>
+<div id="splash">
+  <div class="radar"></div>
+  <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Carregando o Radar de Licitações…</div>
+</div>
+<div id="modal-mount"></div>
+<header>
+  <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Radar de Licitações</h1>
+  
+  <span style="flex:1"></span>
+  <span id="coleta-status" class="badge">—</span>
+  <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
+  <button class="btn ghost" onclick="recalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+  <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
+  <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
+    <span id="user-nome" class="badge" title="Sua conta">—</span>
+    <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
+  </span>
+</header>
 
-def _set_cookie_sessao(resp: _Resp, usuario_id: int):
-    token = _auth.criar_token(usuario_id)
-    seguro = settings.APP_BASE_URL.startswith("https")
-    resp.set_cookie(_auth.COOKIE_NOME, token, httponly=True, samesite="lax",
-                    secure=seguro, max_age=settings.TOKEN_EXPIRA_HORAS * 3600,
-                    path="/")
+<div class="wrap">
+  <div class="kpis" id="kpis"></div>
 
+  <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
+  <nav id="nav">
+    <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
+    <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+    <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+    <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
+    <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
+    <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+    <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+    <button data-tab="config" onclick="tab('config')">Configurações</button>
+    <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
+    <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+  </nav>
 
-@app.post("/api/auth/cadastro")
-def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
-                  db: Session = Depends(get_session)):
-    # valida e-mail
-    try:
-        email = validate_email(dados.email, check_deliverability=False).normalized.lower()
-    except EmailNotValidError:
-        raise HTTPException(400, "E-mail inválido.")
-    # força da senha
-    erro = _auth.validar_forca_senha(dados.senha)
-    if erro:
-        raise HTTPException(400, erro)
-    if not (dados.nome or "").strip():
-        raise HTTPException(400, "Informe seu nome.")
-    # e-mail único
-    existe = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
-    if existe:
-        raise HTTPException(409, "Já existe uma conta com este e-mail.")
+  <!-- EDITAIS -->
+  <section id="t-editais">
+    <div class="toolbar">
+      <select id="f-nivel" onchange="loadEditais()">
+        <option value="">Todos os níveis</option>
+        <option value="forte">Alta compatibilidade</option>
+        <option value="medio">Média compatibilidade</option>
+        <option value="fraco">Baixa compatibilidade</option>
+      </select>
+      <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
+        <option value="todos">Produtos e serviços</option>
+        <option value="produtos">Só produtos</option>
+        <option value="servicos">Só serviços</option>
+      </select>
+      <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
+             oninput="this.value=this.value.toUpperCase()">
+      <select id="f-status" onchange="loadEditais()">
+        <option value="">Qualquer situação</option>
+        <option value="novo">Novo</option>
+        <option value="vou_participar">Vou participar</option>
+        <option value="proposta_enviada">Proposta enviada</option>
+        <option value="ganho">Ganho</option>
+        <option value="perdido">Perdido</option>
+        <option value="descartado">Descartado</option>
+      </select>
+      <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+      <select id="f-porpag" onchange="loadEditais()" title="Editais por página">
+        <option value="10">10 por página</option>
+        <option value="20" selected>20 por página</option>
+        <option value="50">50 por página</option>
+      </select>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
+        <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
+      </label>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
+        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia
+      </label>
+      <span style="flex:1"></span>
+      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+    </div>
+    <div id="lista-editais"></div>
+  </section>
 
-    primeiro = db.scalar(select(func.count(Usuario.id))) == 0
-    smtp_ok = _email_mod.smtp_configurado()
+  <!-- ENCERRADOS (que participei) -->
+  <section id="t-encerrados" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Editais encerrados que você participou</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Editais com o prazo já vencido e marcados como “proposta enviada”, “ganho” ou “perdido”. Atualize a situação de um edital na aba Editais para ele aparecer aqui.</p>
+    </div>
+    <div id="lista-encerrados"></div>
+  </section>
 
-    u = Usuario(
-        nome=dados.nome.strip(), email=email,
-        senha_hash=_auth.hash_senha(dados.senha),
-        doc_cifrado=_auth.cifrar((dados.documento or "").strip() or None),
-        email_verificado=not smtp_ok,   # sem SMTP, libera direto; com SMTP, exige verificar
-        token_verificacao=_secrets_auth.token_urlsafe(32) if smtp_ok else None,
-    )
-    db.add(u)
-    db.flush()
+  <!-- CATALOGO -->
+  <section id="t-catalogo" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Importar produtos por planilha (Excel)</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Baixe o modelo, preencha (só a coluna <b>descricao</b> é obrigatória) e envie. Produtos com descrição já existente são atualizados; os novos são adicionados.</p>
+      <div class="toolbar">
+        <button class="btn ghost" onclick="window.open('/api/produtos/modelo.xlsx','_blank')">${''}Baixar modelo .xlsx</button>
+        <label class="btn" style="cursor:pointer">Escolher planilha e importar
+          <input type="file" id="imp-arquivo" accept=".xlsx" style="display:none" onchange="importarPlanilha(this)">
+        </label>
+        <span id="imp-msg" class="muted" style="font-size:12px"></span>
+      </div>
+    </div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Produtos cadastrados</h3>
+      <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
+    </div>
 
-    # o primeiro usuário "adota" os dados que já existiam (sem dono)
-    if primeiro:
-        for tabela in (Produto, Match, Documento, RegraExclusao, Proposta):
-            db.query(tabela).filter(tabela.usuario_id.is_(None)).update(
-                {tabela.usuario_id: u.id}, synchronize_session=False)
+    <div id="modal-produto" class="modal hidden" onclick="if(event.target===this)fecharFormProduto()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharFormProduto()" aria-label="Fechar">×</button>
+        <h3 id="form-titulo" style="margin-top:0">Cadastrar produto/serviço</h3>
+        <div class="field"><label>Descrição</label>
+          <input id="p-desc" style="width:100%" placeholder="Ex: Papel sulfite A4 75g resma branca"></div>
+        <div class="grid2">
+          <div class="field"><label>NCM</label><input id="p-ncm" style="width:100%"></div>
+          <div class="field"><label>EAN</label><input id="p-ean" style="width:100%"></div>
+          <div class="field"><label>CATMAT (material)</label><input id="p-catmat" style="width:100%">
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('material')">Buscar no catálogo oficial ↗︎</button>
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="sugerirCatalogoIA('material')">✨ Sugerir com IA</button></div>
+          <div class="field"><label>CATSER (serviço)</label><input id="p-catser" style="width:100%">
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button>
+            <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="sugerirCatalogoIA('servico')">✨ Sugerir com IA</button></div>
+        </div>
 
-    db.commit()
+        <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
+          <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
 
-    if smtp_ok:
-        base = settings.APP_BASE_URL.rstrip("/")
-        link = f"{base}/verificar?token={u.token_verificacao}"
-        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a sua conta no "
-                 f"Radar de Licitações:\n{link}\n\n"
-                 "Se você não criou esta conta, ignore esta mensagem.\n\n"
-                 "— Radar de Licitações")
-        html = _email_html_verificacao(u.nome, link)
-        # envia em segundo plano: o cadastro responde na hora, sem esperar o e-mail
-        bg.add_task(_email_mod.enviar_para, email,
-                    "Confirme seu cadastro — Radar de Licitações", corpo, html)
-        return {"ok": True, "verificar_email": True,
-                "mensagem": "Enviamos um link de confirmação para o seu e-mail. "
-                            "Confira também a caixa de spam."}
+        <div class="grid2">
+          <div class="field"><label>Meu custo (R$) — quanto você paga</label>
+            <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
+          <div class="field"><label>Meu preço de venda (R$)</label>
+            <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Unidade de venda</label>
+            <input id="p-unidade" style="width:100%" placeholder="ex: resma, unidade, caixa"></div>
+          <div class="field"><label>Itens por unidade
+            <span class="muted" style="font-size:11px">(ex.: resma = 500 folhas)</span></label>
+            <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
+        </div>
+        <div class="field"><label>Fornecedor
+          <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Escolha um fornecedor já cadastrado para puxar os dados de contato automaticamente, ou cadastre um novo na aba Fornecedores.</span></span></label>
+          <select id="p-forn-sel" style="width:100%" onchange="aoEscolherFornecedor()">
+            <option value="">— sem fornecedor / preencher manual —</option>
+          </select>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Fornecedor (nome)</label>
+            <input id="p-forn" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
+          <div class="field"><label>Contato do fornecedor</label>
+            <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
+        </div>
+        <div class="field"><label>Site do fornecedor</label>
+          <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
 
-    _set_cookie_sessao(resp, u.id)
-    return {"ok": True, "verificar_email": False}
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
+          <button class="btn ghost" onclick="fecharFormProduto()">Cancelar</button>
+        </div>
+      </div>
+    </div>
 
+    <table><thead><tr><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
+      <th>Palavras-chave</th><th></th></tr></thead>
+      <tbody id="lista-produtos"></tbody></table>
+  </section>
 
-@app.post("/api/auth/login")
-def auth_login(dados: LoginIn, resp: _Resp, db: Session = Depends(get_session)):
-    email = (dados.email or "").strip().lower()
-    u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
-    if not u or not _auth.conferir_senha(dados.senha, u.senha_hash):
-        raise HTTPException(401, "E-mail ou senha incorretos.")
-    if not u.ativo:
-        raise HTTPException(403, "Conta desativada.")
-    if not u.email_verificado:
-        raise HTTPException(403, "Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.")
-    _set_cookie_sessao(resp, u.id)
-    return {"ok": True}
+  <!-- FORNECEDORES -->
+  <section id="t-fornecedores" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div>
+        <h3 style="margin:0">Fornecedores</h3>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">Cadastre seus fornecedores uma vez e reutilize nos produtos — ao cadastrar um item, é só escolher o fornecedor que os contatos vêm juntos.</p>
+      </div>
+      <button class="btn" onclick="abrirFormFornecedor()">+ Cadastrar fornecedor</button>
+    </div>
 
+    <div id="modal-fornecedor" class="modal hidden" onclick="if(event.target===this)fecharFormFornecedor()">
+      <div class="modal-card" style="max-width:560px">
+        <button class="close-x" onclick="fecharFormFornecedor()" aria-label="Fechar">×</button>
+        <h3 id="forn-form-titulo" style="margin-top:0">Cadastrar fornecedor</h3>
+        <div class="field"><label>Nome / razão social</label>
+          <input id="fn-nome" style="width:100%" placeholder="ex: Distribuidora Papel & Cia"></div>
+        <div class="grid2">
+          <div class="field"><label>Telefone</label>
+            <input id="fn-tel" style="width:100%" placeholder="(00) 0000-0000"></div>
+          <div class="field"><label>WhatsApp</label>
+            <input id="fn-wpp" style="width:100%" placeholder="(00) 00000-0000"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>E-mail</label>
+            <input id="fn-email" style="width:100%" placeholder="contato@fornecedor.com"></div>
+          <div class="field"><label>Site</label>
+            <input id="fn-site" style="width:100%" placeholder="https://..."></div>
+        </div>
+        <div class="field"><label>Observação (opcional)</label>
+          <input id="fn-obs" style="width:100%" placeholder="ex: entrega em 3 dias úteis"></div>
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn" onclick="salvarFornecedor()" id="btn-salvar-forn">Salvar fornecedor</button>
+          <button class="btn ghost" onclick="fecharFormFornecedor()">Cancelar</button>
+          <span id="forn-msg" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+    </div>
 
-@app.post("/api/auth/logout")
-def auth_logout(resp: _Resp):
-    resp.delete_cookie(_auth.COOKIE_NOME, path="/")
-    return {"ok": True}
+    <table><thead><tr><th>Nome</th><th>Telefone</th><th>WhatsApp</th><th>E-mail</th><th>Site</th><th></th></tr></thead>
+      <tbody id="lista-fornecedores"></tbody></table>
+  </section>
 
+  <!-- REGRAS -->
+  <section id="t-regras" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Nova regra de exclusão</h3>
+      <div class="toolbar">
+        <select id="r-tipo">
+          <option value="termo">Termo no objeto/item</option>
+          <option value="categoria">Categoria PNCP (código)</option>
+        </select>
+        <input id="r-valor" placeholder="ex: engenharia  (ou 9 p/ Serv. Engenharia)" style="width:320px">
+        <button class="btn" onclick="salvarRegra()">Adicionar</button>
+      </div>
+      <p class="muted">Editais que contenham o termo, ou cuja categoria PNCP esteja na lista, são ignorados na coleta.</p>
+    </div>
+    <table><thead><tr><th>Tipo</th><th>Valor</th><th></th></tr></thead>
+      <tbody id="lista-regras"></tbody></table>
+  </section>
 
-@app.get("/api/auth/me")
-def auth_me(user: Usuario = Depends(_auth.get_current_user)):
-    return {"id": user.id, "nome": user.nome, "email": user.email,
-            "documento": _auth.decifrar(user.doc_cifrado),
-            "tem_gemini": bool(user.gemini_key_cifrada),
-            "telegram_chat_id": user.telegram_chat_id or "",
-            "notif_email": user.notif_email, "notif_telegram": user.notif_telegram}
+  <!-- DOCUMENTOS -->
+  <section id="t-documentos" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div>
+        <h3 style="margin:0">Documentos / certidões</h3>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">O sistema avisa antes de cada documento vencer.</p>
+      </div>
+      <button class="btn" onclick="abrirFormDocumento()">+ Cadastrar documento</button>
+    </div>
 
+    <div id="modal-documento" class="modal hidden" onclick="if(event.target===this)fecharFormDocumento()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharFormDocumento()" aria-label="Fechar">×</button>
+        <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
+        <div class="field"><label>Nome do documento</label>
+          <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
+        <div class="grid2">
+          <div class="field"><label>Órgão emissor</label>
+            <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
+          <div class="field"><label>Validade</label>
+            <input id="d-validade" type="date" style="width:100%"></div>
+        </div>
+        <div class="field"><label>Link do documento (opcional)
+          <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
+          <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
+        <div class="field"><label>Observação (opcional)</label>
+          <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
+          <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
+        </div>
+      </div>
+    </div>
 
-@app.get("/api/auth/verificar")
-def auth_verificar(token: str, db: Session = Depends(get_session)):
-    u = db.execute(select(Usuario).where(Usuario.token_verificacao == token)).scalars().first()
-    if not u:
-        raise HTTPException(400, "Link de verificação inválido ou já usado.")
-    u.email_verificado = True
-    u.token_verificacao = None
-    db.commit()
-    return {"ok": True}
+    <table><thead><tr><th>Documento</th><th>Emissor</th><th>Validade</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="lista-documentos"></tbody></table>
+  </section>
 
+  <!-- INTELIGÊNCIA DE PREÇO -->
+  <section id="t-precos" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Inteligência de preço</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor estimado</strong> dos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
+    </div>
+    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th></tr></thead>
+      <tbody id="lista-precos"></tbody></table>
+  </section>
 
-# =========================== PERFIL ============================ #
-class PerfilIn(BaseModel):
-    nome: str | None = None
-    documento: str | None = None
-    gemini_key: str | None = None       # "" limpa; None mantém
-    telegram_chat_id: str | None = None
-    notif_email: bool | None = None
-    notif_telegram: bool | None = None
-    avisar_abertura: bool | None = None
-    dias_antecedencia: int | None = None
-    endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
+  <!-- CONFIGURAÇÕES -->
+  <section id="t-config" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Configurações de monitoramento</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora. Vazio em UFs = todas.</p>
+      <div class="field"><label>UFs (siglas separadas por vírgula)</label>
+        <input id="c-ufs" style="width:100%" placeholder="ex: PR,SP  (vazio = todas)"></div>
+      <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
+        <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
+        <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
+      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
+        <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+      <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
+        <label>Refinamento por IA (semântico)</label>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <label class="switch"><input type="checkbox" id="c-ia"><span class="slider"></span></label>
+          <span id="ia-status" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+      <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
+      <span id="config-msg" class="muted" style="margin-left:10px"></span>
+    </div>
+  </section>
 
+  <!-- PERFIL -->
+  <section id="t-perfil" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Meus dados</h3>
+      <div class="grid2">
+        <div class="field"><label>Nome ou razão social</label><input id="pf-nome" style="width:100%"></div>
+        <div class="field"><label>CPF ou CNPJ</label><input id="pf-doc" style="width:100%" placeholder="só números"></div>
+      </div>
+      <div class="field"><label>E-mail (login)</label><input id="pf-email" style="width:100%" disabled></div>
+    </div>
 
-@app.get("/api/perfil")
-def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
-    import json as _j
-    end = _auth.decifrar(user.endereco_cifrado)
-    try:
-        endereco = _j.loads(end) if end else {}
-    except ValueError:
-        endereco = {}
-    return {
-        "nome": user.nome, "email": user.email,
-        "documento": _auth.decifrar(user.doc_cifrado) or "",
-        "tem_gemini": bool(user.gemini_key_cifrada),
-        "telegram_chat_id": user.telegram_chat_id or "",
-        "notif_email": user.notif_email, "notif_telegram": user.notif_telegram,
-        "avisar_abertura": user.avisar_abertura,
-        "dias_antecedencia": user.dias_antecedencia,
-        "endereco": endereco,
-    }
+    <div class="card">
+      <h3 style="margin-top:0">Endereço</h3>
+      <div class="grid2">
+        <div class="field"><label>CEP</label>
+          <input id="pf-cep" style="width:100%" placeholder="00000-000" onblur="buscarCep()">
+          <span class="muted" id="cep-status" style="font-size:11px"></span>
+        </div>
+        <div class="field"><label>Cidade / UF</label><input id="pf-cidade" style="width:100%" disabled></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Logradouro</label><input id="pf-logradouro" style="width:100%"></div>
+        <div class="field"><label>Número</label><input id="pf-numero" style="width:100%"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Bairro</label><input id="pf-bairro" style="width:100%"></div>
+        <div class="field"><label>Complemento</label><input id="pf-compl" style="width:100%"></div>
+      </div>
+    </div>
 
+    <div class="card">
+      <h3 style="margin-top:0">Chave da IA (Gemini)</h3>
+      <div class="field"><label>Sua chave Gemini</label>
+        <input id="pf-gemini" style="width:100%" placeholder="cole aqui sua chave (AIza...)" autocomplete="off">
+        <span class="muted" id="gemini-status" style="font-size:11px"></span>
+      </div>
+      <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank"
+         style="font-size:12px;padding:5px 12px">Criar/obter minha chave Gemini ↗︎</a>
+      <p class="muted" style="font-size:11px;margin-bottom:0">
+        Dica: ao criar, restrinja a chave à "Generative Language API" por segurança.
+      </p>
+    </div>
 
-@app.post("/api/perfil")
-def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    import json as _j
-    if dados.nome is not None and dados.nome.strip():
-        user.nome = dados.nome.strip()
-    if dados.documento is not None:
-        user.doc_cifrado = _auth.cifrar(dados.documento.strip() or None)
-    # chave Gemini: None = manter; "" = remover; texto = cifrar e guardar
-    if dados.gemini_key is not None:
-        user.gemini_key_cifrada = _auth.cifrar(dados.gemini_key.strip() or None)
-    if dados.telegram_chat_id is not None:
-        user.telegram_chat_id = dados.telegram_chat_id.strip() or None
-    if dados.notif_email is not None:
-        user.notif_email = dados.notif_email
-    if dados.notif_telegram is not None:
-        user.notif_telegram = dados.notif_telegram
-    if dados.avisar_abertura is not None:
-        user.avisar_abertura = dados.avisar_abertura
-    if dados.dias_antecedencia is not None:
-        user.dias_antecedencia = max(0, min(30, dados.dias_antecedencia))  # 0 a 30 dias
-    if dados.endereco is not None:
-        user.endereco_cifrado = _auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False))
-    db.commit()
-    return {"ok": True}
+    <div class="card">
+      <h3 style="margin-top:0">Notificações</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba aviso quando surgir uma oportunidade de alta compatibilidade nova.</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Por e-mail <span class="muted" style="font-size:12px">(no seu e-mail de login)</span></span>
+        <label class="switch"><input type="checkbox" id="pf-notif-email"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Por Telegram</span>
+        <label class="switch"><input type="checkbox" id="pf-notif-tg"><span class="slider"></span></label>
+      </div>
+      <div id="tg-box" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:6px">
+        <div id="tg-status" class="muted" style="font-size:13px">—</div>
+        <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
 
+      <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+      <h3 style="margin:0 0 2px">Aviso de abertura
+        <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Avisa, com alguns dias de antecedência, quando um edital de alta compatibilidade vai abrir. Dá tempo de preparar a documentação e decidir se vai participar. Chega pelos canais que você ligou acima.</span></span>
+      </h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Receba um aviso antes de um edital de alta compatibilidade abrir.</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar antes da abertura</span>
+        <label class="switch"><input type="checkbox" id="pf-avisar-abertura"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
+        <span>Avisar com quantos dias de antecedência</span>
+        <input id="pf-dias-ante" type="number" min="0" max="30" style="width:80px" value="2">
+      </div>
+    </div>
 
-@app.get("/api/cep/{cep}")
-def consultar_cep(cep: str, user: Usuario = Depends(_auth.get_current_user)):
-    """Autopreenchimento de endereço pelo CEP (ViaCEP, gratuito)."""
-    limpo = "".join(c for c in cep if c.isdigit())
-    if len(limpo) != 8:
-        raise HTTPException(400, "CEP deve ter 8 dígitos.")
-    try:
-        r = requests.get(f"https://viacep.com.br/ws/{limpo}/json/", timeout=10)
-        dados = r.json()
-    except Exception:
-        raise HTTPException(502, "Não foi possível consultar o CEP agora.")
-    if dados.get("erro"):
-        raise HTTPException(404, "CEP não encontrado.")
-    return {
-        "cep": dados.get("cep", ""), "logradouro": dados.get("logradouro", ""),
-        "bairro": dados.get("bairro", ""), "cidade": dados.get("localidade", ""),
-        "uf": dados.get("uf", ""), "complemento": dados.get("complemento", ""),
-    }
+    <div class="toolbar">
+      <button class="btn" onclick="salvarPerfil()">Salvar perfil</button>
+      <span id="perfil-msg" class="muted" style="margin-left:10px"></span>
+    </div>
+  </section>
 
+  <!-- LOGS -->
+  <section id="t-logs" class="hidden">
+    <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
+      <th>Vistos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
+      <th>Novos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
+      <th>Alta compat. <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos ficaram com alta compatibilidade com o seu catálogo.</span></span></th>
+      <th>Erro</th></tr></thead>
+      <tbody id="lista-logs"></tbody></table>
+  </section>
+</div>
 
-# ===================== VÍNCULO DO TELEGRAM (multiusuário) ===================== #
-@app.get("/api/telegram/vinculo")
-def telegram_vinculo(user: Usuario = Depends(_auth.get_current_user),
-                     db: Session = Depends(get_session)):
-    """Devolve o link para o usuário conectar o Telegram dele ao bot do Radar.
-    Gera um código único na primeira vez."""
-    if not user.telegram_codigo:
-        user.telegram_codigo = _secrets_auth.token_urlsafe(8)
-        db.commit()
-    bot = settings.TELEGRAM_BOT_USERNAME
-    disponivel = bool(settings.TELEGRAM_BOT_TOKEN and bot)
-    link = f"https://t.me/{bot}?start={user.telegram_codigo}" if disponivel else ""
-    return {
-        "disponivel": disponivel,
-        "bot": bot,
-        "codigo": user.telegram_codigo,
-        "link": link,
-        "conectado": bool(user.telegram_chat_id),
-    }
+<script>
+const $ = s => document.querySelector(s);
+const api = (u,o)=>fetch(u,o).then(r=>r.json());
 
-
-@app.post("/api/telegram/desvincular")
-def telegram_desvincular(user: Usuario = Depends(_auth.get_current_user),
-                         db: Session = Depends(get_session)):
-    user.telegram_chat_id = None
-    db.commit()
-    return {"ok": True}
-
-
-@app.post("/api/telegram/webhook/{secret}")
-async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_session)):
-    """Recebe as mensagens do Telegram. Quando alguém manda /start CÓDIGO,
-    vincula o chat_id daquele usuário. Protegido por um segredo na URL."""
-    if not settings.TELEGRAM_WEBHOOK_SECRET or secret != settings.TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(404, "not found")
-    try:
-        update = await req.json()
-    except Exception:
-        return {"ok": True}
-    msg = (update or {}).get("message") or {}
-    texto = (msg.get("text") or "").strip()
-    chat = msg.get("chat") or {}
-    chat_id = str(chat.get("id") or "")
-    if texto.startswith("/start") and chat_id:
-        partes = texto.split(maxsplit=1)
-        codigo = partes[1].strip() if len(partes) > 1 else ""
-        if codigo:
-            u = db.execute(select(Usuario).where(Usuario.telegram_codigo == codigo)).scalars().first()
-            if u:
-                u.telegram_chat_id = chat_id
-                u.notif_telegram = True
-                db.commit()
-                from .notifications import telegram as _tg
-                _tg.enviar_para_chat(
-                    chat_id, "✅ Telegram conectado!",
-                    f"Pronto, {u.nome}! Você vai receber aqui os avisos de novas "
-                    "oportunidades do Radar de Licitações.")
-                return {"ok": True}
-        from .notifications import telegram as _tg
-        _tg.enviar_para_chat(
-            chat_id, "Radar de Licitações",
-            "Para conectar, abra o link de vínculo na tela 'Meu perfil' do sistema.")
-    return {"ok": True}
-
-
-@app.post("/api/telegram/registrar-webhook")
-def telegram_registrar_webhook(user: Usuario = Depends(_auth.get_current_user)):
-    """Registra o webhook no Telegram (rodar uma vez após configurar o bot)."""
-    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_WEBHOOK_SECRET and settings.APP_BASE_URL):
-        raise HTTPException(400, "Configure TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET e APP_BASE_URL.")
-    url = f"{settings.APP_BASE_URL.rstrip('/')}/api/telegram/webhook/{settings.TELEGRAM_WEBHOOK_SECRET}"
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
-            json={"url": url, "allowed_updates": ["message"]}, timeout=15)
-        return {"ok": r.status_code == 200, "resposta": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Falha ao registrar webhook: {e}")
-
-
-# --------------------------- Schemas ---------------------------------- #
-class ProdutoIn(BaseModel):
-    descricao: str
-    ncm: str | None = None
-    cest: str | None = None
-    ean: str | None = None
-    catmat: str | None = None
-    catser: str | None = None
-    palavras_chave: str | None = None
-    preco_custo: float | None = None
-    preco_venda: float | None = None
-    unidade_venda: str | None = None
-    itens_por_unidade: float | None = None
-    fornecedor_nome: str | None = None
-    fornecedor_contato: str | None = None
-    fornecedor_site: str | None = None
-
-
-class RegraIn(BaseModel):
-    tipo: str = "termo"
-    valor: str
-
-
-class MarcarIn(BaseModel):
-    lido: bool | None = None
-    interessante: bool | None = None
-
-
-class DocumentoIn(BaseModel):
-    nome: str
-    orgao_emissor: str | None = None
-    data_validade: date
-    link: str | None = None
-    observacao: str | None = None
-
-
-# --------------------------- Produtos --------------------------------- #
-def _produto_dict(p: Produto) -> dict:
-    return {
-        "id": p.id, "descricao": p.descricao, "ncm": p.ncm, "cest": p.cest,
-        "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
-        "palavras_chave": p.palavras_chave, "ativo": p.ativo,
-        "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
-        "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
-        "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
-        "fornecedor_site": p.fornecedor_site,
-    }
-
-
-@app.get("/api/produtos")
-def listar_produtos(
-    pagina: int = Query(1, ge=1),
-    por_pagina: int = Query(100, ge=1, le=500),
-    user: Usuario = Depends(_auth.get_current_user),
-    db: Session = Depends(get_session),
-):
-    cond = Produto.usuario_id == user.id
-    total = db.scalar(select(func.count(Produto.id)).where(cond)) or 0
-    produtos = db.execute(
-        select(Produto).where(cond).order_by(Produto.id.desc())
-        .limit(por_pagina).offset((pagina - 1) * por_pagina)
-    ).scalars().all()
-    return {
-        "total": total, "pagina": pagina, "por_pagina": por_pagina,
-        "paginas": (total + por_pagina - 1) // por_pagina,
-        "resultados": [_produto_dict(p) for p in produtos],
-    }
-
-
-@app.get("/api/produtos/modelo.xlsx")
-def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
-    """Planilha-modelo para importação de produtos."""
-    import openpyxl
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Produtos"
-    cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
-             "preco_custo", "preco_venda",
-             "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
-    ws.append(cabec)
-    ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
-               "7891234567890", "150123", "", "18,90", "24,50",
-               "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
-    ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
-               "", "", "", "1,20", "2,00", "", "", ""])
-    for col in ws.columns:
-        larg = max(len(str(c.value or "")) for c in col) + 2
-        ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=modelo_produtos.xlsx"})
-
-
-def _produto_do_usuario(db, produto_id, user) -> Produto:
-    p = db.get(Produto, produto_id)
-    if not p or p.usuario_id != user.id:
-        raise HTTPException(404, "Produto não encontrado")
-    return p
-
-
-@app.get("/api/produtos/{produto_id}")
-def obter_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    return _produto_dict(_produto_do_usuario(db, produto_id, user))
-
-
-@app.post("/api/produtos")
-def criar_produto(dados: ProdutoIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    p = Produto(**dados.model_dump(), usuario_id=user.id)
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return {"id": p.id}
-
-
-@app.put("/api/produtos/{produto_id}")
-def atualizar_produto(produto_id: int, dados: ProdutoIn,
-                      user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    p = _produto_do_usuario(db, produto_id, user)
-    for campo, valor in dados.model_dump().items():
-        setattr(p, campo, valor)
-    db.commit()
-    return {"ok": True, "id": p.id}
-
-
-# Colunas aceitas na planilha de importação (cabeçalho -> campo do produto)
-_COLS_IMPORT = {
-    "descricao": "descricao", "descrição": "descricao", "produto": "descricao",
-    "palavras_chave": "palavras_chave", "palavras-chave": "palavras_chave",
-    "palavras chave": "palavras_chave", "ncm": "ncm", "cest": "cest", "ean": "ean",
-    "catmat": "catmat", "catser": "catser",
-    "preco_custo": "preco_custo", "preço_custo": "preco_custo", "custo": "preco_custo",
-    "preco_venda": "preco_venda", "preço_venda": "preco_venda", "venda": "preco_venda",
-    "fornecedor_nome": "fornecedor_nome", "fornecedor": "fornecedor_nome",
-    "fornecedor_contato": "fornecedor_contato", "fornecedor_site": "fornecedor_site",
+// ---- Máscaras e validações ----
+function mascaraDoc(v){ // CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00)
+  const d=(v||'').replace(/\D/g,'').slice(0,14);
+  if(d.length<=11){
+    return d.replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d{1,2})$/,'$1-$2');
+  }
+  return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/,'$1.$2.$3')
+          .replace(/\.(\d{3})(\d)/,'.$1/$2').replace(/(\d{4})(\d{1,2})$/,'$1-$2');
 }
-_CAMPOS_NUM = {"preco_custo", "preco_venda"}
+function mascaraTel(v){ // (00) 00000-0000 ou (00) 0000-0000
+  const d=(v||'').replace(/\D/g,'').slice(0,11);
+  if(d.length<=10) return d.replace(/^(\d{2})(\d)/,'($1) $2').replace(/(\d{4})(\d{1,4})$/,'$1-$2');
+  return d.replace(/^(\d{2})(\d)/,'($1) $2').replace(/(\d{5})(\d{1,4})$/,'$1-$2');
+}
+function mascaraCep(v){ const d=(v||'').replace(/\D/g,'').slice(0,8); return d.replace(/^(\d{5})(\d)/,'$1-$2'); }
+function emailValido(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim()); }
+function aplicarMascara(el, fn){
+  if(!el) return;
+  el.addEventListener('input', ()=>{ el.value = fn(el.value); });
+}
+
+// Tooltip de ajuda: gera o HTML do "?" com a explicação
+function ajuda(texto){
+  return `<span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">${texto}</span></span>`;
+}
+// fecha tooltips abertos ao tocar fora (mobile)
+document.addEventListener('click', e=>{
+  if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(a=>a.classList.remove('aberto'));
+});
+
+// ---- Tema claro/escuro (lembra a escolha) ----
+const _icoSol='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
+const _icoLua='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+function aplicarTema(t){
+  document.documentElement.setAttribute('data-theme', t);
+  const b=$('#btn-tema'); if(b) b.innerHTML = (t==='light') ? _icoLua : _icoSol;
+}
+function alternarTema(){
+  const atual = document.documentElement.getAttribute('data-theme')==='light' ? 'light' : 'dark';
+  const novo = atual==='light' ? 'dark' : 'light';
+  try{ localStorage.setItem('radar-tema', novo); }catch(e){}
+  aplicarTema(novo);
+}
+(function(){
+  let t='dark';
+  try{ t = localStorage.getItem('radar-tema') || 'dark'; }catch(e){}
+  document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('DOMContentLoaded', ()=>aplicarTema(t));
+})();
 
 
-def _num_br(v):
-    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None."""
-    if v is None or v == "":
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip().replace("R$", "").replace(" ", "")
-    if "," in s:                       # formato BR: ponto = milhar, vírgula = decimal
-        s = s.replace(".", "").replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return None
+// Ícones SVG inline (herdam a cor do texto via currentColor)
+const _svg = p => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">${p}</svg>`;
+const ICN = {
+  detalhe:    _svg('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/>'),
+  check:      _svg('<polyline points="20 6 9 17 4 12"/>'),
+  estrela:    `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="currentColor" stroke-width="1" style="vertical-align:-2px"><polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/></svg>`,
+  estrelaVazia:_svg('<polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/>'),
+  busca:      _svg('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>'),
+  fornecedor: _svg('<path d="M3 21V8l6-3 6 3v13"/><path d="M9 21v-5h2v5"/><path d="M21 21V11l-6-3"/>'),
+  externo:    _svg('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  baixar:     _svg('<path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/>'),
+  ia:         _svg('<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15z"/>'),
+  proposta:   _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/>'),
+  relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
+};
 
+function toggleMenu(){
+  const open = $('#nav').classList.toggle('open');
+  $('#nav-overlay').classList.toggle('open', open);
+}
 
-@app.post("/api/produtos/importar")
-async def importar_produtos(arquivo: UploadFile = File(...),
-                            user: Usuario = Depends(_auth.get_current_user),
-                            db: Session = Depends(get_session)):
-    """Importa produtos de uma planilha .xlsx. Atualiza quando a descrição já
-    existe; caso contrário, cria. Retorna um resumo do que foi feito."""
-    import openpyxl
-    conteudo = await arquivo.read()
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
-    except Exception:
-        raise HTTPException(400, "Arquivo inválido. Envie uma planilha .xlsx.")
-    ws = wb.active
-    linhas = ws.iter_rows(values_only=True)
-    try:
-        cabec = next(linhas)
-    except StopIteration:
-        return {"status": "vazio", "criados": 0, "atualizados": 0, "ignorados": 0, "erros": []}
+function tab(name){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  // fecha o menu lateral no mobile após escolher
+  $('#nav').classList.remove('open');
+  $('#nav-overlay').classList.remove('open');
+  if(name==='encerrados') loadEncerrados();
+  if(name==='catalogo') loadProdutos();
+  if(name==='fornecedores') loadFornecedores();
+  if(name==='precos') loadPrecos();
+  if(name==='regras') loadRegras();
+  if(name==='documentos') loadDocumentos();
+  if(name==='config') loadConfig();
+  if(name==='perfil') loadPerfil();
+  if(name==='logs') loadLogs();
+}
 
-    # mapeia índice de coluna -> campo do produto
-    mapa = {}
-    for i, nome in enumerate(cabec):
-        chave = str(nome or "").strip().lower()
-        if chave in _COLS_IMPORT:
-            mapa[i] = _COLS_IMPORT[chave]
-    if "descricao" not in mapa.values():
-        raise HTTPException(400, "A planilha precisa de uma coluna 'descricao'.")
+async function loadResumo(){
+  const r = await api('/api/resumo');
+  const cards = [
+    {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')", aj:'Editais cuja sessão de disputa acontece hoje.'},
+    {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')", aj:'Editais com prazo ainda aberto que deram match com o seu catálogo.'},
+    {n:r.fortes,    l:'Alta compatibilidade',    cor:'var(--forte)', acao:"filtrarKpi('forte')", aj:'Alta compatibilidade: o edital combina bem com seus produtos. Vale olhar.'},
+    {n:r.medios,    l:'Média compatibilidade',    cor:'var(--medio)', acao:"filtrarKpi('medio')", aj:'Compatibilidade parcial: pode valer, confira o detalhe.'},
+    {n:r.nao_lidos, l:'Não lidos',      acao:"filtrarKpi('naolidos')", aj:'Editais que você ainda não marcou como lidos.'},
+    {n:r.produtos,  l:'Produtos',       acao:"tab('catalogo')", aj:'Quantidade de produtos/serviços no seu catálogo.'},
+  ];
+  $('#kpis').innerHTML = cards.map(c=>{
+    const borda = c.cor ? `border-color:${c.cor};` : '';
+    const corN = c.cor ? `color:${c.cor};` : '';
+    return `<div class="kpi" style="${borda}cursor:pointer" onclick="${c.acao}" title="Filtrar">
+      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}${ajuda(c.aj)}</div></div>`;
+  }).join('');
+}
 
-    criados = atualizados = ignorados = 0
-    erros = []
-    for n, linha in enumerate(linhas, start=2):
-        if linha is None or all(c is None or str(c).strip() == "" for c in linha):
-            continue
-        dados = {}
-        for i, campo in mapa.items():
-            val = linha[i] if i < len(linha) else None
-            if campo in _CAMPOS_NUM:
-                dados[campo] = _num_br(val)
-            else:
-                dados[campo] = (str(val).strip() if val not in (None, "") else None)
-        desc = dados.get("descricao")
-        if not desc:
-            ignorados += 1
-            continue
-        # atualizar se a descrição já existe NESTE usuário (case-insensitive)
-        existente = db.execute(
-            select(Produto).where(Produto.usuario_id == user.id)
-            .where(func.lower(Produto.descricao) == desc.lower())
-        ).scalars().first()
-        try:
-            if existente:
-                for campo, valor in dados.items():
-                    if valor is not None:           # só sobrescreve o que veio preenchido
-                        setattr(existente, campo, valor)
-                atualizados += 1
-            else:
-                db.add(Produto(**dados, usuario_id=user.id))
-                criados += 1
-        except Exception as e:
-            erros.append(f"linha {n}: {e}")
-    db.commit()
-    return {"status": "ok", "criados": criados, "atualizados": atualizados,
-            "ignorados": ignorados, "erros": erros[:20]}
+// Aplica o filtro correspondente ao card clicado e leva para a aba Editais
+function filtrarKpi(tipo){
+  tab('editais');
+  // zera filtros
+  $('#f-hoje').checked = false;
+  $('#f-naolidos').checked = false;
+  const fn=$('#f-nivel'); if(fn) fn.value='';
+  if(tipo==='hoje') $('#f-hoje').checked = true;
+  else if(tipo==='naolidos') $('#f-naolidos').checked = true;
+  else if(tipo==='forte' || tipo==='medio'){ if(fn) fn.value=tipo; }
+  // 'ativos' = sem filtro (mostra todos os ativos)
+  paginaEditais = 1;
+  loadEditais();
+}
+function filtrarDoDia(){ filtrarKpi('hoje'); }
 
+function rotuloNivel(n){
+  return {forte:'Alta compatibilidade', medio:'Média compatibilidade', fraco:'Baixa compatibilidade'}[n] || n;
+}
+function fmtMoeda(v){ if(v==null) return '—';
+  return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
-@app.delete("/api/produtos/{produto_id}")
-def remover_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    p = _produto_do_usuario(db, produto_id, user)
-    db.delete(p)
-    db.commit()
-    return {"ok": True}
+function cardEdital(e){
+  const urg = e.dias_restantes!=null && e.dias_restantes<=5;
+  const prazo = e.dias_restantes==null?'prazo n/d':
+    (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+  const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
+    `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
+  return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
+    <div class="ed-top">
+      <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
+      <span class="pill ${e.nivel}">${rotuloNivel(e.nivel)} · ${e.score}</span>
+    </div>
+    <div class="ed-obj">${e.objeto||''}</div>
+    <div class="ed-meta">
+      <span>${e.modalidade||''}</span>
+      <span>${e.municipio||''}/${e.uf||''}</span>
+      <span>${fmtMoeda(e.valor_estimado)}</span>
+      <span>${e.itens_compativeis} item(ns) compatível(eis)</span>
+      <span class="prazo ${urg?'urg':''}">${prazo}</span>
+    </div>
+    ${det?`<div class="det">${det}</div>`:''}
+    <div class="acoes" onclick="event.stopPropagation()">
+      ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
+      <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
+      <button class="btn ghost" onclick="abrirProposta(${e.edital_id})">${ICN.proposta||''} Proposta</button>
+      <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
+      <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
+        <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+        <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+        <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+        <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+        <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+        <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+      </select>
+      <span style="flex:1"></span>
+      <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+    </div>
+  </div>`;
+}
 
+function navPaginacao(r, fnPagina, paginaAtual){
+  const ini = (r.pagina-1)*r.por_pagina + 1;
+  const fim = Math.min(r.pagina*r.por_pagina, r.total);
+  const btns = r.paginas>1 ? `
+      <button class="btn ghost" ${paginaAtual<=1?'disabled':''} onclick="${fnPagina}(-1)">‹ anterior</button>
+      <button class="btn ghost" ${paginaAtual>=r.paginas?'disabled':''} onclick="${fnPagina}(1)">próxima ›</button>` : '';
+  return `<div class="toolbar" style="justify-content:center;align-items:center;margin-top:10px;gap:10px">
+      <span class="muted">mostrando ${ini}–${fim} de ${r.total} edital(is)${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
+      ${btns}
+    </div>`;
+}
 
-# --------------------------- Editais / Matches ------------------------ #
-def _inicio_hoje_utc() -> datetime:
-    """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
-    (coletado_em é gravado em UTC). Serve para contar 'coletados hoje'."""
-    tz = ZoneInfo("America/Sao_Paulo")
-    agora = datetime.now(tz)
-    inicio = agora.replace(hour=0, minute=0, second=0, microsecond=0)
-    return inicio.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+let paginaEditais = 1;
 
+async function loadEditais(resetPagina=true){
+  if(resetPagina) paginaEditais = 1;
+  const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
+        st=$('#f-status').value, nl=$('#f-naolidos').checked;
+  const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
+  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
+  if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
+  if(st)qs.set('status',st);
+  if(nl)qs.set('apenas_nao_lidos','true');
+  if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
+  const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
+  if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
+  $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais);
+}
 
-@app.get("/api/editais")
-def listar_editais(
-    nivel: str | None = Query(None),
-    uf: str | None = Query(None),
-    status: str | None = Query(None),
-    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
-    apenas_nao_lidos: bool = Query(False),
-    hoje: bool = Query(False),
-    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
-    pagina: int = Query(1, ge=1),
-    por_pagina: int = Query(50, ge=1, le=200),
-    user: Usuario = Depends(_auth.get_current_user),
-    db: Session = Depends(get_session),
-):
-    hoje_data = date.today()
-    base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
-    filtro = [Match.usuario_id == user.id]
-    if nivel:
-        filtro.append(Match.nivel == nivel)
-    if uf:
-        filtro.append(Edital.uf == uf.upper())
-    if status:
-        filtro.append(Match.status == status)
-    if apenas_nao_lidos:
-        filtro.append(Match.lido == False)  # noqa: E712
-    if hoje:
-        filtro.append(Edital.data_abertura == date.today())
-    # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
-    if tipo != "todos":
-        from .models import ItemEdital
-        prefixo = "m" if tipo == "produtos" else "s"
-        sub = (select(ItemEdital.edital_id)
-               .where(ItemEdital.edital_id == Edital.id)
-               .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
-        filtro.append(sub.exists())
+let paginaEncerrados = 1;
 
-    if vista == "ativos":
-        # ainda dentro do prazo (sem data ou data >= hoje)
-        filtro.append((Edital.data_encerramento.is_(None)) |
-                      (Edital.data_encerramento >= hoje_data))
-    elif vista == "encerrados":
-        # prazo passou E eu participei (proposta enviada / ganho / perdido)
-        filtro.append(Edital.data_encerramento < hoje_data)
-        filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
-    for f in filtro:
-        base = base.where(f)
+async function loadEncerrados(resetPagina=true){
+  if(resetPagina) paginaEncerrados = 1;
+  const qs=new URLSearchParams({pagina:paginaEncerrados, por_pagina:20, vista:'encerrados'});
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
+  if(!eds.length){ $('#lista-encerrados').innerHTML='<p class="muted">Nenhum edital encerrado que você participou. Aparecem aqui os editais com prazo vencido marcados como “proposta enviada”, “ganho” ou “perdido”.</p>'; return; }
+  $('#lista-encerrados').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaEnc',paginaEncerrados);
+}
 
-    total = db.scalar(
-        select(func.count()).select_from(base.subquery())
-    ) or 0
+function mudarPaginaEnc(delta){
+  paginaEncerrados = Math.max(1, paginaEncerrados + delta);
+  loadEncerrados(false);
+  window.scrollTo({top:0, behavior:'smooth'});
+}
 
-    ordem = (Match.score.desc(), Edital.data_encerramento.asc()) if vista == "ativos" \
-        else (Edital.data_encerramento.desc(),)
-    q = base.order_by(*ordem)
-    q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
+function mudarPagina(delta){
+  paginaEditais = Math.max(1, paginaEditais + delta);
+  loadEditais(false);
+  window.scrollTo({top:0, behavior:'smooth'});
+}
 
-    out = []
-    for match, ed in db.execute(q).all():
-        dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
-        out.append({
-            "match_id": match.id, "edital_id": ed.id,
-            "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
-            "municipio": ed.municipio, "modalidade": ed.modalidade,
-            "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
-            "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
-            "dias_restantes": dias, "link": ed.link,
-            "score": match.score, "nivel": match.nivel,
-            "itens_compativeis": match.itens_compativeis,
-            "lido": match.lido, "interessante": match.interessante,
-            "status": match.status,
-            "detalhe": match.detalhe,
-        })
-    return {
-        "total": total, "pagina": pagina, "por_pagina": por_pagina,
-        "paginas": (total + por_pagina - 1) // por_pagina,
-        "resultados": out,
+async function marcar(id,campo,val){
+  await api(`/api/editais/${id}/marcar`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[campo]:val})});
+  loadEditais(); loadResumo();
+}
+
+async function importarPlanilha(input){
+  const f = input.files && input.files[0];
+  if(!f) return;
+  const msg=$('#imp-msg');
+  msg.textContent='Importando…'; msg.style.color='var(--medio)';
+  try{
+    const fd=new FormData(); fd.append('arquivo', f);
+    const resp=await fetch('/api/produtos/importar',{method:'POST',body:fd});
+    const r=await resp.json();
+    if(r.status==='ok'){
+      msg.innerHTML=`${ICN.check} ${r.criados} criado(s), ${r.atualizados} atualizado(s)`
+        + (r.ignorados?`, ${r.ignorados} ignorado(s)`:'')
+        + (r.erros&&r.erros.length?` · ${r.erros.length} erro(s)`:'');
+      msg.style.color='var(--muted)';
+      loadProdutos(); loadResumo();
+    } else {
+      msg.textContent = r.detail || 'Não foi possível importar (confira o cabeçalho da planilha).';
+      msg.style.color='#f87171';
     }
+  }catch(e){
+    msg.textContent='Erro ao importar a planilha.'; msg.style.color='#f87171';
+  }
+  input.value='';  // permite reenviar o mesmo arquivo
+}
 
+async function loadProdutos(){
+  const r=await api('/api/produtos?por_pagina=500');
+  const ps=r.resultados||[];
+  $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
+    <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
+    <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
+    <td style="white-space:nowrap">
+      <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
+      <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
+    </td></tr>`).join('');
+}
+let editandoId = null;
 
-def _match_do_usuario(db, match_id, user) -> Match:
-    m = db.get(Match, match_id)
-    if not m or m.usuario_id != user.id:
-        raise HTTPException(404, "Match não encontrado")
-    return m
+function abrirFormProduto(){
+  cancelarEdicao();            // limpa e prepara para novo cadastro
+  carregarFornecedoresSelect();
+  $('#modal-produto').classList.remove('hidden');
+}
+function fecharFormProduto(){
+  $('#modal-produto').classList.add('hidden');
+  cancelarEdicao();
+}
 
+async function salvarProduto(){
+  const num = id => { const v=$('#'+id).value.trim(); return v===''?null:parseFloat(v.replace(',','.')); };
+  const txt = id => $('#'+id).value.trim()||null;
+  const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
+    catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
+    preco_custo:num('p-custo'), preco_venda:num('p-venda'),
+    unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
+    fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site'),
+    fornecedor_id: ($('#p-forn-sel') && $('#p-forn-sel').value) ? parseInt($('#p-forn-sel').value,10) : null};
+  if(!body.descricao){alert('Informe a descrição');return;}
+  const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
+  const metodo = editandoId ? 'PUT' : 'POST';
+  await api(url,{method:metodo,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  fecharFormProduto();
+  loadProdutos(); loadResumo();
+}
 
-@app.post("/api/editais/{match_id}/marcar")
-def marcar(match_id: int, dados: MarcarIn,
-           user: Usuario = Depends(_auth.get_current_user),
-           db: Session = Depends(get_session)):
-    m = _match_do_usuario(db, match_id, user)
-    if dados.lido is not None:
-        m.lido = dados.lido
-    if dados.interessante is not None:
-        m.interessante = dados.interessante
-    db.commit()
-    return {"ok": True}
+async function editarProduto(id){
+  await carregarFornecedoresSelect();
+  const p = await api('/api/produtos/'+id);
+  const set=(campo,val)=>$('#'+campo).value = (val==null?'':val);
+  set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
+  set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
+  set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
+  set('p-unidade',p.unidade_venda); set('p-itens-unid',p.itens_por_unidade);
+  set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
+  if($('#p-forn-sel')) $('#p-forn-sel').value = p.fornecedor_id || '';
+  editandoId = id;
+  $('#form-titulo').textContent = 'Editar produto';
+  $('#btn-salvar-prod').textContent = 'Salvar alterações';
+  $('#modal-produto').classList.remove('hidden');
+}
 
+function cancelarEdicao(){
+  editandoId = null;
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  $('#form-titulo').textContent = 'Cadastrar produto/serviço';
+  $('#btn-salvar-prod').textContent = 'Salvar produto';
+}
+async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); loadProdutos(); loadResumo(); }
 
-STATUS_VALIDOS = {"novo", "vou_participar", "proposta_enviada", "ganho", "perdido", "descartado"}
+function abrirCatalogoOficial(tipo){
+  // abre o catálogo oficial já com a descrição do produto como termo de busca
+  const termo = ($('#p-desc').value || '').trim();
+  const base = 'https://catalogo.compras.gov.br/cnbs-web/busca';
+  const url = termo ? `${base}?pesquisa=${encodeURIComponent(termo)}` : base;
+  window.open(url, '_blank');
+}
 
+// ---- Fornecedores ----
+let _fornecedoresCache = [];
+async function carregarFornecedoresSelect(){
+  try{ _fornecedoresCache = await api('/api/fornecedores'); }
+  catch(e){ _fornecedoresCache = []; }
+  const sel = $('#p-forn-sel');
+  if(!sel) return;
+  const atual = sel.value;
+  sel.innerHTML = '<option value="">— sem fornecedor / preencher manual —</option>'
+    + _fornecedoresCache.map(f=>`<option value="${f.id}">${f.nome}</option>`).join('');
+  sel.value = atual;
+}
+function aoEscolherFornecedor(){
+  const id = $('#p-forn-sel').value;
+  if(!id){ return; }  // manual: não mexe nos campos
+  const f = _fornecedoresCache.find(x=>String(x.id)===String(id));
+  if(!f) return;
+  $('#p-forn').value = f.nome || '';
+  $('#p-forn-contato').value = f.whatsapp || f.telefone || f.email || '';
+  $('#p-forn-site').value = f.site || '';
+}
 
-class StatusIn(BaseModel):
-    status: str
+let editandoFornId = null;
+async function loadFornecedores(){
+  const fs = await api('/api/fornecedores');
+  if(!fs.length){ $('#lista-fornecedores').innerHTML='<tr><td colspan=6 class="muted">Nenhum fornecedor cadastrado.</td></tr>'; return; }
+  $('#lista-fornecedores').innerHTML = fs.map(f=>`<tr>
+    <td>${f.nome}</td><td>${f.telefone||'—'}</td><td>${f.whatsapp||'—'}</td>
+    <td>${f.email||'—'}</td>
+    <td>${f.site?`<a href="${f.site.startsWith('http')?f.site:'https://'+f.site}" target="_blank">abrir ↗</a>`:'—'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn ghost" onclick='editarFornecedor(${JSON.stringify(f)})'>editar</button>
+      <button class="btn ghost" onclick="delFornecedor(${f.id})">excluir</button>
+    </td></tr>`).join('');
+}
+function abrirFormFornecedor(){
+  cancelarEdicaoForn();
+  if(!$('#fn-tel').dataset.mask){
+    aplicarMascara($('#fn-tel'), mascaraTel); aplicarMascara($('#fn-wpp'), mascaraTel);
+    $('#fn-tel').dataset.mask='1';
+  }
+  $('#modal-fornecedor').classList.remove('hidden');
+}
+function fecharFormFornecedor(){ $('#modal-fornecedor').classList.add('hidden'); cancelarEdicaoForn(); }
+function cancelarEdicaoForn(){
+  editandoFornId=null;
+  ['fn-nome','fn-tel','fn-wpp','fn-email','fn-site','fn-obs'].forEach(i=>$('#'+i).value='');
+  $('#forn-form-titulo').textContent='Cadastrar fornecedor';
+  $('#btn-salvar-forn').textContent='Salvar fornecedor';
+  $('#forn-msg').textContent='';
+}
+async function salvarFornecedor(){
+  const nome=$('#fn-nome').value.trim();
+  if(!nome){ $('#forn-msg').textContent='Informe o nome.'; return; }
+  const email=$('#fn-email').value.trim();
+  if(email && !emailValido(email)){ $('#forn-msg').textContent='E-mail inválido.'; $('#forn-msg').style.color='#f87171'; return; }
+  const body={nome, telefone:$('#fn-tel').value.trim()||null, whatsapp:$('#fn-wpp').value.trim()||null,
+    email:email||null, site:$('#fn-site').value.trim()||null, observacao:$('#fn-obs').value.trim()||null};
+  const url = editandoFornId ? '/api/fornecedores/'+editandoFornId : '/api/fornecedores';
+  await api(url,{method: editandoFornId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  fecharFormFornecedor(); loadFornecedores();
+  toast('Fornecedor salvo.', 'ok', 2500);
+}
+function editarFornecedor(f){
+  abrirFormFornecedor();
+  $('#fn-nome').value=f.nome||''; $('#fn-tel').value=f.telefone||''; $('#fn-wpp').value=f.whatsapp||'';
+  $('#fn-email').value=f.email||''; $('#fn-site').value=f.site||''; $('#fn-obs').value=f.observacao||'';
+  editandoFornId=f.id;
+  $('#forn-form-titulo').textContent='Editar fornecedor';
+  $('#btn-salvar-forn').textContent='Salvar alterações';
+}
+async function delFornecedor(id){
+  if(!confirm('Excluir este fornecedor? Os produtos ligados a ele mantêm os dados atuais.')) return;
+  await fetch('/api/fornecedores/'+id,{method:'DELETE'}); loadFornecedores();
+}
 
-
-@app.post("/api/editais/{match_id}/status")
-def mudar_status(match_id: int, dados: StatusIn,
-                 user: Usuario = Depends(_auth.get_current_user),
-                 db: Session = Depends(get_session)):
-    if dados.status not in STATUS_VALIDOS:
-        raise HTTPException(400, f"Status inválido. Use um de: {', '.join(sorted(STATUS_VALIDOS))}")
-    m = _match_do_usuario(db, match_id, user)
-    m.status = dados.status
-    db.commit()
-    return {"ok": True}
-
-
-@app.get("/api/editais/{edital_id}/detalhe")
-def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
-    """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
-    compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    match = db.execute(select(Match).where(Match.edital_id == edital_id)
-                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
-
-    # item (número) -> produto_id, a partir do detalhe do match
-    mapa: dict = {}
-    if match and match.detalhe:
-        for d in (match.detalhe.get("itens") or []):
-            if d.get("item") is not None:
-                mapa[d["item"]] = d.get("produto_id")
-    prod_ids = {v for v in mapa.values() if v}
-    produtos = {}
-    if prod_ids:
-        produtos = {p.id: p for p in db.execute(
-            select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
-
-    itens = []
-    for it in ed.itens:
-        prod = produtos.get(mapa.get(it.numero))
-        margem = margem_pct = None
-        custo_comparavel = None
-        alerta_unidade = False
-        if prod and it.valor_unitario is not None and prod.preco_custo is not None:
-            # custo na MESMA base do órgão: se o produto é vendido em embalagem
-            # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
-            por_unid = prod.itens_por_unidade if (prod.itens_por_unidade or 0) > 0 else 1
-            custo_comparavel = round(prod.preco_custo / por_unid, 4)
-            margem = round(it.valor_unitario - custo_comparavel, 4)
-            if it.valor_unitario:
-                margem_pct = round(margem / it.valor_unitario * 100, 1)
-            # se a margem ainda é absurda, provavelmente as unidades não batem
-            if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
-                alerta_unidade = True
-        itens.append({
-            "numero": it.numero, "descricao": it.descricao,
-            "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
-            "compativel": prod is not None,
-            "margem": margem, "margem_pct": margem_pct,
-            "custo_comparavel": custo_comparavel,
-            "alerta_unidade": alerta_unidade,
-            "produto": None if not prod else {
-                "id": prod.id, "descricao": prod.descricao,
-                "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,
-                "unidade_venda": prod.unidade_venda,
-                "itens_por_unidade": prod.itens_por_unidade,
-                "fornecedor_nome": prod.fornecedor_nome,
-                "fornecedor_contato": prod.fornecedor_contato,
-                "fornecedor_site": prod.fornecedor_site,
-            },
-        })
-    itens.sort(key=lambda x: x["compativel"], reverse=True)
-
-    dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
-    return {
-        "edital": {
-            "id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
-            "modalidade": ed.modalidade, "uf": ed.uf, "municipio": ed.municipio,
-            "valor_estimado": ed.valor_estimado, "fonte": ed.fonte, "link": ed.link,
-            "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
-            "dias_restantes": dias,
-            "nivel": match.nivel if match else None,
-            "score": match.score if match else None,
-        },
-        "itens": itens,
+async function sugerirCatalogoIA(tipo){
+  const desc = ($('#p-desc').value||'').trim();
+  if(desc.length<2){ toast('Escreva a descrição do produto primeiro.', 'aviso'); return; }
+  toast('Consultando a IA…', 'aviso', 2500);
+  try{
+    const r = await api(`/api/catmat/sugerir-ia?descricao=${encodeURIComponent(desc)}&tipo=${tipo}`);
+    if(r.status==='sem_ia'){
+      toast('Informe sua chave Gemini em "Meu perfil" para usar a IA.', 'aviso', 5000); return;
     }
-
-
-# --------------------------- Regras de exclusão ----------------------- #
-@app.get("/api/regras")
-def listar_regras(user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    regras = db.execute(select(RegraExclusao)
-                        .where(RegraExclusao.usuario_id == user.id)).scalars().all()
-    return [{"id": r.id, "tipo": r.tipo, "valor": r.valor, "ativo": r.ativo} for r in regras]
-
-
-@app.post("/api/regras")
-def criar_regra(dados: RegraIn, user: Usuario = Depends(_auth.get_current_user),
-                db: Session = Depends(get_session)):
-    r = RegraExclusao(tipo=dados.tipo, valor=dados.valor, usuario_id=user.id)
-    db.add(r)
-    db.commit()
-    return {"id": r.id}
-
-
-@app.delete("/api/regras/{regra_id}")
-def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    r = db.get(RegraExclusao, regra_id)
-    if r and r.usuario_id == user.id:
-        db.delete(r)
-        db.commit()
-    return {"ok": True}
-
-
-# --------------------------- Coleta / Logs / Resumo ------------------- #
-# Trava para impedir coletas simultâneas (evita condição de corrida que
-# duplica matches). Só uma coleta roda por vez; as demais são ignoradas.
-_coleta_lock = threading.Lock()
-
-
-def _rodar_coleta_bg(usuario_id: int | None = None):
-    # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
-    if not _coleta_lock.acquire(blocking=False):
-        import logging
-        logging.getLogger("coleta").info(
-            "Coleta já em andamento — ignorando novo disparo.")
-        return
-    db = SessionLocal()
-    try:
-        processar_coleta(db, usuario_id=usuario_id)
-        # após coletar, verifica prazos encerrando e documentos vencendo
-        from .lembretes import verificar_todos
-        verificar_todos(db)
-    finally:
-        db.close()
-        _coleta_lock.release()
-
-
-@app.post("/api/coletar")
-def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    # precisa ter produtos cadastrados para a coleta fazer sentido
-    tem_produtos = db.scalar(
-        select(func.count(Produto.id)).where(Produto.usuario_id == user.id)) or 0
-    if not tem_produtos:
-        return {"ok": False, "sem_produtos": True,
-                "mensagem": "Cadastre ao menos um produto antes de buscar editais."}
-    # coleta manual gera matches só para quem clicou
-    bg.add_task(_rodar_coleta_bg, user.id)
-    return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
-
-
-# --------------------------- Recalcular (background) ------------------- #
-# Recalcular todos os editais já coletados pode demorar bastante (percorre
-# TODOS os editais, não só os novos, refazendo TF-IDF/fuzzy e, se ativa, IA).
-# Rodar isso dentro da própria request HTTP estourava o timeout do proxy
-# (Render free) antes de terminar, e o front recebia uma resposta que não
-# era JSON -> "Erro ao recalcular". Agora roda em background, com o mesmo
-# padrão de /api/coletar, e o front consulta o status por polling.
-_recalculo_locks: dict[int, threading.Lock] = {}
-_recalculo_status: dict[int, dict] = {}
-
-
-def _lock_recalculo(usuario_id: int) -> threading.Lock:
-    return _recalculo_locks.setdefault(usuario_id, threading.Lock())
-
-
-def _rodar_recalculo_bg(usuario_id: int):
-    lock = _lock_recalculo(usuario_id)
-    if not lock.acquire(blocking=False):
-        return
-    db = SessionLocal()
-    try:
-        from .service import recalcular_matches
-        resultado = recalcular_matches(db, usuario_id=usuario_id)
-        _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
-    except Exception as e:
-        db.rollback()
-        log.exception("Erro ao recalcular matches (usuário %s)", usuario_id)
-        _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
-    finally:
-        db.close()
-        lock.release()
-
-
-@app.post("/api/recalcular")
-def recalcular(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    """Dispara, em segundo plano, a reavaliação de todos os editais já
-    coletados contra o catálogo atual DESTE usuário. Retorna na hora; o
-    resultado é consultado em /api/recalcular/status."""
-    lock = _lock_recalculo(user.id)
-    if lock.locked():
-        return {"ok": False, "em_andamento": True,
-                "mensagem": "Já existe um recálculo em andamento."}
-    _recalculo_status[user.id] = {"rodando": True, "erro": None}
-    bg.add_task(_rodar_recalculo_bg, user.id)
-    return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
-
-
-@app.get("/api/recalcular/status")
-def recalcular_status(user: Usuario = Depends(_auth.get_current_user)):
-    return _recalculo_status.get(user.id, {"rodando": False, "erro": None})
-
-
-def _ref_pncp(ed: Edital):
-    """Reconstrói (cnpj, ano, sequencial) a partir do numeroControlePNCP
-    (formato: cnpj-tipo-sequencial/ano)."""
-    try:
-        esq, ano = ed.id_externo.rsplit("/", 1)
-        partes = esq.split("-")
-        cnpj = (ed.cnpj_orgao or partes[0]).strip()
-        seq = int(partes[-1])
-        return cnpj, int(ano), seq
-    except Exception:
-        return None
-
-
-def _listar_arquivos_pncp(ed: Edital) -> dict:
-    """Busca no PNCP os arquivos/anexos publicados para o edital."""
-    ref = _ref_pncp(ed)
-    if not ref:
-        return {"status": "sem_ref", "arquivos": [], "portal": ed.link}
-    cnpj, ano, seq = ref
-    base = settings.PNCP_ITENS_BASE_URL.rstrip("/")
-    url = f"{base}/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos"
-    try:
-        r = requests.get(url, timeout=30,
-                         headers={"Accept": "application/json",
-                                  "User-Agent": "RadarLicitacoes/1.0"})
-    except requests.RequestException:
-        return {"status": "erro_rede", "arquivos": [], "portal": ed.link}
-    if r.status_code != 200:
-        return {"status": f"http_{r.status_code}", "arquivos": [], "portal": ed.link}
-    try:
-        dados = r.json()
-    except ValueError:
-        return {"status": "resposta_invalida", "arquivos": [], "portal": ed.link}
-
-    lista = dados if isinstance(dados, list) else (dados.get("data") or [])
-    arquivos = []
-    for a in lista:
-        if not isinstance(a, dict):
-            continue
-        seq_doc = a.get("sequencialDocumento")
-        arquivos.append({
-            "titulo": a.get("titulo") or a.get("nomeArquivo")
-                      or a.get("tipoDocumentoNome") or "Documento",
-            "tipo": a.get("tipoDocumentoNome") or "",
-            "url": a.get("url") or a.get("uri") or a.get("link")
-                   or (f"{url}/{seq_doc}" if seq_doc is not None else None),
-        })
-    arquivos = [x for x in arquivos if x["url"]]
-    return {"status": "ok" if arquivos else "vazio",
-            "arquivos": arquivos, "portal": ed.link}
-
-
-@app.get("/api/editais/{edital_id}/documentos")
-def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    """Lista os arquivos/anexos do edital publicados no PNCP para download."""
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    return _listar_arquivos_pncp(ed)
-
-
-@app.get("/api/editais/{edital_id}/analise")
-def analise_edital(edital_id: int, forcar: bool = Query(False),
-                   user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
-    """Análise do edital por IA (resumo, exigências, prazos, pontos de atenção).
-    Resultado fica em cache; use ?forcar=true para refazer."""
-    from . import analise_edital as ia
-    import json as _json
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    # análise já feita: mostra do cache (é leitura, não consome IA), desde que
-    # tenha sido gerada com a versão atual do prompt. Versão antiga -> refaz.
-    if ed.analise_ia and not forcar:
-        try:
-            cache = _json.loads(ed.analise_ia)
-            if cache.get("versao") == ia.VERSAO_PROMPT:
-                cache["cache"] = True
-                return cache
-            # versão antiga: cai para baixo e refaz com o prompt novo
-        except ValueError:
-            pass
-    # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
-    chave = _auth.decifrar(user.gemini_key_cifrada)
-    if not ia.ia_texto_disponivel(chave):
-        return {"status": "sem_ia"}
-    docs = _listar_arquivos_pncp(ed)
-    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
-    if resultado.get("status") == "ok":
-        ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
-        ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-        db.commit()
-    return resultado
-
-
-@app.api_route("/api/coletar-cron", methods=["GET", "POST"])
-def coletar_cron(bg: BackgroundTasks, request: Request):
-    """Dispara a coleta de DENTRO do Render (que alcança o PNCP), chamado por um
-    agendador externo (GitHub Actions). Protegido por CRON_SECRET, já que esta
-    rota é isenta do login Basic."""
-    if not settings.CRON_SECRET:
-        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
-    enviado = request.headers.get("X-Cron-Key") or request.query_params.get("chave") or ""
-    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
-        raise HTTPException(403, "Chave inválida.")
-    bg.add_task(_rodar_coleta_bg)
-    return {"ok": True, "mensagem": "Coleta iniciada (cron)."}
-
-
-@app.get("/api/coleta/status")
-def coleta_status(user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    """Estado da coleta para o indicador do dashboard."""
-    ultimo = db.execute(
-        select(LogColeta).order_by(LogColeta.id.desc()).limit(1)
-    ).scalar_one_or_none()
-    if not ultimo:
-        return {"estado": "nunca"}
-
-    agora = _utcnow_main()
-    em_andamento = ultimo.finalizado_em is None
-    travado = False
-    if em_andamento and ultimo.iniciado_em:
-        if (agora - ultimo.iniciado_em).total_seconds() > 1800:  # >30 min sem terminar
-            em_andamento, travado = False, True
-
-    # última coleta concluída (pode ser anterior à que está rodando)
-    ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
-        select(LogColeta).where(LogColeta.finalizado_em.is_not(None))
-        .order_by(LogColeta.id.desc()).limit(1)
-    ).scalar_one_or_none()
-
-    estado = "em_andamento" if em_andamento else ("travado" if travado else "ocioso")
-    return {
-        "estado": estado,
-        "iniciada_ha_seg": int((agora - ultimo.iniciado_em).total_seconds())
-            if em_andamento and ultimo.iniciado_em else None,
-        "ultima_fim_seg": int((agora - ultima_ok.finalizado_em).total_seconds())
-            if ultima_ok and ultima_ok.finalizado_em else None,
-        "novos": ultima_ok.editais_novos if ultima_ok else None,
-        "vistos": ultima_ok.editais_vistos if ultima_ok else None,
-        "fortes": ultima_ok.matches_fortes if ultima_ok else None,
-        "erro": ultima_ok.erro if ultima_ok else None,
+    if(r.status!=='ok' || !r.termos || !r.termos.length){
+      toast('A IA não conseguiu sugerir agora. Tente o catálogo oficial.', 'aviso', 4000); return;
     }
+    // mostra os termos sugeridos; ao clicar, abre o catálogo oficial com aquele termo
+    const mount=$('#modal-mount');
+    const alvo = tipo==='material' ? 'CATMAT' : 'CATSER';
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card" style="max-width:520px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Sugestões de busca ${alvo} (IA)</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:0">A IA sugere termos de busca — ela não inventa códigos. Clique num termo para procurá-lo no catálogo oficial e copiar o código correto de lá.</p>
+        ${r.observacao?`<p style="font-size:13px">${r.observacao}</p>`:''}
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          ${r.termos.map(t=>`<button class="btn ghost" style="text-align:left" onclick="window.open('https://catalogo.compras.gov.br/cnbs-web/busca?pesquisa=${encodeURIComponent(t)}','_blank')">${ICN.busca} ${t}</button>`).join('')}
+        </div>
+      </div></div>`;
+  }catch(e){ toast('Erro ao consultar a IA.', 'erro'); }
+}
 
+async function loadRegras(){
+  const rs=await api('/api/regras');
+  $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${r.tipo}</td><td>${r.valor}</td>
+    <td><button class="btn ghost" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
+    ||'<tr><td colspan=3 class="muted">Nenhuma regra.</td></tr>';
+}
+async function salvarRegra(){
+  const body={tipo:$('#r-tipo').value,valor:$('#r-valor').value};
+  if(!body.valor){alert('Informe o valor');return;}
+  await api('/api/regras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#r-valor').value=''; loadRegras();
+}
+async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras(); }
 
-@app.get("/api/logs")
-def logs(user: Usuario = Depends(_auth.get_current_user),
-         db: Session = Depends(get_session)):
-    regs = db.execute(select(LogColeta).order_by(LogColeta.id.desc()).limit(30)).scalars().all()
-    return [{
-        "id": l.id, "fonte": l.fonte,
-        "iniciado_em": _brt(l.iniciado_em),
-        "finalizado_em": _brt(l.finalizado_em),
-        "editais_novos": l.editais_novos, "editais_vistos": l.editais_vistos,
-        "matches_fortes": l.matches_fortes, "erro": l.erro,
-    } for l in regs]
+let editandoDocId = null;
 
+async function loadDocumentos(){
+  const ds=await api('/api/documentos');
+  if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
+  $('#lista-documentos').innerHTML=ds.map(d=>{
+    let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
+    if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+    else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    return `<tr>
+      <td>${d.nome}${d.link?` <a href="${d.link}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}</td><td class="muted">${d.orgao_emissor||'—'}</td>
+      <td>${d.data_validade.split('-').reverse().join('/')}</td>
+      <td style="color:${cor};font-weight:600">${txt}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost" onclick='editarDocumento(${JSON.stringify(d)})'>editar</button>
+        <button class="btn ghost" onclick="delDocumento(${d.id})">excluir</button>
+      </td></tr>`;
+  }).join('');
+}
 
-@app.get("/api/resumo")
-def resumo(user: Usuario = Depends(_auth.get_current_user),
-           db: Session = Depends(get_session)):
-    hoje = date.today()
-    ativo = (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje)
-    meu = Match.usuario_id == user.id
+function abrirFormDocumento(){
+  cancelarEdicaoDoc();
+  $('#modal-documento').classList.remove('hidden');
+}
+function fecharFormDocumento(){
+  $('#modal-documento').classList.add('hidden');
+  cancelarEdicaoDoc();
+}
 
-    total_prod = db.scalar(
-        select(func.count(Produto.id)).where(Produto.usuario_id == user.id)) or 0
-    # editais ativos que ESTE usuário tem como match
-    total_editais = db.scalar(
-        select(func.count(Match.id)).join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu)
-    ) or 0
-    por_nivel = dict(db.execute(
-        select(Match.nivel, func.count(Match.id))
-        .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu)
-        .group_by(Match.nivel)
-    ).all())
-    nao_lidos = db.scalar(
-        select(func.count(Match.id))
-        .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Match.lido == False)  # noqa: E712
-    ) or 0
-    do_dia = db.scalar(
-        select(func.count(Match.id))
-        .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Edital.data_abertura == hoje)
-    ) or 0
-    return {
-        "produtos": total_prod, "editais": total_editais,
-        "fortes": por_nivel.get("forte", 0), "medios": por_nivel.get("medio", 0),
-        "fracos": por_nivel.get("fraco", 0), "nao_lidos": nao_lidos,
-        "do_dia": do_dia,
+async function salvarDocumento(){
+  const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
+    data_validade:$('#d-validade').value, link:$('#d-link').value.trim()||null, observacao:$('#d-obs').value.trim()||null};
+  if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
+  const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
+  await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  fecharFormDocumento(); loadDocumentos();
+}
+
+function editarDocumento(d){
+  $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
+  $('#d-validade').value=d.data_validade; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
+  editandoDocId=d.id;
+  $('#doc-form-titulo').textContent='Editar documento';
+  $('#btn-salvar-doc').textContent='Salvar alterações';
+  $('#modal-documento').classList.remove('hidden');
+}
+
+function cancelarEdicaoDoc(){
+  editandoDocId=null;
+  ['d-nome','d-orgao','d-validade','d-link','d-obs'].forEach(i=>$('#'+i).value='');
+  $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
+  $('#btn-salvar-doc').textContent='Salvar documento';
+}
+
+async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
+
+async function mudarStatus(matchId, status){
+  await api(`/api/editais/${matchId}/status`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadResumo();
+}
+
+const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+async function loadPrecos(){
+  const ps=await api('/api/inteligencia-preco');
+  if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
+  $('#lista-precos').innerHTML=ps.map(p=>`<tr>
+    <td>${p.descricao}</td><td>${p.ocorrencias}</td>
+    <td>${fmtR(p.minimo)}</td><td><strong>${fmtR(p.mediana)}</strong></td>
+    <td>${fmtR(p.maximo)}</td><td class="muted">${fmtR(p.preco_venda)}</td>
+  </tr>`).join('');
+}
+
+async function loadConfig(){
+  const c=await api('/api/config');
+  $('#c-ufs').value=c.PNCP_UFS||'';
+  $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
+  $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
+  const disp = c.IA_DISPONIVEL==='1';
+  $('#c-ia').checked = c.IA_ATIVA==='1' && disp;
+  $('#c-ia').disabled = !disp;
+  let txt;
+  if(!disp) txt='Informe a sua chave da IA (Gemini) em "Meu perfil" para ativar.';
+  else if(c.IA_BLOQUEADA==='1'){
+    const min=+c.IA_LIBERA_EM_MIN||0;
+    const h=Math.floor(min/60), m=min%60;
+    txt=`Limite diário gratuito atingido — volta a usar IA em ~${h>0?h+'h':''}${m}min (até lá, usa só o texto)`;
+  }
+  else txt = c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)';
+  $('#ia-status').textContent = txt;
+}
+
+async function salvarConfig(){
+  const body={
+    PNCP_UFS:$('#c-ufs').value.trim(),
+    PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
+    PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
+    IA_ATIVA: $('#c-ia').checked ? '1' : '0',
+  };
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#config-msg').innerHTML=ICN.check+' salvo — vale na próxima coleta (use Recalcular p/ aplicar nos já coletados)';
+  setTimeout(()=>{$('#config-msg').textContent='';},5000);
+  loadConfig();
+}
+
+async function loadLogs(){
+  const ls=await api('/api/logs');
+  $('#lista-logs').innerHTML=ls.map(l=>`<tr>
+    <td>${l.fonte}</td><td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
+    <td>${(l.finalizado_em||'—').replace('T',' ').slice(0,16)}</td>
+    <td>${l.editais_vistos}</td><td>${l.editais_novos}</td><td>${l.matches_fortes}</td>
+    <td class="muted">${l.erro||''}</td></tr>`).join('')
+    ||'<tr><td colspan=7 class="muted">Sem coletas ainda.</td></tr>';
+}
+
+function haTempo(seg){
+  if(seg==null) return '';
+  if(seg<60) return 'há instantes';
+  if(seg<3600) return `há ${Math.floor(seg/60)} min`;
+  if(seg<86400) return `há ${Math.floor(seg/3600)} h`;
+  return `há ${Math.floor(seg/86400)} d`;
+}
+
+async function loadColetaStatus(){
+  const el=$('#coleta-status');
+  try{
+    const s=await api('/api/coleta/status');
+    if(s.estado==='em_andamento'){
+      el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
+    } else if(s.estado==='nunca'){
+      el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
+    } else if(s.estado==='travado'){
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Última coleta não finalizou'; el.style.color='#f87171';
+    } else if(s.erro){
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Erro na última coleta'; el.style.color='#f87171';
+    } else {
+      const r = s.novos!=null ? ` · ${s.novos} novos` : '';
+      el.textContent=`Última coleta ${haTempo(s.ultima_fim_seg)}${r}`;
+      el.style.color='var(--muted)';
     }
+  }catch(e){}
+}
 
+function toast(msg, tipo='aviso', ms=4000){
+  let box=document.getElementById('toasts');
+  if(!box){ box=document.createElement('div'); box.id='toasts'; document.body.appendChild(box); }
+  const t=document.createElement('div'); t.className='toast '+tipo;
+  const ic={aviso:ICN.alerta||'', erro:ICN.alerta||'', ok:ICN.check||''}[tipo]||'';
+  t.innerHTML=`<span class="ic">${ic}</span><span>${msg}</span>`;
+  box.appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(),300); }, ms);
+}
 
-class PropostaIn(BaseModel):
-    itens: list[dict] = []
-    observacoes: str | None = None
+async function coletar(){
+  const r=await api('/api/coletar',{method:'POST'});
+  if(r && r.sem_produtos){
+    toast(r.mensagem || 'Cadastre ao menos um produto antes de buscar editais.', 'aviso', 5000);
+    return;
+  }
+  const el=$('#coleta-status');
+  el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
+  // acompanha de perto por alguns minutos, depois volta ao ritmo normal
+  let n=0;
+  const t=setInterval(async()=>{
+    await loadColetaStatus(); loadResumo();
+    if(++n>45) clearInterval(t);     // ~6 min
+  }, 8000);
+}
 
+async function recalcular(){
+  const el=$('#coleta-status');
+  el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
+  try{
+    const r=await api('/api/recalcular',{method:'POST'});
+    el.textContent=`Recalculados ${r.atualizados} edital(is) · ${r.fortes} de alta compatibilidade`;
+    el.style.color='var(--muted)';
+    loadEditais(); loadResumo();
+  }catch(e){
+    el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+  }
+}
 
-def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
-    if prop and prop.itens:
-        itens = prop.itens
-    else:
-        # esqueleto a partir dos itens do edital
-        itens = [{
-            "descricao": it.descricao,
-            "quantidade": it.quantidade or 0,
-            "custo_unit": 0,
-            "preco_unit": it.valor_unitario or 0,
-        } for it in ed.itens]
-    total_venda = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
-    total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
-    margem = total_venda - total_custo
-    margem_pct = (margem / total_venda * 100) if total_venda else 0
-    return {
-        "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
-        "itens": itens, "observacoes": prop.observacoes if prop else "",
-        "total_venda": round(total_venda, 2), "total_custo": round(total_custo, 2),
-        "margem": round(margem, 2), "margem_pct": round(margem_pct, 1),
-        "existe": prop is not None,
+function _listaHTML(titulo, itens){
+  if(!itens||!itens.length) return '';
+  return `<div style="margin-top:10px"><strong>${titulo}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${i}</li>`).join('')}</ul></div>`;
+}
+
+async function analisarEdital(id, forcar){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p></div></div>';
+  try{
+    const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`);
+    let corpo;
+    if(r.status==='ok'){
+      const flags=[];
+      if(r.exige_amostra) flags.push('Exige amostra');
+      if(r.exige_visita) flags.push('Exige visita técnica');
+      if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+      if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
+      else if(r.julgamento==='item') flags.push('Julgamento por item');
+      corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
+        ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
+        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${r.garantia_contratual}</p>`:''}
+        ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
+        ${_listaHTML('Prazos', r.prazos)}
+        ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
+        <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
+          Análise automática por IA${r.fonte?` · fonte: ${r.fonte}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
+          <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
+        </div>`;
+    } else {
+      const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
+        sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
+        sem_ref:'Não foi possível localizar este edital no PNCP.',
+        sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
+        vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
+        sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
+        erro_ia:'A IA não respondeu agora (pode ser limite diário do plano gratuito). Tente mais tarde.',
+        resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
+      corpo = `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
+        ${r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
     }
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Análise do edital (IA)</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>${corpo}
+      </div></div>`;
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao analisar o edital.</p></div></div>';
+  }
+}
 
+let _propEditalId = null;
 
-@app.get("/api/editais/{edital_id}/proposta")
-def obter_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
-    return _proposta_payload(ed, prop)
+async function abrirProposta(id){
+  _propEditalId = id;
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando proposta…</p></div></div>';
+  try{
+    const p=await api(`/api/editais/${id}/proposta`);
+    window._propItens = (p.itens||[]).map(i=>({
+      descricao:i.descricao||'', quantidade:+i.quantidade||0,
+      custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card" style="max-width:880px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0">Proposta — ${p.orgao||'edital'}</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
+        <div id="prop-tabela"></div>
+        <div class="field" style="margin-top:10px"><label>Observações</label>
+          <textarea id="prop-obs" style="width:100%;min-height:50px">${p.observacoes||''}</textarea></div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
+          <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
+          <span style="flex:1"></span>
+          <span id="prop-msg" class="muted" style="font-size:12px"></span>
+        </div>
+      </div></div>`;
+    renderProposta();
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao abrir a proposta.</p></div></div>';
+  }
+}
 
+function renderProposta(){
+  const its=window._propItens||[];
+  let tv=0, tc=0;
+  const linhas=its.map((it,idx)=>{
+    const totItem=(it.preco_unit||0)*(it.quantidade||0);
+    const margItem=((it.preco_unit||0)-(it.custo_unit||0))*(it.quantidade||0);
+    tv+=totItem; tc+=(it.custo_unit||0)*(it.quantidade||0);
+    return `<tr>
+      <td><input value="${(it.descricao||'').replace(/"/g,'&quot;')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
+      <td><input type="number" step="any" value="${it.quantidade}" onchange="propSet(${idx},'quantidade',this.value)" style="width:80px"></td>
+      <td><input type="number" step="any" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
+      <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
+      <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
+      <td style="white-space:nowrap;color:${margItem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margItem)}</td>
+      <td><button class="btn ghost" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
+    </tr>`;
+  }).join('');
+  const margem=tv-tc, pct=tv?(margem/tv*100):0;
+  $('#prop-tabela').innerHTML=`<div style="overflow-x:auto"><table>
+    <thead><tr><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
+    <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
+  </table></div>
+  <button class="btn ghost" style="margin-top:8px" onclick="propAdd()">+ adicionar item</button>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+    <div><div class="muted" style="font-size:11px">Total da proposta</div><strong style="font-size:18px">${fmtMoeda(tv)}</strong></div>
+    <div><div class="muted" style="font-size:11px">Custo total</div><strong style="font-size:18px">${fmtMoeda(tc)}</strong></div>
+    <div><div class="muted" style="font-size:11px">Margem</div><strong style="font-size:18px;color:${margem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margem)} (${pct.toFixed(1)}%)</strong></div>
+  </div>`;
+}
 
-@app.post("/api/editais/{edital_id}/proposta")
-def salvar_proposta(edital_id: int, dados: PropostaIn,
-                    user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
-    if prop is None:
-        prop = Proposta(edital_id=edital_id, usuario_id=user.id)
-        db.add(prop)
-    prop.itens = dados.itens
-    prop.observacoes = dados.observacoes
-    db.commit()
-    db.refresh(prop)
-    return _proposta_payload(ed, prop)
+function propSet(idx,campo,val){
+  const it=window._propItens[idx];
+  it[campo] = campo==='descricao' ? val : (parseFloat(val)||0);
+  renderProposta();
+}
+function propAdd(){ window._propItens.push({descricao:'',quantidade:1,custo_unit:0,preco_unit:0}); renderProposta(); }
+function propDel(idx){ window._propItens.splice(idx,1); renderProposta(); }
 
+async function salvarProposta(){
+  try{
+    await api(`/api/editais/${_propEditalId}/proposta`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({itens:window._propItens, observacoes:$('#prop-obs').value})});
+    $('#prop-msg').innerHTML=ICN.check+' proposta salva';
+    setTimeout(()=>{$('#prop-msg').textContent='';},4000);
+  }catch(e){ $('#prop-msg').textContent='erro ao salvar'; }
+}
 
-@app.get("/api/editais/{edital_id}/proposta.csv")
-def exportar_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                      .where(Proposta.usuario_id == user.id)).scalars().first()
-    p = _proposta_payload(ed, prop)
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
-    w.writerow(["Descrição", "Quantidade", "Custo unit.", "Preço unit.", "Total venda", "Margem"])
-    for it in p["itens"]:
-        q = it.get("quantidade") or 0
-        cu = it.get("custo_unit") or 0
-        pu = it.get("preco_unit") or 0
-        w.writerow([it.get("descricao", ""), q, f"{cu:.2f}", f"{pu:.2f}",
-                    f"{pu * q:.2f}", f"{(pu - cu) * q:.2f}"])
-    w.writerow([])
-    w.writerow(["", "", "", "TOTAIS:", f"{p['total_venda']:.2f}", f"{p['margem']:.2f}"])
-    buf.seek(0)
-    nome = f"proposta_edital_{edital_id}.csv"
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": f"attachment; filename={nome}"})
+async function baixarDocumentos(id){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Buscando documentos no PNCP…</p></div></div>';
+  try{
+    const r=await api(`/api/editais/${id}/documentos`);
+    const arqs=r.arquivos||[];
+    let corpo;
+    if(arqs.length){
+      corpo = `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
+        + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
+            <a class="btn ghost" href="${a.url}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
+            <span style="flex:1">${a.titulo}${a.tipo?` <span class="muted">· ${a.tipo}</span>`:''}</span>
+          </div>`).join('');
+    } else {
+      const motivo = r.status==='vazio' ? 'Este edital não tem arquivos publicados no PNCP.'
+        : 'Não foi possível obter os arquivos pela API do PNCP (alguns órgãos só publicam no portal próprio).';
+      corpo = `<p style="line-height:1.5">${motivo}</p>`
+        + (r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
+    }
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Documentos do edital</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>${corpo}
+      </div></div>`;
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao buscar documentos.</p></div></div>';
+  }
+}
 
+async function abrirDetalhe(id){
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando…</p></div></div>';
+  try{
+    const d=await api(`/api/editais/${id}/detalhe`);
+    const e=d.edital;
+    const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
+    const itensHtml=d.itens.map(it=>{
+      let bloco='';
+      if(it.compativel && it.produto){
+        const f=it.produto;
+        const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
+        const temConv = f.itens_por_unidade && f.itens_por_unidade>1;
+        const cu = it.custo_comparavel!=null ? fmtMoeda(it.custo_comparavel) : (f.preco_custo!=null?fmtMoeda(f.preco_custo):'—');
+        const cuLabel = temConv ? `meu custo / ${f.unidade_venda||'unid.'}` : 'meu custo';
+        let mg='—',cls='';
+        if(it.alerta_unidade){
+          mg='⚠ conferir'; cls='margem-neg';
+        } else if(it.margem!=null){
+          mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'');
+          cls=it.margem>=0?'margem-pos':'margem-neg';
+        }
+        bloco=`<div class="precos">
+            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
+            <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
+            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
+          </div>
+          ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
+          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
+        if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
+          bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
+        } else {
+          bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
+        }
+      } else {
+        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${it.quantidade}`:''} · (sem produto seu compatível)</div>`;
+      }
+      return `<div class="item-row ${it.compativel?'match':''}">
+        <strong>${it.compativel?ICN.check+' ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
+    }).join('');
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <button class="close-x" onclick="fecharModal()">×</button>
+        <h2>${e.orgao||'Órgão'}</h2>
+        <div class="muted" style="font-size:13px">${e.modalidade||''} · ${e.municipio||''}/${e.uf||''} · ${prazo}</div>
+        <p style="line-height:1.45">${e.objeto||''}</p>
+        ${e.link?`<a href="${e.link}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
+        <h3 style="margin:16px 0 4px;font-size:14px">Itens${d.itens.length?` (${d.itens.length})`:''}</h3>
+        ${itensHtml||'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
+      </div></div>`;
+  }catch(err){
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()"><div class="modal-card"><button class="close-x" onclick="fecharModal()">×</button><p>Não consegui carregar os detalhes agora.</p></div></div>`;
+  }
+}
+function fecharModal(){ $('#modal-mount').innerHTML=''; }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
 
-@app.get("/api/export.csv")
-def export_csv(nivel: str | None = None,
-               user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-        .where(Match.usuario_id == user.id)
-    if nivel:
-        q = q.where(Match.nivel == nivel)
-    q = q.order_by(Match.score.desc())
+// ---- Perfil ----
+async function loadPerfil(){
+  const p = await api('/api/perfil');
+  $('#pf-nome').value = p.nome||'';
+  $('#pf-doc').value = p.documento||'';
+  $('#pf-email').value = p.email||'';
+  const e = p.endereco||{};
+  $('#pf-cep').value = e.cep||'';
+  $('#pf-logradouro').value = e.logradouro||'';
+  $('#pf-numero').value = e.numero||'';
+  $('#pf-bairro').value = e.bairro||'';
+  $('#pf-compl').value = e.complemento||'';
+  $('#pf-cidade').value = (e.cidade||'') + (e.uf?(' / '+e.uf):'');
+  $('#pf-cidade').dataset.cidade = e.cidade||'';
+  $('#pf-cidade').dataset.uf = e.uf||'';
+  $('#pf-gemini').value = '';
+  $('#gemini-status').textContent = p.tem_gemini ? '✓ Chave salva (deixe em branco para manter; digite para trocar)' : 'Nenhuma chave salva.';
+  $('#pf-notif-email').checked = !!p.notif_email;
+  $('#pf-notif-tg').checked = !!p.notif_telegram;
+  $('#pf-avisar-abertura').checked = p.avisar_abertura !== false;
+  if(p.dias_antecedencia != null) $('#pf-dias-ante').value = p.dias_antecedencia;
+  // máscaras (idempotente: só liga uma vez)
+  if(!$('#pf-doc').dataset.mask){ aplicarMascara($('#pf-doc'), mascaraDoc); $('#pf-doc').dataset.mask='1'; }
+  if(!$('#pf-cep').dataset.mask){ aplicarMascara($('#pf-cep'), mascaraCep); $('#pf-cep').dataset.mask='1'; }
+  carregarVinculoTelegram();
+}
 
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
-    w.writerow(["nivel", "score", "itens_compativeis", "orgao", "uf", "municipio",
-                "modalidade", "valor_estimado", "data_encerramento", "objeto", "link"])
-    for m, ed in db.execute(q).all():
-        w.writerow([m.nivel, m.score, m.itens_compativeis, ed.orgao, ed.uf,
-                    ed.municipio, ed.modalidade, ed.valor_estimado,
-                    ed.data_encerramento, (ed.objeto or "")[:300], ed.link])
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]), media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=editais.csv"},
-    )
+async function carregarVinculoTelegram(){
+  const st=$('#tg-status'), ac=$('#tg-acoes');
+  try{
+    const v = await api('/api/telegram/vinculo');
+    if(!v.disponivel){
+      st.textContent = 'Conexão com o Telegram indisponível no momento.';
+      ac.innerHTML=''; return;
+    }
+    if(v.conectado){
+      st.innerHTML = '✓ <b style="color:var(--forte)">Telegram conectado</b> — você receberá os avisos por aqui.';
+      ac.innerHTML = `<button class="btn ghost" onclick="desconectarTelegram()">Desconectar</button>`;
+    } else {
+      st.innerHTML = 'Telegram <b>não conectado</b>.';
+      ac.innerHTML = `<a class="btn" href="${v.link}" target="_blank" onclick="aguardarConexaoTelegram()">Conectar meu Telegram ↗︎</a>`;
+    }
+  }catch(e){ st.textContent='Não foi possível carregar o status do Telegram.'; }
+}
 
+function aguardarConexaoTelegram(){
+  // após abrir o bot, fica checando alguns segundos se a conexão chegou
+  toast('Abra o bot e toque em Iniciar. Estou aguardando a conexão...', 'aviso', 6000);
+  let n=0;
+  const t=setInterval(async()=>{
+    const v=await api('/api/telegram/vinculo');
+    if(v.conectado){ clearInterval(t); carregarVinculoTelegram(); toast('Telegram conectado!', 'ok', 4000); }
+    if(++n>20) clearInterval(t);  // ~60s
+  }, 3000);
+}
 
-# --------------------------- Catálogo CATMAT/CATSER ------------------- #
-@app.get("/api/catmat")
-def buscar_catmat(
-    descricao: str = Query(..., min_length=2),
-    tipo: str = Query("material", pattern="^(material|servico)$"),
-    debug: bool = Query(False),
-    user: Usuario = Depends(_auth.get_current_user),
-):
-    """Busca códigos CATMAT (material) ou CATSER (serviço) na API oficial
-    de dados abertos do Compras.gov.br, ranqueados por relevância.
-    Use ?debug=true para diagnosticar o que a API externa devolveu."""
-    r = catmat.buscar(descricao, tipo=tipo, debug=debug)
-    saida = {"status": r["status"], "total": len(r["itens"]), "resultados": r["itens"]}
-    if "debug" in r:
-        saida["debug"] = r["debug"]
-    return saida
+async function desconectarTelegram(){
+  await api('/api/telegram/desvincular',{method:'POST'});
+  carregarVinculoTelegram();
+  toast('Telegram desconectado.', 'aviso', 3000);
+}
 
+async function buscarCep(){
+  const cep = ($('#pf-cep').value||'').replace(/\D/g,'');
+  if(cep.length!==8){ return; }
+  $('#cep-status').textContent = 'Buscando...';
+  try{
+    const r = await fetch('/api/cep/'+cep);
+    if(!r.ok){ $('#cep-status').textContent = 'CEP não encontrado.'; return; }
+    const d = await r.json();
+    $('#pf-logradouro').value = d.logradouro||'';
+    $('#pf-bairro').value = d.bairro||'';
+    $('#pf-compl').value = d.complemento|| $('#pf-compl').value;
+    $('#pf-cidade').value = (d.cidade||'') + (d.uf?(' / '+d.uf):'');
+    $('#pf-cidade').dataset.cidade = d.cidade||'';
+    $('#pf-cidade').dataset.uf = d.uf||'';
+    $('#cep-status').textContent = '✓ Endereço preenchido';
+    $('#pf-numero').focus();
+  }catch(e){ $('#cep-status').textContent = 'Erro ao consultar o CEP.'; }
+}
 
-# --------------------------- Documentos (habilitação) ----------------- #
-@app.get("/api/documentos")
-def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    docs = db.execute(select(Documento).where(Documento.usuario_id == user.id)
-                      .order_by(Documento.data_validade.asc())).scalars().all()
-    hoje = date.today()
-    return [{
-        "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
-        "data_validade": d.data_validade.isoformat(),
-        "dias_para_vencer": (d.data_validade - hoje).days,
-        "observacao": d.observacao, "link": d.link, "ativo": d.ativo,
-    } for d in docs]
+async function salvarPerfil(){
+  const body = {
+    nome: $('#pf-nome').value, documento: $('#pf-doc').value,
+    notif_email: $('#pf-notif-email').checked, notif_telegram: $('#pf-notif-tg').checked,
+    avisar_abertura: $('#pf-avisar-abertura').checked,
+    dias_antecedencia: parseInt($('#pf-dias-ante').value || '2', 10),
+    endereco: {
+      cep: $('#pf-cep').value, logradouro: $('#pf-logradouro').value,
+      numero: $('#pf-numero').value, bairro: $('#pf-bairro').value,
+      complemento: $('#pf-compl').value,
+      cidade: $('#pf-cidade').dataset.cidade||'', uf: $('#pf-cidade').dataset.uf||'',
+    },
+  };
+  const g = $('#pf-gemini').value.trim();
+  if(g) body.gemini_key = g;   // só envia se digitou algo (em branco mantém a atual)
+  await api('/api/perfil',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#perfil-msg').textContent = 'Perfil salvo!';
+  toast('Perfil salvo com sucesso.', 'ok', 3000);
+  setTimeout(()=>{ $('#perfil-msg').textContent=''; }, 3000);
+  loadPerfil();
+}
 
+// ---- Portão de sessão: exige login para usar o dashboard ----
+let USUARIO = null;
+async function exigirLogin(){
+  try{
+    const r = await fetch('/api/auth/me');
+    if(r.status===401 || r.status===403){ location.href='/login'; return false; }
+    USUARIO = await r.json();
+    const el = document.getElementById('user-nome');
+    if(el) el.textContent = USUARIO.nome;
+    return true;
+  }catch(e){ location.href='/login'; return false; }
+}
+async function sair(){
+  await fetch('/api/auth/logout', {method:'POST'});
+  location.href='/login';
+}
 
-@app.post("/api/documentos")
-def criar_documento(dados: DocumentoIn, user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    d = Documento(**dados.model_dump(), usuario_id=user.id)
-    db.add(d)
-    db.commit()
-    return {"id": d.id}
-
-
-def _documento_do_usuario(db, doc_id, user) -> Documento:
-    d = db.get(Documento, doc_id)
-    if not d or d.usuario_id != user.id:
-        raise HTTPException(404, "Documento não encontrado")
-    return d
-
-
-@app.put("/api/documentos/{doc_id}")
-def atualizar_documento(doc_id: int, dados: DocumentoIn,
-                        user: Usuario = Depends(_auth.get_current_user),
-                        db: Session = Depends(get_session)):
-    d = _documento_do_usuario(db, doc_id, user)
-    for campo, valor in dados.model_dump().items():
-        setattr(d, campo, valor)
-    d.avisado_para = None  # validade mudou -> permite avisar de novo
-    db.commit()
-    return {"ok": True}
-
-
-@app.delete("/api/documentos/{doc_id}")
-def remover_documento(doc_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
-    d = _documento_do_usuario(db, doc_id, user)
-    db.delete(d)
-    db.commit()
-    return {"ok": True}
-
-
-@app.post("/api/lembretes/verificar")
-def verificar_lembretes(bg: BackgroundTasks):
-    """Dispara a verificação de prazos e documentos manualmente."""
-    def _run():
-        db = SessionLocal()
-        try:
-            from .lembretes import verificar_todos
-            verificar_todos(db)
-        finally:
-            db.close()
-    bg.add_task(_run)
-    return {"ok": True, "mensagem": "Verificação de lembretes iniciada."}
-
-
-# --------------------------- Configurações ---------------------------- #
-class ConfigIn(BaseModel):
-    PNCP_UFS: str | None = None
-    PNCP_MODALIDADES: str | None = None
-    PNCP_HORIZONTE_DIAS: str | None = None
-    IA_ATIVA: str | None = None
-
-
-@app.get("/api/config")
-def obter_config(user: Usuario = Depends(_auth.get_current_user),
-                 db: Session = Depends(get_session)):
-    from . import configuracoes
-    from .matching.embeddings import ia_disponivel, ia_bloqueada, segundos_para_liberar
-    dados = configuracoes.todas(db)
-    chave_user = _auth.decifrar(user.gemini_key_cifrada)
-    dados["IA_DISPONIVEL"] = "1" if ia_disponivel(chave_user) else "0"  # chave (do user ou global)?
-    dados["IA_CHAVE_PROPRIA"] = "1" if chave_user else "0"             # usa chave própria?
-    dados["IA_BLOQUEADA"] = "1" if ia_bloqueada(chave_user) else "0"  # cota diária ESTOUROU PRA ESSE USUÁRIO?
-    dados["IA_LIBERA_EM_MIN"] = str(round(segundos_para_liberar(chave_user) / 60))
-    return dados
-
-
-@app.post("/api/config")
-def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    from . import configuracoes
-    for chave, valor in dados.model_dump().items():
-        if valor is not None:
-            configuracoes.definir(db, chave, valor.strip())
-    return {"ok": True, "config": configuracoes.todas(db)}
-
-
-# --------------------------- Inteligência de preço -------------------- #
-@app.get("/api/inteligencia-preco")
-def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
-                       db: Session = Depends(get_session)):
-    """Para cada produto, estatísticas dos valores estimados dos editais já
-    coletados em que ele apareceu como compatível. Dá uma referência de mercado
-    com base no histórico que o próprio sistema acumulou.
-
-    Obs.: usa o valor ESTIMADO do edital (não o preço homologado do vencedor —
-    isso exigiria puxar os resultados/atas do PNCP, um passo futuro)."""
-    produtos = db.execute(select(Produto).where(Produto.usuario_id == user.id)).scalars().all()
-    saida = []
-    for p in produtos:
-        # editais cujos matches DESTE usuário citam este produto no detalhe
-        q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-            .where(Match.usuario_id == user.id)
-        valores = []
-        for match, ed in db.execute(q).all():
-            if ed.valor_estimado is None:
-                continue
-            itens = (match.detalhe or {}).get("itens", []) if match.detalhe else []
-            if any(it.get("produto_id") == p.id for it in itens):
-                valores.append(ed.valor_estimado)
-        if not valores:
-            continue
-        valores.sort()
-        n = len(valores)
-        mediana = valores[n // 2] if n % 2 else (valores[n // 2 - 1] + valores[n // 2]) / 2
-        saida.append({
-            "produto_id": p.id, "descricao": p.descricao,
-            "ocorrencias": n,
-            "minimo": round(min(valores), 2),
-            "mediana": round(mediana, 2),
-            "media": round(sum(valores) / n, 2),
-            "maximo": round(max(valores), 2),
-            "preco_venda": p.preco_venda,
-        })
-    saida.sort(key=lambda x: x["ocorrencias"], reverse=True)
-    return saida
-
-
-# --------------------------- Dashboard estático ----------------------- #
-@app.get("/")
-def index():
-    return FileResponse(
-        os.path.join(STATIC_DIR, "index.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-@app.get("/login")
-@app.get("/cadastro")
-@app.get("/verificar")
-def pagina_login():
-    """Página única de login/cadastro/verificação (decide pela URL no JS)."""
-    return FileResponse(
-        os.path.join(STATIC_DIR, "login.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+// inicialização: primeiro confirma a sessão, depois carrega os dados
+(async function(){
+  const ok = await exigirLogin();
+  if(!ok) return;   // já redirecionou para /login
+  Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+    setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+  });
+  setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
+})();
+</script>
+</body>
+</html>

@@ -52,6 +52,20 @@ class Usuario(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Fornecedor(Base):
+    __tablename__ = "fornecedores"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
+    nome: Mapped[str] = mapped_column(String(160))
+    telefone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    whatsapp: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    site: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Produto(Base):
     __tablename__ = "produtos"
 
@@ -77,6 +91,9 @@ class Produto(Base):
     fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_site: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # vínculo com o cadastro de fornecedores (opcional; quando definido, os dados
+    # de contato vêm de lá). Os campos acima ficam como histórico/fallback.
+    fornecedor_id: Mapped[int | None] = mapped_column(ForeignKey("fornecedores.id"), nullable=True, index=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

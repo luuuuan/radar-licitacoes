@@ -70,7 +70,7 @@
     <label>Nome ou razão social</label>
     <input id="c-nome" required>
     <label>CPF ou CNPJ <span style="opacity:.6">(opcional)</span></label>
-    <input id="c-doc" placeholder="só números">
+    <input id="c-doc" placeholder="CPF ou CNPJ" oninput="this.value=mascaraDocLogin(this.value)">
     <label>E-mail</label>
     <input id="c-email" type="email" autocomplete="email" required>
     <label>Senha</label>
@@ -85,6 +85,11 @@
 
 <script>
 const $ = s => document.querySelector(s);
+function mascaraDocLogin(v){
+  const d=(v||'').replace(/\D/g,'').slice(0,14);
+  if(d.length<=11) return d.replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d{1,2})$/,'$1-$2');
+  return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/,'$1.$2.$3').replace(/\.(\d{3})(\d)/,'.$1/$2').replace(/(\d{4})(\d{1,2})$/,'$1-$2');
+}
 function mostrar(qual){
   const ehLogin = qual==='login';
   $('#form-login').classList.toggle('hidden', !ehLogin);
@@ -123,9 +128,13 @@ async function entrar(e){
 }
 async function cadastrar(e){
   e.preventDefault(); msg('');
+  const email=($('#c-email').value||'').trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    msg('Digite um e-mail válido (ex: nome@dominio.com).', 'erro'); return false;
+  }
   const btn=$('#form-cadastro button'); btn.disabled=true;
   const r=await post('/api/auth/cadastro',{
-    nome:$('#c-nome').value, email:$('#c-email').value,
+    nome:$('#c-nome').value, email:email,
     senha:$('#c-senha').value, documento:$('#c-doc').value||null});
   btn.disabled=false;
   if(r.ok){
