@@ -653,7 +653,7 @@ function _apiInicio(){
   if(_apiPendentes===1){
     _apiBarraTO=setTimeout(()=>{ const b=$('#loadingbar'); if(b) b.classList.add('ativa'); }, 200);
     _apiLentoTO=setTimeout(()=>{
-      toast('O servidor pode estar "acordando" (plano gratuito) — a 1ª ação após um tempo parado pode levar até 30s.', 'aviso', 8000);
+      toast('Isso está demorando um pouco mais que o normal — só um instante...', 'aviso', 8000);
     }, 6000);
   }
 }
