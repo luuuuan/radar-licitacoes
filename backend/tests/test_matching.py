@@ -64,6 +64,18 @@ def test_edital_grande_um_item_fraco_nao_e_forte():
     assert r.nivel != "forte"
 
 
+def test_numero_solto_e_unidade_nao_contam_como_termo_em_comum():
+    """Regressão: "Régua 30 cm" batia como 'forte' com um item de edital pedindo
+    "Quadro/Moldura ... com 30 cm de largura e 40 cm de altura" só porque os dois
+    textos compartilham "30" e "cm" — sinal nenhum de que são o mesmo produto."""
+    eng = MatchingEngine([ProdutoCat(id=1, descricao="Régua 30 cm")])
+    r = eng.avaliar("Material de expediente", [ItemEdt(
+        1, "Quadro/Moldura, em madeira, cor dourado, moldura com 2 cm (frente) "
+           "com 30 cm de largura e 40 cm de altura, vidro incolor antirreflexo "
+           "e fundo em MDF, com e pendurador")])
+    assert r.itens_compativeis == 0
+
+
 def test_regra_exclusao_por_termo():
     ignora = aplicar_regras_exclusao(
         "Contratação de empresa de engenharia para reforma", [],

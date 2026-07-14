@@ -131,6 +131,14 @@ class MatchingEngine:
                 if cod:
                     self._idx_codigo.setdefault(f"{tipo}:{cod}", []).append(i)
 
+    def _distintivo(self, token: str) -> bool:
+        """True se o token pode contar como termo distintivo em comum (não é
+        genérico, stopword, unidade de medida ou número solto)."""
+        return (len(token) >= 2 and not token.isdigit()
+                and token not in self._GENERICAS
+                and token not in self._STOPWORDS
+                and token not in self._UNIDADES)
+
     # ---- score de um único item do edital contra todo o catálogo ----------
     def _score_item(self, item: ItemEdt) -> tuple[float, ProdutoCat | None, str]:
         melhor = 0.0
@@ -170,10 +178,8 @@ class MatchingEngine:
         # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora
         # de papel"), rebaixa abaixo do limiar para não virar item compatível.
         if melhor_prod is not None and melhor < 0.9:
-            toks_item = {t for t in texto_item.split()
-                         if len(t) >= 2 and t not in self._GENERICAS and t not in self._STOPWORDS}
-            toks_prod = {t for t in melhor_prod.texto_busca().split()
-                         if len(t) >= 2 and t not in self._GENERICAS and t not in self._STOPWORDS}
+            toks_item = {t for t in texto_item.split() if self._distintivo(t)}
+            toks_prod = {t for t in melhor_prod.texto_busca().split() if self._distintivo(t)}
             comuns = toks_item & toks_prod
             if len(comuns) <= 1 and melhor > 0.34:
                 termo = next(iter(comuns), "")
@@ -198,6 +204,14 @@ class MatchingEngine:
         "de", "da", "do", "das", "dos", "para", "com", "sem", "em", "e", "ou",
         "a", "o", "as", "os", "um", "uma", "uns", "umas", "no", "na", "nos", "nas",
         "por", "ao", "aos", "que", "se",
+    }
+    # unidades de medida — pelo mesmo motivo das stopwords: "30" e "cm" aparecem
+    # em qualquer item com dimensão (moldura, régua, tecido, cano...), então não
+    # são sinal de que dois produtos são parecidos, só de que ambos têm tamanho.
+    _UNIDADES = {
+        "cm", "mm", "m", "km", "kg", "g", "gr", "mg", "ml", "l", "lt",
+        "litro", "litros", "un", "und", "unid", "cx", "pct", "m2", "m3",
+        "cm2", "cm3", "pol", "polegada", "polegadas",
     }
 
     def _melhor_por_keywords(self, texto_item: str):
