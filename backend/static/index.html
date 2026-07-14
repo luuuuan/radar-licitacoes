@@ -199,9 +199,45 @@
     .kpi .n{font-size:18px}
     nav button{padding:6px 10px}
   }
+
+  /* ---- Barra de carregamento global (topo da tela) ---- */
+  #loadingbar{position:fixed;top:0;left:0;height:3px;width:100%;z-index:9999;
+    background:linear-gradient(90deg, transparent, var(--accent), transparent);
+    background-size:50% 100%;opacity:0;pointer-events:none;transition:opacity .2s}
+  #loadingbar.ativa{opacity:1;animation:loadingbar-mov 1.1s linear infinite}
+  @keyframes loadingbar-mov{from{background-position:-50% 0}to{background-position:150% 0}}
+
+  /* ---- KPIs: indicador de cor sem precisar de ícone ---- */
+  .kpi-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+  /* ---- Nav: cabeçalhos de grupo (só organizam visualmente, não clicáveis) ---- */
+  .nav-grupo{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);padding:10px 8px 4px;user-select:none}
+  nav .nav-grupo:first-of-type{padding-top:2px}
+  @media (min-width:681px){
+    /* no desktop o nav é uma linha só: mostra grupos como separador vertical fino em vez de rótulo */
+    .nav-grupo{display:flex;align-items:center;padding:0 6px;font-size:0}
+    .nav-grupo::before{content:"";display:block;width:1px;height:20px;background:var(--line)}
+    .nav-grupo:first-of-type::before{display:none}
+  }
+
+  /* ---- Toolbar de filtros avançados (colapsável) ---- */
+  .toolbar-extra{margin-top:-4px}
+  #btn-mais-filtros.tem-filtros{border-color:var(--accent);color:var(--accent)}
+
+  /* ---- Estado vazio ---- */
+  .estado-vazio{text-align:center;padding:36px 20px}
+  .estado-vazio p{margin:0 0 14px}
+  .estado-vazio .acoes-vazio{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+
+  /* ---- Ajuda (?): área de toque maior em telas de toque, sem mudar o visual no desktop ---- */
+  @media (pointer:coarse){
+    .ajuda{width:22px;height:22px;font-size:12px}
+  }
 </style>
 </head>
 <body>
+<div id="loadingbar"></div>
 <div id="splash">
   <div class="radar"></div>
   <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Carregando o Radar de Licitações…</div>
@@ -228,13 +264,16 @@
   <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
   <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <span class="nav-grupo" aria-hidden="true">Oportunidades</span>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+    <span class="nav-grupo" aria-hidden="true">Meu negócio</span>
     <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
     <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
     <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
-    <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+    <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+    <span class="nav-grupo" aria-hidden="true">Conta</span>
     <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
@@ -249,13 +288,19 @@
         <option value="medio">Média compatibilidade</option>
         <option value="fraco">Baixa compatibilidade</option>
       </select>
+      <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
+             oninput="this.value=this.value.toUpperCase()">
+      <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+      <button class="btn ghost" id="btn-mais-filtros" onclick="toggleFiltrosExtra()">Mais filtros</button>
+      <span style="flex:1"></span>
+      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+    </div>
+    <div class="toolbar toolbar-extra hidden" id="filtros-extra">
       <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
         <option value="todos">Produtos e serviços</option>
         <option value="produtos">Só produtos</option>
         <option value="servicos">Só serviços</option>
       </select>
-      <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
-             oninput="this.value=this.value.toUpperCase()">
       <select id="f-status" onchange="loadEditais()">
         <option value="">Qualquer situação</option>
         <option value="novo">Novo</option>
@@ -265,7 +310,6 @@
         <option value="perdido">Perdido</option>
         <option value="descartado">Descartado</option>
       </select>
-      <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
       <select id="f-porpag" onchange="loadEditais()" title="Editais por página">
         <option value="10">10 por página</option>
         <option value="20" selected>20 por página</option>
@@ -277,8 +321,6 @@
       <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
         <input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia
       </label>
-      <span style="flex:1"></span>
-      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
     </div>
     <div id="lista-editais"></div>
   </section>
@@ -600,7 +642,32 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const api = (u,o)=>fetch(u,o).then(r=>r.json());
+
+// Barra de carregamento global + aviso de "servidor acordando" (plano free do
+// Render dorme após ociosidade — a 1ª requisição depois disso pode levar ~30s).
+// Só acende a barra depois de 200ms (evita piscar em requisições rápidas) e só
+// avisa sobre cold start se a requisição realmente ficar pendurada.
+let _apiPendentes=0, _apiBarraTO=null, _apiLentoTO=null;
+function _apiInicio(){
+  _apiPendentes++;
+  if(_apiPendentes===1){
+    _apiBarraTO=setTimeout(()=>{ const b=$('#loadingbar'); if(b) b.classList.add('ativa'); }, 200);
+    _apiLentoTO=setTimeout(()=>{
+      toast('O servidor pode estar "acordando" (plano gratuito) — a 1ª ação após um tempo parado pode levar até 30s.', 'aviso', 8000);
+    }, 6000);
+  }
+}
+function _apiFim(){
+  _apiPendentes=Math.max(0,_apiPendentes-1);
+  if(_apiPendentes===0){
+    clearTimeout(_apiBarraTO); clearTimeout(_apiLentoTO);
+    const b=$('#loadingbar'); if(b) b.classList.remove('ativa');
+  }
+}
+const api = (u,o)=>{
+  _apiInicio();
+  return fetch(u,o).then(r=>r.json()).finally(_apiFim);
+};
 
 // ---- Máscaras e validações ----
 function mascaraDoc(v){ // CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00)
@@ -692,8 +759,11 @@ function tab(name){
   if(name==='logs') loadLogs();
 }
 
+let PRODUTOS_COUNT=0;   // usado pra decidir a ação sugerida no estado vazio de editais
+
 async function loadResumo(){
   const r = await api('/api/resumo');
+  PRODUTOS_COUNT = r.produtos||0;
   const cards = [
     {n:r.do_dia||0, l:'Editais do dia', cor:'var(--accent)', acao:"filtrarKpi('hoje')", aj:'Editais cuja sessão de disputa acontece hoje.'},
     {n:r.editais,   l:'Editais ativos', acao:"filtrarKpi('ativos')", aj:'Editais com prazo ainda aberto que deram match com o seu catálogo.'},
@@ -705,8 +775,9 @@ async function loadResumo(){
   $('#kpis').innerHTML = cards.map(c=>{
     const borda = c.cor ? `border-color:${c.cor};` : '';
     const corN = c.cor ? `color:${c.cor};` : '';
+    const dot = c.cor ? `<span class="kpi-dot" style="background:${c.cor}"></span>` : '';
     return `<div class="kpi" style="${borda}cursor:pointer" onclick="${c.acao}" title="Filtrar">
-      <div class="n" style="${corN}">${c.n}</div><div class="l">${c.l}${ajuda(c.aj)}</div></div>`;
+      <div class="n" style="${corN}">${c.n}</div><div class="l">${dot}${c.l}${ajuda(c.aj)}</div></div>`;
   }).join('');
 }
 
@@ -787,8 +858,29 @@ function navPaginacao(r, fnPagina, paginaAtual){
 
 let paginaEditais = 1;
 
+// Alterna o bloco de filtros avançados (tipo, situação, por página, checkboxes)
+function toggleFiltrosExtra(){
+  $('#filtros-extra').classList.toggle('hidden');
+}
+
+// Mantém o botão "Mais filtros" com um contador de quantos filtros avançados
+// estão ativos, pra dar pra saber sem precisar abrir o bloco colapsado.
+function atualizarBadgeFiltros(){
+  const ativos = [
+    $('#f-tipo').value!=='todos',
+    !!$('#f-status').value,
+    $('#f-naolidos').checked,
+    $('#f-hoje').checked,
+  ].filter(Boolean).length;
+  const btn=$('#btn-mais-filtros');
+  if(!btn) return;
+  btn.textContent = ativos ? `Mais filtros (${ativos})` : 'Mais filtros';
+  btn.classList.toggle('tem-filtros', ativos>0);
+}
+
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
+  atualizarBadgeFiltros();
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
         st=$('#f-status').value, nl=$('#f-naolidos').checked;
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
@@ -800,7 +892,14 @@ async function loadEditais(resetPagina=true){
   const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
-  if(!eds.length){ $('#lista-editais').innerHTML='<p class="muted">Nenhum edital ativo. Cadastre produtos e clique em “Coletar agora”.</p>'; return; }
+  if(!eds.length){
+    $('#lista-editais').innerHTML = PRODUTOS_COUNT
+      ? `<div class="card estado-vazio"><p class="muted">Nenhum edital ativo ainda. Rode uma coleta para buscar editais que combinem com o seu catálogo.</p>
+          <div class="acoes-vazio"><button class="btn" onclick="coletar()">Coletar agora</button></div></div>`
+      : `<div class="card estado-vazio"><p class="muted">Nenhum edital ainda — comece cadastrando ao menos um produto/serviço no seu catálogo.</p>
+          <div class="acoes-vazio"><button class="btn" onclick="tab('catalogo')">Cadastrar produto</button></div></div>`;
+    return;
+  }
   $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais);
 }
 
@@ -1220,6 +1319,57 @@ function abrirRecalcular(){
     </div></div>`;
 }
 
+// _recalcTimer fica fora da função pra não duplicar o polling: se a página é
+// recarregada com um recálculo já rodando no backend, verificarRecalculoEmAndamento()
+// (chamada no boot e a cada 30s) retoma o acompanhamento sozinha.
+let _recalcTimer=null;
+
+function acompanharRecalculo(){
+  if(_recalcTimer) return;   // já tem um polling ativo
+  const el=$('#coleta-status');
+  let n=0;
+  _recalcTimer=setInterval(async()=>{
+    let s;
+    try{ s=await api('/api/recalcular/status'); }catch(e){ return; }
+    if(s.rodando){
+      // mostra progresso (X de Y) quando disponível
+      if(s.total){
+        const pct = Math.min(100, Math.round((s.feito||0)/s.total*100));
+        el.innerHTML=`${ICN.relogio} Recalculando… ${pct}% (${s.feito||0}/${s.total})`;
+      } else {
+        el.innerHTML=ICN.relogio+' Recalculando...';
+      }
+      el.style.color='var(--medio)';
+      // segurança: nunca some silenciosamente, só avisa que está demorando
+      if(++n===1440){     // ~2h
+        toast('O recálculo ainda está rodando em segundo plano — pode continuar navegando.', 'aviso', 6000);
+      }
+      return;
+    }
+    clearInterval(_recalcTimer); _recalcTimer=null;
+    if(s.erro){
+      el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+      toast('O recálculo falhou: '+s.erro, 'erro', 6000);
+    } else if(s.atualizados!=null){
+      el.textContent=`✓ Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
+      el.style.color='var(--muted)';
+      toast('Recálculo concluído!', 'ok', 4000);
+    }
+    loadEditais(); loadResumo();
+  }, 5000);
+}
+
+// chamada no boot e a cada 30s: se um recálculo ficou rodando (ex.: a aba foi
+// recarregada ou fechada e reaberta no meio do processo), retoma o acompanhamento
+// em vez de deixar a tela sem indicação nenhuma de que ainda está em andamento.
+async function verificarRecalculoEmAndamento(){
+  if(_recalcTimer) return;
+  try{
+    const s=await api('/api/recalcular/status');
+    if(s.rodando) acompanharRecalculo();
+  }catch(e){}
+}
+
 async function recalcular(comIA){
   fecharModal();
   const el=$('#coleta-status');
@@ -1232,33 +1382,11 @@ async function recalcular(comIA){
   }
   if(r && r.em_andamento){
     toast(r.mensagem || 'Já existe um recálculo em andamento.', 'aviso');
+    acompanharRecalculo();   // acompanha o que já está rodando em vez de ignorar
     return;
   }
   el.innerHTML=ICN.relogio+' Recalculando...'; el.style.color='var(--medio)';
-  let n=0;
-  const t=setInterval(async()=>{
-    let s;
-    try{ s=await api('/api/recalcular/status'); }catch(e){ return; }
-    if(s.rodando){
-      // mostra progresso (X de Y) quando disponível
-      if(s.total){
-        const pct = Math.min(100, Math.round((s.feito||0)/s.total*100));
-        el.innerHTML=`${ICN.relogio} Recalculando… ${pct}% (${s.feito||0}/${s.total})`;
-      }
-      if(++n>360) clearInterval(t);     // ~60 min de segurança
-      return;
-    }
-    clearInterval(t);
-    if(s.erro){
-      el.textContent='Erro ao recalcular'; el.style.color='#f87171';
-      toast('O recálculo falhou: '+s.erro, 'erro', 6000);
-    } else {
-      el.textContent=`✓ Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
-      el.style.color='var(--muted)';
-      toast('Recálculo concluído!', 'ok', 4000);
-    }
-    loadEditais(); loadResumo();
-  }, 5000);
+  acompanharRecalculo();
 }
 
 function _listaHTML(titulo, itens){
@@ -1607,10 +1735,10 @@ async function sair(){
 (async function(){
   const ok = await exigirLogin();
   if(!ok) return;   // já redirecionou para /login
-  Promise.all([loadResumo(), loadEditais(), loadColetaStatus()]).finally(()=>{
+  Promise.all([loadResumo(), loadEditais(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
-  setInterval(()=>{ loadResumo(); loadColetaStatus(); }, 30000);
+  setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
 })();
 </script>
 </body>

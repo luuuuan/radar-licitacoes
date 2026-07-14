@@ -115,6 +115,16 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     for _i, ed in enumerate(editais):
         if progresso and _i % 50 == 0:
             progresso(_i, total)
+        # commits parciais: com dezenas de milhares de editais isso pode levar
+        # minutos/horas rodando numa única transação. Sem isso, qualquer soluço
+        # de conexão com o banco no meio do caminho perde TODO o progresso.
+        if _i > 0 and _i % 200 == 0:
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                log.warning("Conflito de matches em paralelo (usuário %s) — ignorado neste lote.",
+                            usuario.id)
         existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
