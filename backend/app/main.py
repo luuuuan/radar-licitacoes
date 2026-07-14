@@ -692,11 +692,37 @@ async def importar_produtos(arquivo: UploadFile = File(...),
             "ignorados": ignorados, "erros": erros[:20]}
 
 
+def _limpar_matches_do_produto(db: Session, usuario_id: int, produto_id: int) -> None:
+    """Remove as referências a um produto excluído dos matches já calculados.
+    Sem isso, o card da lista de editais continua mostrando pra sempre o nome
+    do produto (texto congelado no momento do match), enquanto a tela de
+    detalhes — que confere o produto ao vivo — passa a dizer "sem produto
+    compatível" pro mesmo item: as duas telas discordam sobre o mesmo edital.
+    Não recalcula o score/nível (isso só fica 100% correto no próximo
+    Recalcular); só evita a contradição enquanto isso não roda."""
+    matches = db.execute(
+        select(Match).where(Match.usuario_id == usuario_id)
+    ).scalars().all()
+    for m in matches:
+        itens = (m.detalhe or {}).get("itens") or []
+        if not any(it.get("produto_id") == produto_id for it in itens):
+            continue
+        restantes = [it for it in itens if it.get("produto_id") != produto_id]
+        if not restantes:
+            # o match só existia por causa deste produto — sem ele, não é
+            # mais uma oportunidade (mesma regra de "não guardamos fracos")
+            db.delete(m)
+        else:
+            m.detalhe = {"itens": restantes}
+            m.itens_compativeis = len(restantes)
+
+
 @app.delete("/api/produtos/{produto_id}")
 def remover_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
                     db: Session = Depends(get_session)):
     p = _produto_do_usuario(db, produto_id, user)
     db.delete(p)
+    _limpar_matches_do_produto(db, user.id, produto_id)
     db.commit()
     return {"ok": True}
 

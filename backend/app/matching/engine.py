@@ -171,9 +171,9 @@ class MatchingEngine:
         # de papel"), rebaixa abaixo do limiar para não virar item compatível.
         if melhor_prod is not None and melhor < 0.9:
             toks_item = {t for t in texto_item.split()
-                         if len(t) >= 2 and t not in self._GENERICAS}
+                         if len(t) >= 2 and t not in self._GENERICAS and t not in self._STOPWORDS}
             toks_prod = {t for t in melhor_prod.texto_busca().split()
-                         if len(t) >= 2 and t not in self._GENERICAS}
+                         if len(t) >= 2 and t not in self._GENERICAS and t not in self._STOPWORDS}
             comuns = toks_item & toks_prod
             if len(comuns) <= 1 and melhor > 0.34:
                 termo = next(iter(comuns), "")
@@ -189,6 +189,15 @@ class MatchingEngine:
         "peca", "pecas", "item", "itens", "produto", "produtos", "jogo", "jogos",
         "par", "pares", "embalagem", "tipo", "modelo", "diversos", "geral", "linha",
         "aquisicao", "servico", "servicos", "fornecimento", "tamanho",
+    }
+    # palavras de ligação (preposições/artigos/conjunções) — não contam como "termo
+    # em comum" na checagem de anti-coincidência, senão inflam a contagem sem
+    # nenhum sinal real (ex.: "suporte PARA notebook COM cooler" vs "notebook COM
+    # bateria" bateriam em "com"/"para" e escapariam da proteção de 1-só-termo).
+    _STOPWORDS = {
+        "de", "da", "do", "das", "dos", "para", "com", "sem", "em", "e", "ou",
+        "a", "o", "as", "os", "um", "uma", "uns", "umas", "no", "na", "nos", "nas",
+        "por", "ao", "aos", "que", "se",
     }
 
     def _melhor_por_keywords(self, texto_item: str):
