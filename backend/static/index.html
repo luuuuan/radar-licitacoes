@@ -88,6 +88,7 @@
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:5000;
     display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
   .modal.hidden{display:none}
+  body.modal-aberto{overflow:hidden}
   .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
     width:100%;max-width:780px;padding:22px}
   .modal-card h2{margin:0 0 4px;font-size:18px}
@@ -698,6 +699,16 @@ function ajuda(texto){
 document.addEventListener('click', e=>{
   if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(a=>a.classList.remove('aberto'));
 });
+
+// Trava o scroll do fundo enquanto algum modal estiver aberto (estático via
+// classe "hidden" ou dinâmico via innerHTML do #modal-mount) — evita a tela
+// de trás rolar junto quando o usuário arrasta dentro do popup.
+function _atualizarScrollModal(){
+  const aberto = !!document.querySelector('.modal:not(.hidden)');
+  document.body.classList.toggle('modal-aberto', aberto);
+}
+new MutationObserver(_atualizarScrollModal)
+  .observe(document.body, {childList:true, subtree:true, attributes:true, attributeFilter:['class']});
 
 // ---- Tema claro/escuro (lembra a escolha) ----
 const _icoSol='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
