@@ -39,6 +39,9 @@ class Usuario(Base):
     # verificação de e-mail
     email_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
     token_verificacao: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # redefinição de senha ("esqueci minha senha")
+    token_reset_senha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    token_reset_expira: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # integrações próprias do usuário (cifradas/preferências)
     gemini_key_cifrada: Mapped[str | None] = mapped_column(Text, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

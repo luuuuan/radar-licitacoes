@@ -74,6 +74,8 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("telegram_codigo", "VARCHAR(32)"),
     ("avisar_abertura", "BOOLEAN DEFAULT TRUE"),
     ("dias_antecedencia", "INTEGER DEFAULT 2"),
+    ("token_reset_senha", "VARCHAR(128)"),
+    ("token_reset_expira", "TIMESTAMP"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
 if ("abertura_avisada", "BOOLEAN DEFAULT FALSE") not in _COLUNAS_NOVAS["matches"]:

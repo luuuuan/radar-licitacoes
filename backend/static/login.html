@@ -43,6 +43,18 @@
   .row{display:flex;gap:10px}
   .row > div{flex:1}
   .hidden{display:none}
+  .campo-senha{position:relative}
+  .campo-senha input{padding-right:40px}
+  .olho{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+    background:none;border:none;cursor:pointer;padding:6px;color:var(--muted);
+    display:flex;align-items:center;justify-content:center}
+  .olho:hover{color:var(--txt)}
+  .esqueci{display:block;text-align:right;margin-top:8px;font-size:12px;
+    color:var(--accent);text-decoration:none;background:none;border:none;cursor:pointer;
+    width:100%}
+  .voltar{display:inline-block;margin-top:14px;font-size:12px;color:var(--muted);
+    text-decoration:none;background:none;border:none;cursor:pointer;padding:0}
+  .voltar:hover{color:var(--txt)}
 </style>
 </head>
 <body>
@@ -63,8 +75,12 @@
     <label>E-mail</label>
     <input id="l-email" type="email" autocomplete="email" required>
     <label>Senha</label>
-    <input id="l-senha" type="password" autocomplete="current-password" required>
-    <button class="btn" type="submit">Entrar</button>
+    <div class="campo-senha">
+      <input id="l-senha" type="password" autocomplete="current-password" required>
+      <button type="button" class="olho" onclick="alternarSenha('l-senha', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <button type="button" class="esqueci" onclick="mostrar('esqueci')">Esqueci minha senha</button>
+    <button id="l-submit" class="btn" type="submit">Entrar</button>
   </form>
 
   <!-- CADASTRO -->
@@ -76,10 +92,39 @@
     <label>E-mail</label>
     <input id="c-email" type="email" autocomplete="email" required>
     <label>Senha</label>
-    <input id="c-senha" type="password" autocomplete="new-password" required oninput="medirForca()">
+    <div class="campo-senha">
+      <input id="c-senha" type="password" autocomplete="new-password" required oninput="medirForca()">
+      <button type="button" class="olho" onclick="alternarSenha('c-senha', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
     <div class="forca"><i id="forca-barra"></i></div>
     <div class="forca-txt" id="forca-txt">Use 8+ caracteres, com letra, número e símbolo.</div>
-    <button class="btn" type="submit">Criar conta</button>
+    <button id="c-submit" class="btn" type="submit">Criar conta</button>
+  </form>
+
+  <!-- ESQUECI MINHA SENHA -->
+  <form id="form-esqueci" class="hidden" onsubmit="return pedirRedefinicao(event)">
+    <p class="sub" style="margin:0 0 4px">Informe seu e-mail. Se ele estiver cadastrado, enviaremos um link para redefinir a senha.</p>
+    <label>E-mail</label>
+    <input id="e-email" type="email" autocomplete="email" required>
+    <button id="e-submit" class="btn" type="submit">Enviar link</button>
+    <button type="button" class="voltar" onclick="mostrar('login')">&larr; Voltar para o login</button>
+  </form>
+
+  <!-- REDEFINIR SENHA -->
+  <form id="form-redefinir" class="hidden" onsubmit="return redefinirSenha(event)">
+    <label>Nova senha</label>
+    <div class="campo-senha">
+      <input id="r-senha" type="password" autocomplete="new-password" required oninput="medirForcaRedefinir()">
+      <button type="button" class="olho" onclick="alternarSenha('r-senha', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <div class="forca"><i id="forca-barra-r"></i></div>
+    <div class="forca-txt" id="forca-txt-r">Use 8+ caracteres, com letra, número e símbolo.</div>
+    <label>Confirmar nova senha</label>
+    <div class="campo-senha">
+      <input id="r-senha2" type="password" autocomplete="new-password" required>
+      <button type="button" class="olho" onclick="alternarSenha('r-senha2', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <button id="r-submit" class="btn" type="submit">Redefinir senha</button>
   </form>
 
   <div id="msg" class="msg"></div>
@@ -93,26 +138,44 @@ function mascaraDocLogin(v){
   return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/,'$1.$2.$3').replace(/\.(\d{3})(\d)/,'.$1/$2').replace(/(\d{4})(\d{1,2})$/,'$1-$2');
 }
 function mostrar(qual){
-  const ehLogin = qual==='login';
-  $('#form-login').classList.toggle('hidden', !ehLogin);
-  $('#form-cadastro').classList.toggle('hidden', ehLogin);
-  $('#tab-login').classList.toggle('on', ehLogin);
-  $('#tab-cadastro').classList.toggle('on', !ehLogin);
+  const formularios = {login:'#form-login', cadastro:'#form-cadastro',
+                        esqueci:'#form-esqueci', redefinir:'#form-redefinir'};
+  for(const [k, sel] of Object.entries(formularios)){
+    $(sel).classList.toggle('hidden', k!==qual);
+  }
+  const mostrarTabs = qual==='login' || qual==='cadastro';
+  $('.tabs').style.display = mostrarTabs ? 'flex' : 'none';
+  $('#tab-login').classList.toggle('on', qual==='login');
+  $('#tab-cadastro').classList.toggle('on', qual==='cadastro');
   msg('');
 }
 function msg(t, tipo){
   const m=$('#msg'); m.textContent=t||''; m.className='msg'+(t?(' '+(tipo||'erro')):'');
 }
-function medirForca(){
-  const s=$('#c-senha').value;
+function medirForcaEm(valor, barraEl, txtEl){
   let n=0;
-  if(s.length>=8)n++; if(/[A-Za-z]/.test(s))n++; if(/\d/.test(s))n++; if(/[^A-Za-z0-9]/.test(s))n++;
+  if(valor.length>=8)n++; if(/[A-Za-z]/.test(valor))n++; if(/\d/.test(valor))n++; if(/[^A-Za-z0-9]/.test(valor))n++;
   const cores=['var(--fraco)','var(--fraco)','var(--medio)','var(--medio)','var(--forte)'];
   const larg=[0,25,50,75,100][n];
   const txt=['','Fraca','Fraca','Média','Forte'][n];
-  $('#forca-barra').style.width=larg+'%';
-  $('#forca-barra').style.background=cores[n];
-  if(s) $('#forca-txt').textContent = txt+' — 8+ caracteres, com letra, número e símbolo.';
+  barraEl.style.width=larg+'%';
+  barraEl.style.background=cores[n];
+  if(valor) txtEl.textContent = txt+' — 8+ caracteres, com letra, número e símbolo.';
+}
+function medirForca(){
+  medirForcaEm($('#c-senha').value, $('#forca-barra'), $('#forca-txt'));
+}
+function medirForcaRedefinir(){
+  medirForcaEm($('#r-senha').value, $('#forca-barra-r'), $('#forca-txt-r'));
+}
+const OLHO_ABERTO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+const OLHO_FECHADO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a20.3 20.3 0 0 1 4.22-5.06M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a20.3 20.3 0 0 1-2.16 2.94M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>';
+function alternarSenha(id, btn){
+  const input = $('#'+id);
+  const mostrando = input.type==='text';
+  input.type = mostrando ? 'password' : 'text';
+  btn.innerHTML = mostrando ? OLHO_ABERTO : OLHO_FECHADO;
+  btn.setAttribute('aria-label', mostrando ? 'Mostrar senha' : 'Ocultar senha');
 }
 async function post(url, body){
   const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -121,7 +184,7 @@ async function post(url, body){
 }
 async function entrar(e){
   e.preventDefault(); msg('');
-  const btn=$('#form-login button'); btn.disabled=true;
+  const btn=$('#l-submit'); btn.disabled=true;
   const r=await post('/api/auth/login',{email:$('#l-email').value, senha:$('#l-senha').value});
   btn.disabled=false;
   if(r.ok){ location.href='/'; }
@@ -134,7 +197,7 @@ async function cadastrar(e){
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
     msg('Digite um e-mail válido (ex: nome@dominio.com).', 'erro'); return false;
   }
-  const btn=$('#form-cadastro button'); btn.disabled=true;
+  const btn=$('#c-submit'); btn.disabled=true;
   const r=await post('/api/auth/cadastro',{
     nome:$('#c-nome').value, email:email,
     senha:$('#c-senha').value, documento:$('#c-doc').value||null});
@@ -149,6 +212,35 @@ async function cadastrar(e){
   }
   return false;
 }
+async function pedirRedefinicao(e){
+  e.preventDefault(); msg('');
+  const email=($('#e-email').value||'').trim();
+  const btn=$('#e-submit'); btn.disabled=true;
+  const r=await post('/api/auth/esqueci-senha',{email});
+  btn.disabled=false;
+  msg(r.data.mensagem || 'Se este e-mail estiver cadastrado, enviamos um link para redefinir a senha.', 'ok');
+  $('#form-esqueci').reset();
+  return false;
+}
+async function redefinirSenha(e){
+  e.preventDefault(); msg('');
+  const senha=$('#r-senha').value, senha2=$('#r-senha2').value;
+  if(senha!==senha2){ msg('As senhas não são iguais.', 'erro'); return false; }
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+  if(!token){ msg('Link de redefinição inválido ou expirado.'); return false; }
+  const btn=$('#r-submit'); btn.disabled=true;
+  const r=await post('/api/auth/redefinir-senha',{token, senha});
+  btn.disabled=false;
+  if(r.ok){
+    msg('Senha redefinida com sucesso! Você já pode entrar.', 'ok');
+    $('#form-redefinir').reset();
+    setTimeout(()=>{ location.href='/login'; }, 1800);
+  } else {
+    msg(r.data.detail || 'Não foi possível redefinir a senha.');
+  }
+  return false;
+}
 
 // Página de verificação de e-mail (/verificar?token=...)
 (async function(){
@@ -159,6 +251,10 @@ async function cadastrar(e){
     else msg('Link de verificação inválido ou já usado.');
   }
   if(location.pathname==='/cadastro') mostrar('cadastro');
+  if(location.pathname==='/redefinir-senha'){
+    mostrar('redefinir');
+    if(!params.get('token')) msg('Link de redefinição inválido ou expirado.');
+  }
 })();
 </script>
 </body>

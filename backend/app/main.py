@@ -23,7 +23,7 @@ import secrets
 import threading
 import requests
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Radar de Licitações", version="2.0", lifespan=lifespan)
 
 # Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
-_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar"}
+_ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar", "/redefinir-senha"}
 _PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
 
 BASE_DIR = os.path.dirname(__file__)
@@ -239,6 +239,105 @@ def auth_verificar(token: str, db: Session = Depends(get_session)):
         raise HTTPException(400, "Link de verificação inválido ou já usado.")
     u.email_verificado = True
     u.token_verificacao = None
+    db.commit()
+    return {"ok": True}
+
+
+class EsqueciSenhaIn(BaseModel):
+    email: str
+
+
+class RedefinirSenhaIn(BaseModel):
+    token: str
+    senha: str
+
+
+def _email_html_reset_senha(nome: str, link: str) -> str:
+    """E-mail de redefinição de senha em HTML simples e sóbrio."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#1a2129">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 0">
+    <tr><td align="center">
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0"
+             style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
+          Radar de Licitações
+        </td></tr>
+        <tr><td style="padding:28px">
+          <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
+          <p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#3b4654">
+            Recebemos um pedido para redefinir a sua senha. Clique no botão abaixo
+            para escolher uma nova senha. Este link expira em 1 hora.
+          </p>
+          <p style="margin:0 0 24px;text-align:center">
+            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
+               padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
+              Redefinir minha senha
+            </a>
+          </p>
+          <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
+            Se o botão não funcionar, copie e cole este endereço no navegador:
+          </p>
+          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
+          <p style="margin:0;font-size:12px;color:#94a3b8">
+            Se você não pediu essa alteração, é só ignorar esta mensagem — sua senha
+            continua a mesma.
+          </p>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
+@app.post("/api/auth/esqueci-senha")
+def auth_esqueci_senha(dados: EsqueciSenhaIn, bg: BackgroundTasks,
+                       db: Session = Depends(get_session)):
+    """Sempre responde com sucesso genérico (não revela se o e-mail existe)."""
+    mensagem = ("Se este e-mail estiver cadastrado, enviamos um link para redefinir "
+                "a senha. Confira também a caixa de spam.")
+    email = (dados.email or "").strip().lower()
+    if not email or not _email_mod.smtp_configurado():
+        return {"ok": True, "mensagem": mensagem}
+
+    u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
+    if u and u.ativo:
+        u.token_reset_senha = _secrets_auth.token_urlsafe(32)
+        u.token_reset_expira = _utcnow_main() + timedelta(hours=1)
+        db.commit()
+
+        base = settings.APP_BASE_URL.rstrip("/")
+        link = f"{base}/redefinir-senha?token={u.token_reset_senha}"
+        corpo = (f"Olá, {u.nome}!\n\nRecebemos um pedido para redefinir a sua senha "
+                 f"no Radar de Licitações. Este link expira em 1 hora:\n{link}\n\n"
+                 "Se você não pediu essa alteração, ignore esta mensagem.\n\n"
+                 "— Radar de Licitações")
+        html = _email_html_reset_senha(u.nome, link)
+        bg.add_task(_email_mod.enviar_para, email,
+                    "Redefinir senha — Radar de Licitações", corpo, html)
+
+    return {"ok": True, "mensagem": mensagem}
+
+
+@app.post("/api/auth/redefinir-senha")
+def auth_redefinir_senha(dados: RedefinirSenhaIn, db: Session = Depends(get_session)):
+    u = db.execute(
+        select(Usuario).where(Usuario.token_reset_senha == dados.token)
+    ).scalars().first()
+    if not u or not u.token_reset_expira or u.token_reset_expira < _utcnow_main():
+        raise HTTPException(400, "Link de redefinição inválido ou expirado.")
+
+    erro = _auth.validar_forca_senha(dados.senha)
+    if erro:
+        raise HTTPException(400, erro)
+
+    u.senha_hash = _auth.hash_senha(dados.senha)
+    u.token_reset_senha = None
+    u.token_reset_expira = None
     db.commit()
     return {"ok": True}
 
@@ -1553,8 +1652,9 @@ def index():
 @app.get("/login")
 @app.get("/cadastro")
 @app.get("/verificar")
+@app.get("/redefinir-senha")
 def pagina_login():
-    """Página única de login/cadastro/verificação (decide pela URL no JS)."""
+    """Página única de login/cadastro/verificação/redefinição (decide pela URL no JS)."""
     return FileResponse(
         os.path.join(STATIC_DIR, "login.html"),
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
