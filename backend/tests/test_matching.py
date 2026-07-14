@@ -2,6 +2,10 @@
 Testes do motor de correspondência (sem banco, sem HTTP).
 Rode com:  cd backend && pytest
 """
+import pytest
+
+from app.config import settings
+from app.matching import engine as engine_mod
 from app.matching.engine import (
     MatchingEngine, ProdutoCat, ItemEdt, aplicar_regras_exclusao, normalizar, so_digitos,
 )
@@ -80,3 +84,54 @@ def test_normalizar_remove_acentos_e_pontuacao():
 
 def test_so_digitos():
     assert so_digitos("4802.55.90") == "48025590"
+
+
+# ---------------------------------------------------------------------------
+# Combinação do score textual com a IA semântica (embeddings mockados —
+# sem chamada de rede real).
+# ---------------------------------------------------------------------------
+def _ligar_ia_falsa(monkeypatch, ia_score, ia_prod):
+    """Liga o modo IA e substitui a geração de embeddings e o cálculo de
+    similaridade semântica por valores controlados, sem tocar na rede."""
+    monkeypatch.setattr(engine_mod, "ia_disponivel", lambda key: True)
+    monkeypatch.setattr(
+        engine_mod, "_ia_embeddings",
+        lambda textos, timeout=30, api_key=None: [[1.0]] * len(textos))
+    monkeypatch.setattr(
+        MatchingEngine, "_ia_score_item",
+        lambda self, item_emb: (ia_score, ia_prod))
+
+
+def test_ia_sem_sinal_nao_penaliza_score_textual(monkeypatch):
+    """Quando a IA não confirma nada (cosseno abaixo do IA_FLOOR -> ia_sc=0),
+    isso é "sem opinião", não "sinal negativo" — não deve derrubar um score
+    textual que já era bom."""
+    catalogo = _catalogo()
+    monkeypatch.setattr(MatchingEngine, "_score_item",
+                         lambda self, item: (0.5, catalogo[0], "similaridade textual"))
+    _ligar_ia_falsa(monkeypatch, ia_score=0.0, ia_prod=None)
+
+    eng = MatchingEngine(catalogo, usar_ia=True, gemini_key="fake-key")
+    r = eng.avaliar("Objeto", [ItemEdt(1, "qualquer coisa")])
+
+    assert r.detalhe[0]["score_item"] == pytest.approx(0.5, abs=1e-3)
+    assert r.detalhe[0]["motivo"] == "similaridade textual"
+
+
+def test_ia_com_sinal_combina_score(monkeypatch):
+    """Quando a IA tem sinal (ia_sc > 0), ela deve continuar sendo combinada
+    com o score textual pela média ponderada de IA_PESO, podendo inclusive
+    trocar o produto sugerido."""
+    catalogo = _catalogo()
+    produto_ia = catalogo[1]
+    monkeypatch.setattr(MatchingEngine, "_score_item",
+                         lambda self, item: (0.5, catalogo[0], "similaridade textual"))
+    _ligar_ia_falsa(monkeypatch, ia_score=0.8, ia_prod=produto_ia)
+
+    eng = MatchingEngine(catalogo, usar_ia=True, gemini_key="fake-key")
+    r = eng.avaliar("Objeto", [ItemEdt(1, "qualquer coisa")])
+
+    esperado = 0.5 * (1 - settings.IA_PESO) + 0.8 * settings.IA_PESO
+    assert r.detalhe[0]["score_item"] == pytest.approx(esperado, abs=1e-3)
+    assert r.detalhe[0]["produto_id"] == produto_ia.id
+    assert "IA" in r.detalhe[0]["motivo"]

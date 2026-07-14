@@ -307,14 +307,19 @@ class MatchingEngine:
             # reforço pela IA semântica (quando aplicável)
             if usar_ia_aqui and item_embs[idx]:
                 ia_sc, ia_prod = self._ia_score_item(item_embs[idx])
-                w = settings.IA_PESO
-                combinado = sc * (1 - w) + ia_sc * w
-                if ia_sc > sc and ia_prod is not None:
-                    prod = ia_prod
-                    motivo = f"semelhança IA ({round(ia_sc, 2)})"
-                elif ia_sc > 0 and motivo:
-                    motivo = f"{motivo} + IA"
-                sc = combinado
+                # ia_sc == 0 é "sem opinião" (cosseno abaixo do IA_FLOOR), não
+                # "sinal negativo" — só combina quando a IA realmente confirmou
+                # alguma semelhança, senão um match textual bom seria punido
+                # por falta de sinal em vez de por sinal contrário.
+                if ia_sc > 0:
+                    w = settings.IA_PESO
+                    combinado = sc * (1 - w) + ia_sc * w
+                    if ia_sc > sc and ia_prod is not None:
+                        prod = ia_prod
+                        motivo = f"semelhança IA ({round(ia_sc, 2)})"
+                    elif motivo:
+                        motivo = f"{motivo} + IA"
+                    sc = combinado
 
             scores_itens.append(sc)
             if sc >= settings.LIMIAR_ITEM:
