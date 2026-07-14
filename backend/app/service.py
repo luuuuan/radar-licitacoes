@@ -3,7 +3,7 @@ Serviço de orquestração: coleta -> persiste -> casa com o catálogo ->
 pontua -> notifica. É chamado pela tarefa diária (Celery) e pelos scripts.
 """
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from .models import utcnow
 
 from sqlalchemy import select
@@ -94,9 +94,24 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     gemini_key = decifrar(usuario.gemini_key_cifrada)   # chave do próprio usuário
     engine = MatchingEngine(catalogo, usar_ia=usar_ia, gemini_key=gemini_key)
 
+    # Só considera editais que aparecem em ALGUM lugar da tela: ativos (prazo em
+    # aberto) ou encerrados que o usuário está acompanhando (proposta enviada/
+    # ganho/perdido). Editais encerrados sem acompanhamento não aparecem em
+    # nenhuma aba — reavaliá-los é gasto (tempo e cota de IA) sem efeito visível.
+    sub_acompanhados = select(Match.edital_id).where(
+        Match.usuario_id == usuario.id,
+        Match.status.in_(("proposta_enviada", "ganho", "perdido")),
+    )
+    hoje = date.today()
     # mais relevantes primeiro (se a cota de IA acabar, os melhores já foram feitos)
     editais = db.execute(
-        select(Edital).order_by(Edital.coletado_em.desc())
+        select(Edital)
+        .where(
+            (Edital.data_encerramento.is_(None))
+            | (Edital.data_encerramento >= hoje)
+            | (Edital.id.in_(sub_acompanhados))
+        )
+        .order_by(Edital.coletado_em.desc())
     ).scalars().all()
     total = len(editais)
     if progresso:
