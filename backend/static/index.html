@@ -498,6 +498,13 @@
       <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
       <span id="config-msg" class="muted" style="margin-left:10px"></span>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Manutenção da base</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">O sistema não guarda mais editais de baixa compatibilidade. Se você tem editais antigos assim acumulados, pode limpá-los aqui — ficam só os de alta e média compatibilidade.</p>
+      <button class="btn ghost" onclick="limparFracos()" id="btn-limpar-fracos">Limpar editais de baixa compatibilidade</button>
+      <span id="limpar-msg" class="muted" style="margin-left:10px"></span>
+    </div>
   </section>
 
   <!-- PERFIL -->
@@ -1104,6 +1111,18 @@ async function loadConfig(){
   }
   else txt = c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)';
   $('#ia-status').textContent = txt;
+}
+
+async function limparFracos(){
+  if(!confirm('Remover os editais de baixa compatibilidade acumulados? Os de alta e média compatibilidade são mantidos.')) return;
+  const btn=$('#btn-limpar-fracos'), msg=$('#limpar-msg');
+  btn.disabled=true; msg.textContent='Limpando…'; msg.style.color='var(--medio)';
+  try{
+    const r=await api('/api/matches/limpar-fracos',{method:'POST'});
+    msg.textContent = `✓ ${r.removidos||0} removido(s)`; msg.style.color='var(--muted)';
+    loadResumo(); loadEditais();
+  }catch(e){ msg.textContent='Erro ao limpar.'; msg.style.color='#f87171'; }
+  btn.disabled=false;
 }
 
 async function salvarConfig(){

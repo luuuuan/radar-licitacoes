@@ -1031,6 +1031,19 @@ def recalcular_status(user: Usuario = Depends(_auth.get_current_user)):
     return _recalculo_status.get(user.id, {"rodando": False, "erro": None})
 
 
+@app.post("/api/matches/limpar-fracos")
+def limpar_fracos(user: Usuario = Depends(_auth.get_current_user),
+                  db: Session = Depends(get_session)):
+    """Remove os matches de baixa compatibilidade ('fracos') do usuário — usado
+    uma vez para limpar a base antiga (novas coletas já não salvam fracos)."""
+    from sqlalchemy import delete
+    res = db.execute(
+        delete(Match).where(Match.usuario_id == user.id, Match.nivel == "fraco")
+    )
+    db.commit()
+    return {"ok": True, "removidos": res.rowcount or 0}
+
+
 def _ref_pncp(ed: Edital):
     """Reconstrói (cnpj, ano, sequencial) a partir do numeroControlePNCP
     (formato: cnpj-tipo-sequencial/ano)."""

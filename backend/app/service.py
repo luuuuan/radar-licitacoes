@@ -131,6 +131,14 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
 
         era_novo = existente is None
         resultado = engine.avaliar(ed.objeto or "", itens_edt)
+        # não guardamos matches "fracos" (baixa compatibilidade): entopem a base
+        # e não representam oportunidade real. Se um match existente virou fraco
+        # (ex.: no recálculo após mudar o catálogo), removemos.
+        if resultado.nivel == "fraco":
+            if existente:
+                db.delete(existente)
+                existentes_map.pop(ed.id, None)
+            continue
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
             db.add(m)
