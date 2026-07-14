@@ -1542,7 +1542,9 @@ async function baixarDocumentos(id){
     const arqs=r.arquivos||[];
     let corpo;
     if(arqs.length){
+      window._docsAtuais = arqs;
       corpo = `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
+        + (arqs.length>1?`<button class="btn ghost" onclick="baixarTodosDocumentos()" style="margin-bottom:10px">${ICN.baixar} Baixar todos (${arqs.length})</button>`:'')
         + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
             <a class="btn ghost" href="${a.url}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
             <span style="flex:1">${a.titulo}${a.tipo?` <span class="muted">· ${a.tipo}</span>`:''}</span>
@@ -1563,6 +1565,15 @@ async function baixarDocumentos(id){
   }catch(e){
     mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao buscar documentos.</p></div></div>';
   }
+}
+
+// Abre o download de cada arquivo com um pequeno intervalo entre eles —
+// disparar tudo no mesmo instante faz o navegador bloquear como pop-up
+// (só a 1ª janela aberta a partir de um clique conta como "gesto do usuário").
+function baixarTodosDocumentos(){
+  (window._docsAtuais||[]).forEach((a,i)=>{
+    setTimeout(()=>window.open(a.url, '_blank'), i*400);
+  });
 }
 
 async function abrirDetalhe(id){
