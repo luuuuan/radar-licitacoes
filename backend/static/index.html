@@ -39,12 +39,14 @@
   .hamburger{display:none;background:transparent;border:none;color:var(--txt);cursor:pointer;padding:4px;margin-right:4px}
   .nav-head{display:none}
   .nav-overlay{display:none}
+  .nav-footer{display:none}
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
   select,input,textarea{background:var(--panel2);border:1px solid var(--line);
     color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
   .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
     border-radius:7px;cursor:pointer;font-size:13px}
   .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:16px;margin-bottom:12px}
   .ed-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
@@ -164,15 +166,25 @@
     .precos{grid-template-columns:1fr}
     /* menu lateral (gaveta) no mobile */
     .hamburger{display:inline-flex;align-items:center}
-    .nav-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:5500}
+    .nav-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:5500}
     nav{position:fixed;top:0;left:0;height:100%;width:80%;max-width:300px;
-      margin:0;flex-direction:column;flex-wrap:nowrap;gap:4px;background:var(--panel);
+      margin:0;display:flex;flex-direction:column;flex-wrap:nowrap;gap:2px;background:var(--panel);
       border-right:1px solid var(--line);padding:14px;z-index:6000;
       transform:translateX(-100%);transition:transform .25s ease;overflow-y:auto}
     nav.open{transform:translateX(0)}
-    nav button{width:100%;text-align:left;padding:12px 14px;font-size:14px}
+    /* itens em lista (sem caixinha) — só o item ativo/tocado ganha destaque */
+    nav button{width:100%;text-align:left;padding:11px 14px;font-size:14.5px;
+      background:transparent;border:1px solid transparent;border-radius:8px}
+    nav button:active{background:var(--panel2)}
+    nav button.active{background:var(--accent);border-color:var(--accent)}
     .nav-head{display:flex;justify-content:space-between;align-items:center;
       font-weight:600;font-size:15px;margin-bottom:8px;color:var(--txt)}
+    /* conta/sair: fixado embaixo da gaveta em vez de sumir no cabeçalho quebrado */
+    .nav-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;
+      margin-top:auto;padding-top:14px;border-top:1px solid var(--line)}
+    .nav-footer .nav-user-nome{flex:1;min-width:0;font-size:13px;color:var(--muted);
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .nav-footer .btn{flex-shrink:0}
     .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px}
     .ed-top{flex-direction:column;gap:6px}
     .toolbar{gap:8px}
@@ -251,7 +263,7 @@
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
   <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
-  <button class="btn ghost" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+  <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
   <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
   <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
     <span id="user-nome" class="badge" title="Sua conta">—</span>
@@ -278,6 +290,10 @@
     <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+    <div class="nav-footer">
+      <span class="nav-user-nome" title="Sua conta">—</span>
+      <button class="btn ghost" onclick="sair()">Sair</button>
+    </div>
   </nav>
 
   <!-- EDITAIS -->
@@ -1326,7 +1342,18 @@ async function coletar(){
   }, 8000);
 }
 
+function _setBtnRecalcularOcupado(ocupado){
+  const btn=$('#btn-recalcular');
+  if(!btn) return;
+  btn.disabled=ocupado;
+  btn.title=ocupado ? 'Já existe um recálculo em andamento' : 'Reavalia os editais já coletados contra o catálogo atual';
+}
+
 function abrirRecalcular(){
+  if($('#btn-recalcular')?.disabled){
+    toast('Já existe um recálculo em andamento.', 'aviso');
+    return;
+  }
   const mount=$('#modal-mount');
   mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
     <div class="modal-card" style="max-width:460px">
@@ -1334,7 +1361,7 @@ function abrirRecalcular(){
         <h3 style="margin:0">Recalcular editais</h3>
         <button class="btn ghost" onclick="fecharModal()">fechar</button>
       </div>
-      <p class="muted" style="font-size:13px;margin-top:0">Reavalia todos os editais já coletados contra o seu catálogo atual. Como você tem muitos editais, isso pode demorar.</p>
+      <p class="muted" style="font-size:13px;margin-top:0">Reavalia todos os editais já coletados contra o seu catálogo atual.</p>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
         <button class="btn" onclick="recalcular(false)">⚡ Recalcular rápido (sem IA)</button>
         <span class="muted" style="font-size:12px;margin-top:-6px">Recomendado para a base inteira. Usa só texto — rápido e não gasta cota da IA.</span>
@@ -1350,6 +1377,7 @@ function abrirRecalcular(){
 let _recalcTimer=null;
 
 function acompanharRecalculo(){
+  _setBtnRecalcularOcupado(true);
   if(_recalcTimer) return;   // já tem um polling ativo
   const el=$('#coleta-status');
   let n=0;
@@ -1372,6 +1400,7 @@ function acompanharRecalculo(){
       return;
     }
     clearInterval(_recalcTimer); _recalcTimer=null;
+    _setBtnRecalcularOcupado(false);
     if(s.erro){
       el.textContent='Erro ao recalcular'; el.style.color='#f87171';
       toast('O recálculo falhou: '+s.erro, 'erro', 6000);
@@ -1757,8 +1786,7 @@ async function exigirLogin(){
     const r = await fetch('/api/auth/me');
     if(r.status===401 || r.status===403){ location.href='/login'; return false; }
     USUARIO = await r.json();
-    const el = document.getElementById('user-nome');
-    if(el) el.textContent = USUARIO.nome;
+    document.querySelectorAll('#user-nome, .nav-user-nome').forEach(el=>el.textContent=USUARIO.nome);
     return true;
   }catch(e){ location.href='/login'; return false; }
 }
