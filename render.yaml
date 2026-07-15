@@ -15,6 +15,16 @@ services:
       # cole a string de conexão do Supabase no painel (Environment) — fica secreta
       - key: DATABASE_URL
         sync: false
+      # assina os tokens de sessão (JWT) e, se APP_ENCRYPTION_KEY ficar vazia,
+      # também deriva a cifra de CPF/CNPJ e chaves de API dos usuários — o
+      # Render gera um valor aleatório forte sozinho, nunca usa o padrão do código
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENCRYPTION_KEY
+        generateValue: true
+      # link de verificação de e-mail e URL usada pro cookie de sessão "secure"
+      - key: APP_BASE_URL
+        sync: false
       - key: PNCP_MODALIDADES
         value: "6,8,9,4"
       - key: PNCP_UFS

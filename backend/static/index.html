@@ -687,6 +687,23 @@
 <script>
 const $ = s => document.querySelector(s);
 
+// Escapa texto antes de injetar em innerHTML. Necessário pra qualquer campo
+// que venha do banco (editais são coletados do PNCP — texto de terceiros,
+// não confiável — mas também vale pros dados que o próprio usuário digitou).
+const _MAPA_ESC = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+function esc(t){
+  return String(t??'').replace(/[&<>"']/g, c=>_MAPA_ESC[c]);
+}
+// Só aceita link http(s) — evita "javascript:" ou outro esquema executável
+// vindo de um campo de link controlado por terceiros (ex.: PNCP).
+function linkSeguro(url){
+  if(!url) return '';
+  try{
+    const u = new URL(url, location.href);
+    return (u.protocol==='http:'||u.protocol==='https:') ? u.href : '';
+  }catch(e){ return ''; }
+}
+
 // Barra de carregamento global + aviso de "servidor acordando" (plano free do
 // Render dorme após ociosidade — a 1ª requisição depois disso pode levar ~30s).
 // Só acende a barra depois de 200ms (evita piscar em requisições rápidas) e só
@@ -862,23 +879,24 @@ function cardEdital(e){
   const prazo = e.dias_restantes==null?'prazo n/d':
     (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
   const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
-    `• [${d.score_item}] ${d.descricao_item} &rarr; ${d.produto||'?'} (${d.motivo})`).join('<br>');
+    `• [${esc(d.score_item)}] ${esc(d.descricao_item)} &rarr; ${esc(d.produto||'?')} (${esc(d.motivo)})`).join('<br>');
+  const linkEdital = linkSeguro(e.link);
   return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
     <div class="ed-top">
-      <div><strong>${e.orgao||'Órgão não informado'}</strong></div>
+      <div><strong>${esc(e.orgao||'Órgão não informado')}</strong></div>
       <span class="pill ${e.nivel}">${rotuloNivel(e.nivel)} · ${e.score}</span>
     </div>
-    <div class="ed-obj">${e.objeto||''}</div>
+    <div class="ed-obj">${esc(e.objeto||'')}</div>
     <div class="ed-meta">
-      <span>${e.modalidade||''}</span>
-      <span>${e.municipio||''}/${e.uf||''}</span>
+      <span>${esc(e.modalidade||'')}</span>
+      <span>${esc(e.municipio||'')}/${esc(e.uf||'')}</span>
       <span>${fmtMoeda(e.valor_estimado)}</span>
       <span>${e.itens_compativeis} item(ns) compatível(eis)</span>
       <span class="prazo ${urg?'urg':''}">${prazo}</span>
     </div>
     ${det?`<div class="det">${det}</div>`:''}
     <div class="acoes" onclick="event.stopPropagation()">
-      ${e.link?`<a href="${e.link}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
       <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
       <button class="btn ghost" onclick="abrirProposta(${e.edital_id})">${ICN.proposta||''} Proposta</button>
@@ -1025,8 +1043,8 @@ function filtrarProdutos(){
   const q=($('#busca-produto')?.value||'').toLowerCase().trim();
   const ps=q?_produtos.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q)):_produtos;
   $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
-    <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
-    <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
+    <td>${esc(p.descricao)}</td><td>${esc(p.ncm||'—')}</td>
+    <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
       <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
@@ -1102,7 +1120,7 @@ async function carregarFornecedoresSelect(){
   if(!sel) return;
   const atual = sel.value;
   sel.innerHTML = '<option value="">— sem fornecedor / preencher manual —</option>'
-    + _fornecedoresCache.map(f=>`<option value="${f.id}">${f.nome}</option>`).join('');
+    + _fornecedoresCache.map(f=>`<option value="${f.id}">${esc(f.nome)}</option>`).join('');
   sel.value = atual;
 }
 function aoEscolherFornecedor(){
@@ -1116,17 +1134,22 @@ function aoEscolherFornecedor(){
 }
 
 let editandoFornId = null;
+let _fornecedores=[];   // cache local pra editarFornecedor(id) não precisar embutir JSON no HTML
 async function loadFornecedores(){
   const fs = await api('/api/fornecedores');
+  _fornecedores = fs;
   if(!fs.length){ $('#lista-fornecedores').innerHTML='<tr><td colspan=6 class="muted">Nenhum fornecedor cadastrado.</td></tr>'; return; }
-  $('#lista-fornecedores').innerHTML = fs.map(f=>`<tr>
-    <td>${f.nome}</td><td>${f.telefone||'—'}</td><td>${f.whatsapp||'—'}</td>
-    <td>${f.email||'—'}</td>
-    <td>${f.site?`<a href="${f.site.startsWith('http')?f.site:'https://'+f.site}" target="_blank">abrir ↗</a>`:'—'}</td>
+  $('#lista-fornecedores').innerHTML = fs.map(f=>{
+    const site = f.site ? linkSeguro(f.site.startsWith('http')?f.site:'https://'+f.site) : '';
+    return `<tr>
+    <td>${esc(f.nome)}</td><td>${esc(f.telefone||'—')}</td><td>${esc(f.whatsapp||'—')}</td>
+    <td>${esc(f.email||'—')}</td>
+    <td>${site?`<a href="${esc(site)}" target="_blank">abrir ↗</a>`:'—'}</td>
     <td style="white-space:nowrap">
-      <button class="btn ghost" onclick='editarFornecedor(${JSON.stringify(f)})'>editar</button>
+      <button class="btn ghost" onclick="editarFornecedor(${f.id})">editar</button>
       <button class="btn ghost" onclick="delFornecedor(${f.id})">excluir</button>
-    </td></tr>`).join('');
+    </td></tr>`;
+  }).join('');
 }
 function abrirFormFornecedor(){
   cancelarEdicaoForn();
@@ -1156,7 +1179,9 @@ async function salvarFornecedor(){
   fecharFormFornecedor(); loadFornecedores();
   toast('Fornecedor salvo.', 'ok', 2500);
 }
-function editarFornecedor(f){
+function editarFornecedor(id){
+  const f = _fornecedores.find(x=>x.id===id);
+  if(!f) return;
   abrirFormFornecedor();
   $('#fn-nome').value=f.nome||''; $('#fn-tel').value=f.telefone||''; $('#fn-wpp').value=f.whatsapp||'';
   $('#fn-email').value=f.email||''; $('#fn-site').value=f.site||''; $('#fn-obs').value=f.observacao||'';
@@ -1171,7 +1196,7 @@ async function delFornecedor(id){
 
 async function loadRegras(){
   const rs=await api('/api/regras');
-  $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${r.tipo}</td><td>${r.valor}</td>
+  $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${esc(r.tipo)}</td><td>${esc(r.valor)}</td>
     <td><button class="btn ghost" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
     ||'<tr><td colspan=3 class="muted">Nenhuma regra.</td></tr>';
 }
@@ -1185,19 +1210,22 @@ async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); l
 
 let editandoDocId = null;
 
+let _documentos=[];   // cache local pra editarDocumento(id) não precisar embutir JSON no HTML
 async function loadDocumentos(){
   const ds=await api('/api/documentos');
+  _documentos = ds;
   if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
   $('#lista-documentos').innerHTML=ds.map(d=>{
     let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
     if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
     else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    const link = linkSeguro(d.link);
     return `<tr>
-      <td>${d.nome}${d.link?` <a href="${d.link}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}</td><td class="muted">${d.orgao_emissor||'—'}</td>
+      <td>${esc(d.nome)}${link?` <a href="${esc(link)}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
       <td>${d.data_validade.split('-').reverse().join('/')}</td>
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
-        <button class="btn ghost" onclick='editarDocumento(${JSON.stringify(d)})'>editar</button>
+        <button class="btn ghost" onclick="editarDocumento(${d.id})">editar</button>
         <button class="btn ghost" onclick="delDocumento(${d.id})">excluir</button>
       </td></tr>`;
   }).join('');
@@ -1221,7 +1249,9 @@ async function salvarDocumento(){
   fecharFormDocumento(); loadDocumentos();
 }
 
-function editarDocumento(d){
+function editarDocumento(id){
+  const d = _documentos.find(x=>x.id===id);
+  if(!d) return;
   $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
   $('#d-validade').value=d.data_validade; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
   editandoDocId=d.id;
@@ -1251,7 +1281,7 @@ async function loadPrecos(){
   const ps=await api('/api/inteligencia-preco');
   if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
   $('#lista-precos').innerHTML=ps.map(p=>`<tr>
-    <td>${p.descricao}</td><td>${p.ocorrencias}</td>
+    <td>${esc(p.descricao)}</td><td>${p.ocorrencias}</td>
     <td>${fmtR(p.minimo)}</td><td><strong>${fmtR(p.mediana)}</strong></td>
     <td>${fmtR(p.maximo)}</td><td class="muted">${fmtR(p.preco_venda)}</td>
   </tr>`).join('');
@@ -1304,10 +1334,10 @@ async function salvarConfig(){
 async function loadLogs(){
   const ls=await api('/api/logs');
   $('#lista-logs').innerHTML=ls.map(l=>`<tr>
-    <td>${l.fonte}</td><td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
+    <td>${esc(l.fonte)}</td><td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
     <td>${(l.finalizado_em||'—').replace('T',' ').slice(0,16)}</td>
     <td>${l.editais_vistos}</td><td>${l.editais_novos}</td><td>${l.matches_fortes}</td>
-    <td class="muted">${l.erro||''}</td></tr>`).join('')
+    <td class="muted">${esc(l.erro||'')}</td></tr>`).join('')
     ||'<tr><td colspan=7 class="muted">Sem coletas ainda.</td></tr>';
 }
 
@@ -1484,7 +1514,7 @@ async function recalcular(comIA){
 
 function _listaHTML(titulo, itens){
   if(!itens||!itens.length) return '';
-  return `<div style="margin-top:10px"><strong>${titulo}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${i}</li>`).join('')}</ul></div>`;
+  return `<div style="margin-top:10px"><strong>${esc(titulo)}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${esc(i)}</li>`).join('')}</ul></div>`;
 }
 
 async function analisarEdital(id, forcar){
@@ -1500,14 +1530,14 @@ async function analisarEdital(id, forcar){
       if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
       if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
       else if(r.julgamento==='item') flags.push('Julgamento por item');
-      corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${r.objeto}</p>`:''}
-        ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${f}</span>`).join('')}</div>`:''}
-        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${r.garantia_contratual}</p>`:''}
+      corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
+        ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
+        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
         ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
         ${_listaHTML('Prazos', r.prazos)}
         ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
         <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
-          Análise automática por IA${r.fonte?` · fonte: ${r.fonte}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
+          Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
           <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
         </div>`;
     } else {
@@ -1519,8 +1549,9 @@ async function analisarEdital(id, forcar){
         sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
         erro_ia:'A IA não respondeu agora (pode ser limite diário do plano gratuito). Tente mais tarde.',
         resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
+      const portal = linkSeguro(r.portal);
       corpo = `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
-        ${r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
+        ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
     }
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card">
@@ -1548,13 +1579,13 @@ async function abrirProposta(id){
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card" style="max-width:880px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <h3 style="margin:0">Proposta — ${p.orgao||'edital'}</h3>
+          <h3 style="margin:0">Proposta — ${esc(p.orgao||'edital')}</h3>
           <button class="btn ghost" onclick="fecharModal()">fechar</button>
         </div>
         <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
         <div id="prop-tabela"></div>
         <div class="field" style="margin-top:10px"><label>Observações</label>
-          <textarea id="prop-obs" style="width:100%;min-height:50px">${p.observacoes||''}</textarea></div>
+          <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
         <div class="toolbar" style="margin-top:10px">
           <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
           <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
@@ -1576,7 +1607,7 @@ function renderProposta(){
     const margItem=((it.preco_unit||0)-(it.custo_unit||0))*(it.quantidade||0);
     tv+=totItem; tc+=(it.custo_unit||0)*(it.quantidade||0);
     return `<tr>
-      <td><input value="${(it.descricao||'').replace(/"/g,'&quot;')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
+      <td><input value="${esc(it.descricao||'')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
       <td><input type="number" step="any" value="${it.quantidade}" onchange="propSet(${idx},'quantidade',this.value)" style="width:80px"></td>
       <td><input type="number" step="any" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
       <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
@@ -1628,14 +1659,15 @@ async function baixarDocumentos(id){
       corpo = `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
         + (arqs.length>1?`<button class="btn ghost" onclick="baixarTodosDocumentos()" style="margin-bottom:10px">${ICN.baixar} Baixar todos (${arqs.length})</button>`:'')
         + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
-            <a class="btn ghost" href="${a.url}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
-            <span style="flex:1">${a.titulo}${a.tipo?` <span class="muted">· ${a.tipo}</span>`:''}</span>
+            <a class="btn ghost" href="${esc(linkSeguro(a.url))}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
+            <span style="flex:1">${esc(a.titulo)}${a.tipo?` <span class="muted">· ${esc(a.tipo)}</span>`:''}</span>
           </div>`).join('');
     } else {
       const motivo = r.status==='vazio' ? 'Este edital não tem arquivos publicados no PNCP.'
         : 'Não foi possível obter os arquivos pela API do PNCP (alguns órgãos só publicam no portal próprio).';
+      const portal = linkSeguro(r.portal);
       corpo = `<p style="line-height:1.5">${motivo}</p>`
-        + (r.portal?`<a class="btn" href="${r.portal}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
+        + (portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
     }
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card">
@@ -1654,7 +1686,8 @@ async function baixarDocumentos(id){
 // (só a 1ª janela aberta a partir de um clique conta como "gesto do usuário").
 function baixarTodosDocumentos(){
   (window._docsAtuais||[]).forEach((a,i)=>{
-    setTimeout(()=>window.open(a.url, '_blank'), i*400);
+    const url = linkSeguro(a.url);
+    if(url) setTimeout(()=>window.open(url, '_blank'), i*400);
   });
 }
 
@@ -1686,25 +1719,27 @@ async function abrirDetalhe(id){
             <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
           </div>
           ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
-          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${f.descricao}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${it.quantidade}`:''}</div>`;
+          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
         if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
-          bloco+=`<div class="forn">${ICN.fornecedor} ${f.fornecedor_nome||'Fornecedor'}${f.fornecedor_contato?' · '+f.fornecedor_contato:''}${f.fornecedor_site?` · <a href="${f.fornecedor_site}" target="_blank">site ↗</a>`:''}</div>`;
+          const siteForn = linkSeguro(f.fornecedor_site);
+          bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` · <a href="${esc(siteForn)}" target="_blank">site ↗</a>`:''}</div>`;
         } else {
           bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
         }
       } else {
-        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${it.quantidade}`:''} · (sem produto seu compatível)</div>`;
+        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''} · (sem produto seu compatível)</div>`;
       }
       return `<div class="item-row ${it.compativel?'match':''}">
-        <strong>${it.compativel?ICN.check+' ':''}Item ${it.numero??''}</strong> — ${it.descricao}${bloco}</div>`;
+        <strong>${it.compativel?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
     }).join('');
+    const linkEditalDet = linkSeguro(e.link);
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card">
         <button class="close-x" onclick="fecharModal()">×</button>
-        <h2>${e.orgao||'Órgão'}</h2>
-        <div class="muted" style="font-size:13px">${e.modalidade||''} · ${e.municipio||''}/${e.uf||''} · ${prazo}</div>
-        <p style="line-height:1.45">${e.objeto||''}</p>
-        ${e.link?`<a href="${e.link}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
+        <h2>${esc(e.orgao||'Órgão')}</h2>
+        <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}</div>
+        <p style="line-height:1.45">${esc(e.objeto||'')}</p>
+        ${linkEditalDet?`<a href="${esc(linkEditalDet)}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
         <h3 style="margin:16px 0 4px;font-size:14px">Itens${d.itens.length?` (${d.itens.length})`:''}</h3>
         ${itensHtml||'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
       </div></div>`;

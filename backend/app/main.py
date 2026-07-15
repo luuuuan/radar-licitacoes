@@ -42,8 +42,20 @@ from .service import processar_coleta
 from .catalogo import catmat
 
 
+_SECRET_KEY_PADRAO = "troque-isto-em-producao-please-32+chars-aleatorios"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # em produção (APP_BASE_URL https), nunca sobe com a SECRET_KEY padrão do
+    # código-fonte: ela assina os tokens de sessão e cifra CPF/CNPJ e chaves
+    # de API — com o valor padrão, qualquer um que leia o repositório forja
+    # sessão de qualquer usuário. Localmente (sem APP_BASE_URL) segue liberado.
+    if settings.APP_BASE_URL.startswith("https") and settings.SECRET_KEY == _SECRET_KEY_PADRAO:
+        raise RuntimeError(
+            "SECRET_KEY está com o valor padrão do código-fonte. Defina uma "
+            "SECRET_KEY própria (variável de ambiente) antes de subir em produção."
+        )
     init_db()
     yield
 
