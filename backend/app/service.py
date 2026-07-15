@@ -126,7 +126,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     }
 
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
-    novos_fortes = []   # (objeto, orgao, link) dos matches fortes recém-criados
+    novos_fortes: list[Edital] = []   # editais dos matches fortes recém-criados
     for _i, ed in enumerate(editais):
         if progresso and _i % 50 == 0:
             progresso(_i, total)
@@ -176,7 +176,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         if resultado.nivel == "forte":
             resumo["fortes"] += 1
             if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
-                novos_fortes.append((ed.objeto or "Edital", ed.orgao or "", ed.link or ""))
+                novos_fortes.append(ed)
     try:
         db.commit()
     except IntegrityError:
@@ -191,19 +191,6 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     if progresso:
         progresso(total, total)
     return resumo
-
-
-def notificar_usuario_msg(usuario, titulo: str, corpo: str) -> bool:
-    """Envia uma mensagem simples para o usuário pelos canais que ele ativou."""
-    enviou = False
-    try:
-        if usuario.notif_email and usuario.email:
-            enviou = email_mod.enviar_para(usuario.email, titulo, corpo) or enviou
-        if usuario.notif_telegram and usuario.telegram_chat_id:
-            enviou = telegram_mod.enviar_para_chat(usuario.telegram_chat_id, titulo, corpo) or enviou
-    except Exception:
-        log.exception("Falha ao notificar usuário %s", usuario.id)
-    return enviou
 
 
 def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict]) -> bool:
@@ -230,10 +217,9 @@ def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict]) 
     return enviou
 
 
-def _notificar_usuario(usuario, fortes: list[tuple]):
+def _notificar_usuario(usuario, fortes: list[Edital]):
     """Avisa o usuário sobre novas oportunidades de alta compatibilidade — agrupado."""
-    itens = [{"objeto": objeto, "orgao": orgao, "link": link}
-             for objeto, orgao, link in fortes]
+    itens = [formato.item_edital(ed, nivel="forte") for ed in fortes]
     n = len(itens)
     titulo = (f"🎯 {n} novas oportunidades de alta compatibilidade"
               if n > 1 else "🎯 Nova oportunidade de alta compatibilidade")
