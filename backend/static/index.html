@@ -350,7 +350,10 @@
     </div>
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0">Produtos cadastrados</h3>
-      <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="filtrarProdutos()">
+        <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
+      </div>
     </div>
 
     <div id="modal-produto" class="modal hidden" onclick="if(event.target===this)fecharFormProduto()">
@@ -968,9 +971,15 @@ async function importarPlanilha(input){
   input.value='';  // permite reenviar o mesmo arquivo
 }
 
+let _produtos=[];
 async function loadProdutos(){
   const r=await api('/api/produtos?por_pagina=500');
-  const ps=r.resultados||[];
+  _produtos=r.resultados||[];
+  filtrarProdutos();
+}
+function filtrarProdutos(){
+  const q=($('#busca-produto')?.value||'').toLowerCase().trim();
+  const ps=q?_produtos.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q)):_produtos;
   $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
     <td>${p.descricao}</td><td>${p.ncm||'—'}</td>
     <td>${p.catmat||''} ${p.catser||''}</td><td class="muted">${p.palavras_chave||''}</td>
