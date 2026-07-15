@@ -205,10 +205,34 @@
     .ed-meta{gap:8px}
     /* toolbar não empurra a largura */
     .toolbar{max-width:100%}
+    /* ---- Fontes um pouco maiores no mobile: telas pequenas pedem texto
+       maior pra leitura, não menor. Cobre tanto as classes do <style> quanto
+       os font-size fixados inline nos templates JS (mesmo truque de
+       [style*=...] já usado acima pros inputs de largura fixa). ---- */
+    body{font-size:15px}
+    th,td{font-size:14px}
+    .pill{font-size:12px}
+    .kpi .l{font-size:13px}
+    .ed-meta{font-size:13px}
+    .acoes a{font-size:14px}
+    .det{font-size:13px}
+    label{font-size:13px}
+    .forn{font-size:14px}
+    .status-sel{font-size:13px}
+    .preco-box .l{font-size:12px}
+    header .badge{font-size:12px}
+    .toast{font-size:14px}
+    .ajuda .bolha{font-size:13px}
+    nav button{font-size:15px}
+    [style*="font-size:10px"]{font-size:11px !important}
+    [style*="font-size:11px"]{font-size:12px !important}
+    [style*="font-size:12px"]{font-size:13px !important}
+    [style*="font-size:13px"]{font-size:14px !important}
+    [style*="font-size:14px"]{font-size:15px !important}
   }
   /* Celular pequeno */
   @media (max-width:400px){
-    body{font-size:13px}
+    body{font-size:14px}
     .kpi .n{font-size:18px}
     nav button{padding:6px 10px}
   }
@@ -264,7 +288,7 @@
   <span id="coleta-status" class="badge">—</span>
   <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
   <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
-  <button class="btn" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
+  <button class="btn" id="btn-coletar" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
   <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
     <span id="user-nome" class="badge" title="Sua conta">—</span>
     <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
@@ -891,10 +915,12 @@ let paginaEditais = 1;
 // Alterna o bloco de filtros avançados (tipo, situação, por página, checkboxes)
 function toggleFiltrosExtra(){
   $('#filtros-extra').classList.toggle('hidden');
+  atualizarBadgeFiltros();
 }
 
-// Mantém o botão "Mais filtros" com um contador de quantos filtros avançados
-// estão ativos, pra dar pra saber sem precisar abrir o bloco colapsado.
+// Mantém o botão com um contador de quantos filtros avançados estão ativos
+// (pra dar pra saber sem precisar abrir o bloco) e troca o rótulo pra
+// "Menos filtros" enquanto o bloco estiver aberto.
 function atualizarBadgeFiltros(){
   const ativos = [
     $('#f-tipo').value!=='todos',
@@ -904,7 +930,9 @@ function atualizarBadgeFiltros(){
   ].filter(Boolean).length;
   const btn=$('#btn-mais-filtros');
   if(!btn) return;
-  btn.textContent = ativos ? `Mais filtros (${ativos})` : 'Mais filtros';
+  const aberto = !$('#filtros-extra').classList.contains('hidden');
+  const rotulo = aberto ? 'Menos filtros' : 'Mais filtros';
+  btn.textContent = ativos ? `${rotulo} (${ativos})` : rotulo;
   btn.classList.toggle('tem-filtros', ativos>0);
 }
 
@@ -1322,6 +1350,10 @@ function toast(msg, tipo='aviso', ms=4000){
 }
 
 async function coletar(){
+  if(_recalcTimer){
+    toast('Aguarde o recálculo terminar para coletar novos editais.', 'aviso');
+    return;
+  }
   const r=await api('/api/coletar',{method:'POST'});
   if(r && r.sem_produtos){
     toast(r.mensagem || 'Cadastre ao menos um produto antes de buscar editais.', 'aviso', 5000);
@@ -1344,9 +1376,16 @@ async function coletar(){
 
 function _setBtnRecalcularOcupado(ocupado){
   const btn=$('#btn-recalcular');
-  if(!btn) return;
-  btn.disabled=ocupado;
-  btn.title=ocupado ? 'Já existe um recálculo em andamento' : 'Reavalia os editais já coletados contra o catálogo atual';
+  if(btn){
+    btn.disabled=ocupado;
+    btn.title=ocupado ? 'Já existe um recálculo em andamento' : 'Reavalia os editais já coletados contra o catálogo atual';
+  }
+  // enquanto recalcula, não dá pra coletar (os dois mexem nos matches ao mesmo tempo)
+  const btnColetar=$('#btn-coletar');
+  if(btnColetar){
+    btnColetar.disabled=ocupado;
+    btnColetar.title=ocupado ? 'Aguarde o recálculo terminar' : '';
+  }
 }
 
 function abrirRecalcular(){
