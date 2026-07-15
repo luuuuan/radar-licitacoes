@@ -1089,6 +1089,10 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
     if not tem_produtos:
         return {"ok": False, "sem_produtos": True,
                 "mensagem": "Cadastre ao menos um produto antes de buscar editais."}
+    if _coleta_lock.locked():
+        return {"ok": False, "em_andamento": True,
+                "mensagem": "Já existe uma coleta em andamento (pode ter sido disparada "
+                            "por outro usuário ou pelo agendamento automático). Aguarde terminar."}
     # coleta manual gera matches só para quem clicou
     bg.add_task(_rodar_coleta_bg, user.id)
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}

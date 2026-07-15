@@ -262,6 +262,16 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
 
     resumo = {"novos": 0, "vistos": 0}
 
+    # coleta manual: cria já um registro "em andamento" PARA ESTE usuário, senão
+    # o indicador do dashboard (que filtra por usuario_id) não enxerga nada
+    # rodando enquanto a coleta em si (abaixo) ainda não terminou — ficando
+    # preso mostrando a última coleta antiga (ou "nunca") até tudo finalizar.
+    log_usuario = None
+    if usuario_id is not None:
+        log_usuario = LogColeta(usuario_id=usuario_id, fonte="coleta", iniciado_em=utcnow())
+        db.add(log_usuario)
+        db.commit()
+
     for conector in conectores:
         log_coleta = LogColeta(fonte=conector.nome, iniciado_em=utcnow())
         db.add(log_coleta)
@@ -311,17 +321,30 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             r = _gerar_matches_usuario(db, u, recalcular_todos=False)
             resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
             # registra no Histórico DESTE usuário o que entrou na conta dele
-            db.add(LogColeta(
-                usuario_id=u.id, fonte=fonte_label,
-                iniciado_em=inicio_user, finalizado_em=utcnow(),
-                editais_vistos=r.get("editais", 0),
-                editais_novos=r.get("atualizados", 0),
-                matches_fortes=r.get("fortes", 0),
-            ))
+            if log_usuario is not None and u.id == usuario_id:
+                # coleta manual: atualiza o próprio registro "em andamento"
+                # em vez de criar um segundo, pra não duplicar o histórico
+                log_usuario.fonte = fonte_label
+                log_usuario.finalizado_em = utcnow()
+                log_usuario.editais_vistos = r.get("editais", 0)
+                log_usuario.editais_novos = r.get("atualizados", 0)
+                log_usuario.matches_fortes = r.get("fortes", 0)
+            else:
+                db.add(LogColeta(
+                    usuario_id=u.id, fonte=fonte_label,
+                    iniciado_em=inicio_user, finalizado_em=utcnow(),
+                    editais_vistos=r.get("editais", 0),
+                    editais_novos=r.get("atualizados", 0),
+                    matches_fortes=r.get("fortes", 0),
+                ))
             db.commit()
-        except Exception:
+        except Exception as e:
             log.exception("Falha ao gerar matches do usuário %s", u.id)
             db.rollback()
+            if log_usuario is not None and u.id == usuario_id:
+                log_usuario.erro = str(e)[:500]
+                log_usuario.finalizado_em = utcnow()
+                db.commit()
 
     log.info("Coleta concluída: %s", resumo)
     return resumo

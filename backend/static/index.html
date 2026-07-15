@@ -1311,9 +1311,14 @@ async function coletar(){
     toast(r.mensagem || 'Cadastre ao menos um produto antes de buscar editais.', 'aviso', 5000);
     return;
   }
+  if(r && r.em_andamento){
+    toast(r.mensagem || 'Já existe uma coleta em andamento.', 'aviso', 6000);
+    return;
+  }
   const el=$('#coleta-status');
   el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
-  // acompanha de perto por alguns minutos, depois volta ao ritmo normal
+  // acompanha de perto por alguns minutos (pode levar bem mais que isso se o
+  // PNCP estiver limitando taxa — depois disso o polling normal de 30s continua)
   let n=0;
   const t=setInterval(async()=>{
     await loadColetaStatus(); loadResumo();
