@@ -1278,6 +1278,7 @@ async function mudarStatus(matchId, status){
 const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 
 async function loadPrecos(){
+  $('#lista-precos').innerHTML=`<tr><td colspan=6 class="muted">${ICN.relogio} Calculando referências de preço…</td></tr>`;
   const ps=await api('/api/inteligencia-preco');
   if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
   $('#lista-precos').innerHTML=ps.map(p=>`<tr>
