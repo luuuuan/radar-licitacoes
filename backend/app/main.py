@@ -80,8 +80,10 @@ def _brt(dt: datetime | None) -> str | None:
     return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(BR_TZ).isoformat()
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
+    # HEAD explícito: o FastAPI não registra HEAD sozinho pra rotas @app.get,
+    # e serviços de keep-alive gratuitos (ex.: UptimeRobot free) só mandam HEAD.
     return {"ok": True}
 
 
