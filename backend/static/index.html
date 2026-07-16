@@ -871,6 +871,21 @@ function filtrarDoDia(){ filtrarKpi('hoje'); }
 function rotuloNivel(n){
   return {forte:'Alta compatibilidade', medio:'Média compatibilidade', fraco:'Baixa compatibilidade'}[n] || n;
 }
+// Traduz o "motivo" técnico do motor de match (score, IA, TF-IDF...) pra uma
+// frase que faz sentido pra quem não é desenvolvedor. Não menciona IA/algoritmo:
+// o que importa pro usuário é o que casou, não qual técnica achou o casamento.
+function motivoAmigavel(motivo){
+  if(!motivo) return '';
+  const m = motivo.replace(/\s*\+\s*IA$/i, '');
+  let r = m.match(/^código\s+(\w+)\s+(.+)$/i);
+  if(r) return `mesmo código ${r[1].toUpperCase()} do catálogo`;
+  if(/^semelhança IA/i.test(m) || /^similaridade textual/i.test(m)) return 'descrição parecida';
+  r = m.match(/^palavra-chave '(.+)'$/);
+  if(r) return `palavra-chave em comum: "${r[1]}"`;
+  r = m.match(/^\d+ palavras-chave \((.+)\)$/);
+  if(r) return `palavras-chave em comum: ${r[1]}`;
+  return m;
+}
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
@@ -879,7 +894,8 @@ function cardEdital(e){
   const prazo = e.dias_restantes==null?'prazo n/d':
     (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
   const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
-    `• [${esc(d.score_item)}] ${esc(d.descricao_item)} &rarr; ${esc(d.produto||'?')} (${esc(d.motivo)})`).join('<br>');
+    `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
+    + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'')).join('<br>');
   const linkEdital = linkSeguro(e.link);
   return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
     <div class="ed-top">
