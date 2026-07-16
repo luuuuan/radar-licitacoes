@@ -1274,6 +1274,19 @@ def baixar_documento_pncp(url: str, nome: str = Query("documento"),
         raise HTTPException(502, f"PNCP retornou HTTP {r.status_code}.")
     nome_seguro = re.sub(r'[\\/:*?"<>|\r\n]', "_", nome).strip()[:150] or "documento"
     nome_seguro = nome_seguro.encode("latin-1", errors="ignore").decode("latin-1") or "documento"
+    # o "nome" vem do título do documento no PNCP (ex.: "Edital"), sem extensão.
+    # Descobre a extensão certa pelo nome de arquivo original do PNCP (se ele
+    # mandar um Content-Disposition) ou, na falta dele, pelo Content-Type.
+    ext = ""
+    cd_origem = r.headers.get("Content-Disposition", "")
+    m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd_origem)
+    if m and "." in m.group(1):
+        ext = "." + m.group(1).rsplit(".", 1)[-1].strip('"')
+    if not ext:
+        import mimetypes
+        ext = mimetypes.guess_extension((r.headers.get("Content-Type") or "").split(";")[0].strip()) or ""
+    if ext and not nome_seguro.lower().endswith(ext.lower()):
+        nome_seguro += ext
     return StreamingResponse(
         r.iter_content(chunk_size=65536),
         media_type=r.headers.get("Content-Type", "application/octet-stream"),
