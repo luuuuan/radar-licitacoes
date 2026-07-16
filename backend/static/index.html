@@ -1698,13 +1698,19 @@ async function baixarDocumentos(id){
   }
 }
 
-// Abre o download de cada arquivo com um pequeno intervalo entre eles —
-// disparar tudo no mesmo instante faz o navegador bloquear como pop-up
-// (só a 1ª janela aberta a partir de um clique conta como "gesto do usuário").
+// Baixa cada arquivo pelo proxy do backend (força download em vez de abrir
+// aba). Evita o bloqueador de pop-up do navegador — que só permite 1 aba por
+// clique — porque nenhuma aba nova chega a ser aberta.
 function baixarTodosDocumentos(){
-  (window._docsAtuais||[]).forEach((a,i)=>{
+  (window._docsAtuais||[]).forEach(a=>{
     const url = linkSeguro(a.url);
-    if(url) setTimeout(()=>window.open(url, '_blank'), i*400);
+    if(!url) return;
+    const link = document.createElement('a');
+    link.href = `/api/documentos/baixar?url=${encodeURIComponent(url)}&nome=${encodeURIComponent(a.titulo||'documento')}`;
+    link.download = a.titulo || 'documento';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   });
 }
 

@@ -19,11 +19,13 @@ import csv
 import io
 import os
 import base64
+import re
 import secrets
 import threading
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from urllib.parse import urlparse
 from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
@@ -1247,6 +1249,35 @@ def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
     return _listar_arquivos_pncp(ed)
+
+
+@app.get("/api/documentos/baixar")
+def baixar_documento_pncp(url: str, nome: str = Query("documento"),
+                          user: Usuario = Depends(_auth.get_current_user)):
+    """Repassa (proxy) um arquivo do PNCP com Content-Disposition: attachment.
+    Baixar VÁRIOS documentos de uma vez abrindo uma aba por arquivo esbarra no
+    bloqueador de pop-up do navegador (só a 1ª aba de um clique conta como
+    gesto do usuário — as demais são bloqueadas). Como este endpoint força
+    download em vez de abrir aba, o front pode disparar todos em sequência
+    sem esbarrar nisso. Só aceita URLs do domínio do PNCP (evita virar um
+    proxy aberto para qualquer endereço)."""
+    partes = urlparse(url)
+    host = partes.hostname or ""
+    if partes.scheme not in ("http", "https") or not (host == "pncp.gov.br" or host.endswith(".pncp.gov.br")):
+        raise HTTPException(400, "URL inválida.")
+    try:
+        r = requests.get(url, stream=True, timeout=60,
+                         headers={"User-Agent": "RadarLicitacoes/1.0"})
+    except requests.RequestException:
+        raise HTTPException(502, "Não foi possível baixar o arquivo do PNCP.")
+    if r.status_code != 200:
+        raise HTTPException(502, f"PNCP retornou HTTP {r.status_code}.")
+    nome_seguro = re.sub(r'[\\/:*?"<>|\r\n]', "_", nome).strip()[:150] or "documento"
+    nome_seguro = nome_seguro.encode("latin-1", errors="ignore").decode("latin-1") or "documento"
+    return StreamingResponse(
+        r.iter_content(chunk_size=65536),
+        media_type=r.headers.get("Content-Type", "application/octet-stream"),
+        headers={"Content-Disposition": f'attachment; filename="{nome_seguro}"'})
 
 
 @app.get("/api/editais/{edital_id}/analise")
