@@ -655,18 +655,25 @@ def listar_produtos(
 def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     """Planilha-modelo para importação de produtos."""
     import openpyxl
+    from openpyxl.comments import Comment
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Produtos"
     cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
-             "preco_custo", "preco_venda",
-             "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
+             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
+             "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
     ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
-               "7891234567890", "150123", "", "18,90", "24,50",
-               "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
+               "7891234567890", "150123", "", "18,90", "24,50", "resma", "500",
+               "(45) 99999-0000", "", "", ""])
     ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
-               "", "", "", "1,20", "2,00", "", "", ""])
+               "", "", "", "1,20", "2,00", "unidade", "",
+               "", "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
+    ws["K1"].comment = Comment(
+        "Se o telefone bater com um fornecedor já cadastrado na aba Fornecedores, "
+        "o produto é vinculado a ele automaticamente (nome/contato/site vêm de lá "
+        "— não precisa preencher as 3 colunas seguintes). Preencha-as só se o "
+        "fornecedor ainda não estiver cadastrado.", "Radar de Licitações")
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
@@ -721,10 +728,17 @@ _COLS_IMPORT = {
     "catmat": "catmat", "catser": "catser",
     "preco_custo": "preco_custo", "preço_custo": "preco_custo", "custo": "preco_custo",
     "preco_venda": "preco_venda", "preço_venda": "preco_venda", "venda": "preco_venda",
+    "unidade_venda": "unidade_venda", "unidade de venda": "unidade_venda",
+    "itens_por_unidade": "itens_por_unidade", "itens por unidade": "itens_por_unidade",
     "fornecedor_nome": "fornecedor_nome", "fornecedor": "fornecedor_nome",
     "fornecedor_contato": "fornecedor_contato", "fornecedor_site": "fornecedor_site",
+    # telefone/whatsapp do fornecedor: se bater com um fornecedor já cadastrado,
+    # vincula o produto a ele (fornecedor_id) em vez de precisar repetir nome/
+    # contato/site em toda linha da planilha.
+    "fornecedor_telefone": "_fornecedor_telefone", "telefone_fornecedor": "_fornecedor_telefone",
+    "fornecedor_whatsapp": "_fornecedor_telefone", "whatsapp_fornecedor": "_fornecedor_telefone",
 }
-_CAMPOS_NUM = {"preco_custo", "preco_venda"}
+_CAMPOS_NUM = {"preco_custo", "preco_venda", "itens_por_unidade"}
 
 
 def _num_br(v):
@@ -770,6 +784,15 @@ async def importar_produtos(arquivo: UploadFile = File(...),
     if "descricao" not in mapa.values():
         raise HTTPException(400, "A planilha precisa de uma coluna 'descricao'.")
 
+    # telefone/whatsapp (só dígitos) -> fornecedor já cadastrado deste usuário,
+    # para vincular o produto a ele sem precisar repetir nome/contato/site.
+    mapa_fone_forn: dict[str, Fornecedor] = {}
+    for f in db.execute(select(Fornecedor).where(Fornecedor.usuario_id == user.id)).scalars():
+        for fone in (f.telefone, f.whatsapp):
+            d = re.sub(r"\D", "", fone or "")
+            if d:
+                mapa_fone_forn[d] = f
+
     criados = atualizados = ignorados = 0
     erros = []
     for n, linha in enumerate(linhas, start=2):
@@ -786,6 +809,19 @@ async def importar_produtos(arquivo: UploadFile = File(...),
         if not desc:
             ignorados += 1
             continue
+        fone_forn = dados.pop("_fornecedor_telefone", None)
+        if fone_forn:
+            forn = mapa_fone_forn.get(re.sub(r"\D", "", fone_forn))
+            if forn:
+                dados["fornecedor_id"] = forn.id
+                if not dados.get("fornecedor_nome"):
+                    dados["fornecedor_nome"] = forn.nome
+                if not dados.get("fornecedor_contato"):
+                    dados["fornecedor_contato"] = forn.whatsapp or forn.telefone or forn.email
+                if not dados.get("fornecedor_site"):
+                    dados["fornecedor_site"] = forn.site
+            else:
+                erros.append(f"linha {n}: nenhum fornecedor cadastrado com o telefone '{fone_forn}'")
         # atualizar se a descrição já existe NESTE usuário (case-insensitive)
         existente = db.execute(
             select(Produto).where(Produto.usuario_id == user.id)

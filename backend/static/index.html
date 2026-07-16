@@ -703,6 +703,13 @@ function linkSeguro(url){
     return (u.protocol==='http:'||u.protocol==='https:') ? u.href : '';
   }catch(e){ return ''; }
 }
+// Monta o link do wa.me a partir do número cadastrado. Sem DDI (11/10 dígitos,
+// padrão brasileiro) assume Brasil (55); já vindo com DDI, usa como está.
+function linkWhatsapp(numero){
+  const d = (numero||'').replace(/\D/g,'');
+  if(!d) return '';
+  return `https://wa.me/${d.length<=11?'55'+d:d}`;
+}
 
 // Barra de carregamento global + aviso de "servidor acordando" (plano free do
 // Render dorme após ociosidade — a 1ª requisição depois disso pode levar ~30s).
@@ -1157,8 +1164,10 @@ async function loadFornecedores(){
   if(!fs.length){ $('#lista-fornecedores').innerHTML='<tr><td colspan=6 class="muted">Nenhum fornecedor cadastrado.</td></tr>'; return; }
   $('#lista-fornecedores').innerHTML = fs.map(f=>{
     const site = f.site ? linkSeguro(f.site.startsWith('http')?f.site:'https://'+f.site) : '';
+    const wpp = f.whatsapp ? linkWhatsapp(f.whatsapp) : '';
     return `<tr>
-    <td>${esc(f.nome)}</td><td>${esc(f.telefone||'—')}</td><td>${esc(f.whatsapp||'—')}</td>
+    <td>${esc(f.nome)}</td><td>${esc(f.telefone||'—')}</td>
+    <td>${wpp?`<a href="${esc(wpp)}" target="_blank">${esc(f.whatsapp)} ↗</a>`:'—'}</td>
     <td>${esc(f.email||'—')}</td>
     <td>${site?`<a href="${esc(site)}" target="_blank">abrir ↗</a>`:'—'}</td>
     <td style="white-space:nowrap">
