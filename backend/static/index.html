@@ -1715,7 +1715,7 @@ async function abrirDetalhe(id){
     const d=await api(`/api/editais/${id}/detalhe`);
     const e=d.edital;
     const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
-    const itensHtml=d.itens.map(it=>{
+    function _itemRowHtml(it){
       let bloco='';
       if(it.compativel && it.produto){
         const f=it.produto;
@@ -1744,11 +1744,16 @@ async function abrirDetalhe(id){
           bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
         }
       } else {
-        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''} · (sem produto seu compatível)</div>`;
+        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
       }
       return `<div class="item-row ${it.compativel?'match':''}">
         <strong>${it.compativel?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
-    }).join('');
+    }
+    const compativeis = d.itens.filter(it=>it.compativel);
+    const semMatch = d.itens.filter(it=>!it.compativel);
+    const itensHtml = `
+      ${compativeis.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens compatíveis com seu catálogo (${compativeis.length})</h3>${compativeis.map(_itemRowHtml).join('')}`:''}
+      ${semMatch.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens sem produto compatível (${semMatch.length})</h3>${semMatch.map(_itemRowHtml).join('')}`:''}`;
     const linkEditalDet = linkSeguro(e.link);
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
       <div class="modal-card">
@@ -1757,8 +1762,7 @@ async function abrirDetalhe(id){
         <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}</div>
         <p style="line-height:1.45">${esc(e.objeto||'')}</p>
         ${linkEditalDet?`<a href="${esc(linkEditalDet)}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
-        <h3 style="margin:16px 0 4px;font-size:14px">Itens${d.itens.length?` (${d.itens.length})`:''}</h3>
-        ${itensHtml||'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
+        ${d.itens.length?itensHtml:'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
       </div></div>`;
   }catch(err){
     mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()"><div class="modal-card"><button class="close-x" onclick="fecharModal()">×</button><p>Não consegui carregar os detalhes agora.</p></div></div>`;
