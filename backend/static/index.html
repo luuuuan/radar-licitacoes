@@ -102,22 +102,19 @@
   .preco-box .v{font-size:16px;font-weight:700}
   .preco-box .l{font-size:11px;color:var(--muted)}
   .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
-  .card-click{cursor:pointer;transition:border-color .15s, transform .05s}
-  .card-click:hover{border-color:var(--accent)}
-  .card-click:active{transform:scale(0.998)}
   /* Tooltip de ajuda (?) — funciona no hover e no clique/toque */
   .ajuda{position:relative;display:inline-flex;align-items:center;justify-content:center;
     width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);
     font-size:11px;font-weight:600;cursor:help;margin-left:5px;vertical-align:middle;user-select:none;flex-shrink:0}
   .ajuda:hover{border-color:var(--accent);color:var(--accent)}
   .ajuda .bolha{visibility:hidden;opacity:0;position:absolute;bottom:140%;left:50%;
-    transform:translateX(-50%);background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    transform:translateX(calc(-50% + var(--ajuda-shift,0px)));background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.4;
     width:230px;max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
     text-align:left;transition:opacity .15s;pointer-events:none}
   .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
-  .ajuda .bolha::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
-    border:5px solid transparent;border-top-color:var(--line)}
+  .ajuda .bolha::after{content:"";position:absolute;top:100%;left:calc(50% - var(--ajuda-shift,0px));
+    transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--line)}
   /* Toast (avisos) */
   #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
     z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
@@ -411,7 +408,7 @@
             <button type="button" class="btn ghost" style="margin-top:6px;font-size:12px;padding:4px 10px" onclick="abrirCatalogoOficial('servico')">Buscar no catálogo oficial ↗︎</button></div>
         </div>
 
-        <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
+        <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
           <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
 
         <div class="grid2">
@@ -428,7 +425,7 @@
             <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
         </div>
         <div class="field"><label>Fornecedor
-          <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Escolha um fornecedor já cadastrado para puxar os dados de contato automaticamente, ou cadastre um novo na aba Fornecedores.</span></span></label>
+          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Escolha um fornecedor já cadastrado para puxar os dados de contato automaticamente, ou cadastre um novo na aba Fornecedores.</span></span></label>
           <select id="p-forn-sel" style="width:100%" onchange="aoEscolherFornecedor()">
             <option value="">— sem fornecedor / preencher manual —</option>
           </select>
@@ -537,7 +534,7 @@
             <input id="d-validade" type="date" style="width:100%"></div>
         </div>
         <div class="field"><label>Link do documento (opcional)
-          <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
+          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
           <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
         <div class="field"><label>Observação (opcional)</label>
           <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
@@ -572,7 +569,7 @@
       <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
         <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
         <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
-      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
+      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
         <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
       <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
         <label>Refinamento por IA (semântico)</label>
@@ -654,7 +651,7 @@
 
       <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
       <h3 style="margin:0 0 2px">Aviso de abertura
-        <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Avisa, com alguns dias de antecedência, quando um edital de alta compatibilidade vai abrir. Dá tempo de preparar a documentação e decidir se vai participar. Chega pelos canais que você ligou acima.</span></span>
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Avisa, com alguns dias de antecedência, quando um edital de alta compatibilidade vai abrir. Dá tempo de preparar a documentação e decidir se vai participar. Chega pelos canais que você ligou acima.</span></span>
       </h3>
       <p class="muted" style="font-size:12px;margin-top:0">Receba um aviso antes de um edital de alta compatibilidade abrir.</p>
       <div style="display:flex;justify-content:space-between;align-items:center;max-width:360px;margin:10px 0">
@@ -676,9 +673,9 @@
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
     <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
-      <th>Vistos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
-      <th>Novos <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
-      <th>Alta compat. <span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">Quantos editais novos ficaram com alta compatibilidade com o seu catálogo.</span></span></th>
+      <th>Vistos <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
+      <th>Novos <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
+      <th>Alta compat. <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Quantos editais novos ficaram com alta compatibilidade com o seu catálogo.</span></span></th>
       <th>Erro</th></tr></thead>
       <tbody id="lista-logs"></tbody></table>
   </section>
@@ -760,11 +757,36 @@ function aplicarMascara(el, fn){
 
 // Tooltip de ajuda: gera o HTML do "?" com a explicação
 function ajuda(texto){
-  return `<span class="ajuda" onclick="this.classList.toggle('aberto');event.stopPropagation()">?<span class="bolha">${texto}</span></span>`;
+  return `<span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">${texto}</span></span>`;
+}
+// Abre/fecha o balão de ajuda: sempre fecha qualquer outro que esteja aberto
+// (clicar num "?" enquanto outro está aberto trocava sem fechar o anterior)
+// e, ao abrir, desloca o balão pra dentro da tela quando ele estouraria a borda
+// lateral (comum em telas de celular perto das quinas).
+function _fecharAjuda(a){
+  a.classList.remove('aberto');
+  a.style.removeProperty('--ajuda-shift');
+}
+function toggleAjuda(el, ev){
+  ev.stopPropagation();
+  const jaAberto = el.classList.contains('aberto');
+  document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
+  if(jaAberto) return;
+  el.classList.add('aberto');
+  requestAnimationFrame(()=>{
+    const bolha = el.querySelector('.bolha');
+    if(!bolha) return;
+    const r = bolha.getBoundingClientRect();
+    const margem = 8;
+    let shift = 0;
+    if(r.left < margem) shift = margem - r.left;
+    else if(r.right > innerWidth - margem) shift = (innerWidth - margem) - r.right;
+    if(shift) el.style.setProperty('--ajuda-shift', shift+'px');
+  });
 }
 // fecha tooltips abertos ao tocar fora (mobile)
 document.addEventListener('click', e=>{
-  if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(a=>a.classList.remove('aberto'));
+  if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
 });
 
 // Trava o scroll do fundo enquanto algum modal estiver aberto (estático via
@@ -904,7 +926,7 @@ function cardEdital(e){
     `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
     + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'')).join('<br>');
   const linkEdital = linkSeguro(e.link);
-  return `<div class="card card-click" onclick="abrirDetalhe(${e.edital_id})" title="Ver detalhes do edital">
+  return `<div class="card">
     <div class="ed-top">
       <div><strong>${esc(e.orgao||'Órgão não informado')}</strong></div>
       <span class="pill ${e.nivel}">${rotuloNivel(e.nivel)} · ${e.score}</span>
@@ -918,7 +940,7 @@ function cardEdital(e){
       <span class="prazo ${urg?'urg':''}">${prazo}</span>
     </div>
     ${det?`<div class="det">${det}</div>`:''}
-    <div class="acoes" onclick="event.stopPropagation()">
+    <div class="acoes">
       ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
       <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
