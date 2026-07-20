@@ -264,13 +264,14 @@
   .filtros-lateral select,.filtros-lateral input{width:100%}
   .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted);
     flex:1 1 auto;justify-content:center}
+  .filtros-lateral .chk input{width:auto;flex-shrink:0;margin:0}
   .filtros-lateral .btn,.filtros-lateral a.btn{flex:1 1 auto;text-align:center}
   .editais-principal{min-width:0}
   /* campos que precisam do rótulo sempre visível (não são autoexplicativos como um
      select) e que devem ocupar a linha inteira sozinhos mesmo no layout em linha do celular */
   .filtros-lateral .full-row{flex:1 1 100%}
   .filtros-lateral .field.field-visible > label{display:block}
-  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;
+  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;
     border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--panel2)}
   .filtros-lateral .field .uf-checks label{display:flex;gap:5px;align-items:center;
     font-size:12px;color:var(--txt);margin:0;cursor:pointer}
@@ -282,7 +283,7 @@
   .filtros-lateral .monitoramento-bloco .field label{display:block}
   @media (min-width:681px){
     .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
-    .filtros-lateral{flex:0 0 230px;flex-direction:column;align-items:stretch;flex-wrap:nowrap;
+    .filtros-lateral{flex:0 0 290px;flex-direction:column;align-items:stretch;flex-wrap:nowrap;
       background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;
       position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;
       scrollbar-width:thin;scrollbar-color:var(--line) var(--panel)}
