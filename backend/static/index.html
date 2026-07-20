@@ -255,9 +255,32 @@
     .nav-grupo:first-of-type::before{display:none}
   }
 
-  /* ---- Toolbar de filtros avançados (colapsável) ---- */
-  .toolbar-extra{margin-top:-4px}
-  #btn-mais-filtros.tem-filtros{border-color:var(--accent);color:var(--accent)}
+  /* ---- Filtros dos editais: linha no celular, lateral fixa com scroll próprio
+     a partir do tablet (assim os filtros não empurram a lista de editais) ---- */
+  .editais-layout{display:flex;flex-direction:column;gap:14px}
+  .filtros-lateral{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .filtros-lateral .field{margin:0;flex:1 1 auto;min-width:0}
+  .filtros-lateral .field label{display:none}
+  .filtros-lateral select,.filtros-lateral input{width:100%}
+  .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted);
+    flex:1 1 auto;justify-content:center}
+  .filtros-lateral .btn,.filtros-lateral a.btn{flex:1 1 auto;text-align:center}
+  .editais-principal{min-width:0}
+  @media (min-width:681px){
+    .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
+    .filtros-lateral{flex:0 0 230px;flex-direction:column;align-items:stretch;flex-wrap:nowrap;
+      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;
+      position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;
+      scrollbar-width:thin;scrollbar-color:var(--line) var(--panel)}
+    .filtros-lateral::-webkit-scrollbar{width:8px}
+    .filtros-lateral::-webkit-scrollbar-track{background:var(--panel);border-radius:8px}
+    .filtros-lateral::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+    .filtros-lateral::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+    .filtros-lateral .field{margin-bottom:0}
+    .filtros-lateral .field label{display:block}
+    .filtros-lateral .chk{justify-content:flex-start}
+    .editais-principal{flex:1;min-width:0}
+  }
 
   /* ---- Estado vazio ---- */
   .estado-vazio{text-align:center;padding:36px 20px}
@@ -319,48 +342,87 @@
 
   <!-- EDITAIS -->
   <section id="t-editais">
-    <div class="toolbar">
-      <select id="f-nivel" onchange="loadEditais()">
-        <option value="">Todos os níveis</option>
-        <option value="forte">Alta compatibilidade</option>
-        <option value="medio">Média compatibilidade</option>
-        <option value="fraco">Baixa compatibilidade</option>
-      </select>
-      <input id="f-uf" placeholder="UF (ex: PR)" maxlength="2" style="width:90px"
-             oninput="this.value=this.value.toUpperCase()">
-      <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
-      <button class="btn ghost" id="btn-mais-filtros" onclick="toggleFiltrosExtra()">Mais filtros</button>
-      <span style="flex:1"></span>
-      <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+    <div class="editais-layout">
+      <aside class="filtros-lateral" id="filtros-lateral">
+        <div class="field">
+          <label>Nível de compatibilidade</label>
+          <select id="f-nivel" onchange="loadEditais()">
+            <option value="">Todos os níveis</option>
+            <option value="forte">Alta compatibilidade</option>
+            <option value="medio">Média compatibilidade</option>
+            <option value="fraco">Baixa compatibilidade</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Estado (UF)</label>
+          <select id="f-uf" onchange="loadEditais()">
+            <option value="">Todos os estados</option>
+            <option value="AC">AC - Acre</option>
+            <option value="AL">AL - Alagoas</option>
+            <option value="AP">AP - Amapá</option>
+            <option value="AM">AM - Amazonas</option>
+            <option value="BA">BA - Bahia</option>
+            <option value="CE">CE - Ceará</option>
+            <option value="DF">DF - Distrito Federal</option>
+            <option value="ES">ES - Espírito Santo</option>
+            <option value="GO">GO - Goiás</option>
+            <option value="MA">MA - Maranhão</option>
+            <option value="MT">MT - Mato Grosso</option>
+            <option value="MS">MS - Mato Grosso do Sul</option>
+            <option value="MG">MG - Minas Gerais</option>
+            <option value="PA">PA - Pará</option>
+            <option value="PB">PB - Paraíba</option>
+            <option value="PR">PR - Paraná</option>
+            <option value="PE">PE - Pernambuco</option>
+            <option value="PI">PI - Piauí</option>
+            <option value="RJ">RJ - Rio de Janeiro</option>
+            <option value="RN">RN - Rio Grande do Norte</option>
+            <option value="RS">RS - Rio Grande do Sul</option>
+            <option value="RO">RO - Rondônia</option>
+            <option value="RR">RR - Roraima</option>
+            <option value="SC">SC - Santa Catarina</option>
+            <option value="SP">SP - São Paulo</option>
+            <option value="SE">SE - Sergipe</option>
+            <option value="TO">TO - Tocantins</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tipo de contratação</label>
+          <select id="f-tipo" onchange="loadEditais()">
+            <option value="todos">Produtos e serviços</option>
+            <option value="produtos">Só produtos</option>
+            <option value="servicos">Só serviços</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Situação</label>
+          <select id="f-status" onchange="loadEditais()">
+            <option value="">Qualquer situação</option>
+            <option value="novo">Novo</option>
+            <option value="vou_participar">Vou participar</option>
+            <option value="proposta_enviada">Proposta enviada</option>
+            <option value="ganho">Ganho</option>
+            <option value="perdido">Perdido</option>
+            <option value="descartado">Descartado</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Editais por página</label>
+          <select id="f-porpag" onchange="loadEditais()">
+            <option value="10">10 por página</option>
+            <option value="20" selected>20 por página</option>
+            <option value="50">50 por página</option>
+          </select>
+        </div>
+        <label class="chk"><input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos</label>
+        <label class="chk"><input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia</label>
+        <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+        <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+      </aside>
+      <div class="editais-principal">
+        <div id="lista-editais"></div>
+      </div>
     </div>
-    <div class="toolbar toolbar-extra hidden" id="filtros-extra">
-      <select id="f-tipo" onchange="loadEditais()" title="Tipo de contratação">
-        <option value="todos">Produtos e serviços</option>
-        <option value="produtos">Só produtos</option>
-        <option value="servicos">Só serviços</option>
-      </select>
-      <select id="f-status" onchange="loadEditais()">
-        <option value="">Qualquer situação</option>
-        <option value="novo">Novo</option>
-        <option value="vou_participar">Vou participar</option>
-        <option value="proposta_enviada">Proposta enviada</option>
-        <option value="ganho">Ganho</option>
-        <option value="perdido">Perdido</option>
-        <option value="descartado">Descartado</option>
-      </select>
-      <select id="f-porpag" onchange="loadEditais()" title="Editais por página">
-        <option value="10">10 por página</option>
-        <option value="20" selected>20 por página</option>
-        <option value="50">50 por página</option>
-      </select>
-      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
-        <input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos
-      </label>
-      <label style="display:flex;gap:6px;align-items:center;color:var(--muted)">
-        <input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia
-      </label>
-    </div>
-    <div id="lista-editais"></div>
   </section>
 
   <!-- ENCERRADOS (que participei) -->
@@ -580,13 +642,6 @@
       </div>
       <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
       <span id="config-msg" class="muted" style="margin-left:10px"></span>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Manutenção da base</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">O sistema não guarda mais editais de baixa compatibilidade. Se você tem editais antigos assim acumulados, pode limpá-los aqui — ficam só os de alta e média compatibilidade.</p>
-      <button class="btn ghost" onclick="limparFracos()" id="btn-limpar-fracos">Limpar editais de baixa compatibilidade</button>
-      <span id="limpar-msg" class="muted" style="margin-left:10px"></span>
     </div>
   </section>
 
@@ -975,33 +1030,8 @@ function navPaginacao(r, fnPagina, paginaAtual){
 
 let paginaEditais = 1;
 
-// Alterna o bloco de filtros avançados (tipo, situação, por página, checkboxes)
-function toggleFiltrosExtra(){
-  $('#filtros-extra').classList.toggle('hidden');
-  atualizarBadgeFiltros();
-}
-
-// Mantém o botão com um contador de quantos filtros avançados estão ativos
-// (pra dar pra saber sem precisar abrir o bloco) e troca o rótulo pra
-// "Menos filtros" enquanto o bloco estiver aberto.
-function atualizarBadgeFiltros(){
-  const ativos = [
-    $('#f-tipo').value!=='todos',
-    !!$('#f-status').value,
-    $('#f-naolidos').checked,
-    $('#f-hoje').checked,
-  ].filter(Boolean).length;
-  const btn=$('#btn-mais-filtros');
-  if(!btn) return;
-  const aberto = !$('#filtros-extra').classList.contains('hidden');
-  const rotulo = aberto ? 'Menos filtros' : 'Mais filtros';
-  btn.textContent = ativos ? `${rotulo} (${ativos})` : rotulo;
-  btn.classList.toggle('tem-filtros', ativos>0);
-}
-
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
-  atualizarBadgeFiltros();
   const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
         st=$('#f-status').value, nl=$('#f-naolidos').checked;
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
@@ -1352,18 +1382,6 @@ async function loadConfig(){
   }
   else txt = c.IA_ATIVA==='1' ? 'IA ligada' : 'IA disponível (desligada)';
   $('#ia-status').textContent = txt;
-}
-
-async function limparFracos(){
-  if(!confirm('Remover os editais de baixa compatibilidade acumulados? Os de alta e média compatibilidade são mantidos.')) return;
-  const btn=$('#btn-limpar-fracos'), msg=$('#limpar-msg');
-  btn.disabled=true; msg.textContent='Limpando…'; msg.style.color='var(--medio)';
-  try{
-    const r=await api('/api/matches/limpar-fracos',{method:'POST'});
-    msg.textContent = `✓ ${r.removidos||0} removido(s)`; msg.style.color='var(--muted)';
-    loadResumo(); loadEditais();
-  }catch(e){ msg.textContent='Erro ao limpar.'; msg.style.color='#f87171'; }
-  btn.disabled=false;
 }
 
 async function salvarConfig(){
