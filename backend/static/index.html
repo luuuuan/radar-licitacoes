@@ -115,6 +115,10 @@
   .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
   .ajuda .bolha::after{content:"";position:absolute;top:100%;left:calc(50% - var(--ajuda-shift,0px));
     transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--line)}
+  /* variante que abre pra baixo, usada quando abrir pra cima ficaria cortado pelo
+     scroll da lateral de filtros (ver toggleAjuda) */
+  .ajuda.abre-baixo .bolha{bottom:auto;top:140%}
+  .ajuda.abre-baixo .bolha::after{top:auto;bottom:100%;border-top-color:transparent;border-bottom-color:var(--line)}
   /* Toast (avisos) */
   #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
     z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
@@ -371,33 +375,33 @@
         <div class="field field-visible full-row">
           <label>Estado (UF)</label>
           <div class="uf-checks" id="f-uf-checks">
-            <label><input type="checkbox" value="AC" onchange="loadEditais()"> AC - Acre</label>
-            <label><input type="checkbox" value="AL" onchange="loadEditais()"> AL - Alagoas</label>
-            <label><input type="checkbox" value="AP" onchange="loadEditais()"> AP - Amapá</label>
-            <label><input type="checkbox" value="AM" onchange="loadEditais()"> AM - Amazonas</label>
-            <label><input type="checkbox" value="BA" onchange="loadEditais()"> BA - Bahia</label>
-            <label><input type="checkbox" value="CE" onchange="loadEditais()"> CE - Ceará</label>
-            <label><input type="checkbox" value="DF" onchange="loadEditais()"> DF - Distrito Federal</label>
-            <label><input type="checkbox" value="ES" onchange="loadEditais()"> ES - Espírito Santo</label>
-            <label><input type="checkbox" value="GO" onchange="loadEditais()"> GO - Goiás</label>
-            <label><input type="checkbox" value="MA" onchange="loadEditais()"> MA - Maranhão</label>
-            <label><input type="checkbox" value="MT" onchange="loadEditais()"> MT - Mato Grosso</label>
-            <label><input type="checkbox" value="MS" onchange="loadEditais()"> MS - Mato Grosso do Sul</label>
-            <label><input type="checkbox" value="MG" onchange="loadEditais()"> MG - Minas Gerais</label>
-            <label><input type="checkbox" value="PA" onchange="loadEditais()"> PA - Pará</label>
-            <label><input type="checkbox" value="PB" onchange="loadEditais()"> PB - Paraíba</label>
-            <label><input type="checkbox" value="PR" onchange="loadEditais()"> PR - Paraná</label>
-            <label><input type="checkbox" value="PE" onchange="loadEditais()"> PE - Pernambuco</label>
-            <label><input type="checkbox" value="PI" onchange="loadEditais()"> PI - Piauí</label>
-            <label><input type="checkbox" value="RJ" onchange="loadEditais()"> RJ - Rio de Janeiro</label>
-            <label><input type="checkbox" value="RN" onchange="loadEditais()"> RN - Rio Grande do Norte</label>
-            <label><input type="checkbox" value="RS" onchange="loadEditais()"> RS - Rio Grande do Sul</label>
-            <label><input type="checkbox" value="RO" onchange="loadEditais()"> RO - Rondônia</label>
-            <label><input type="checkbox" value="RR" onchange="loadEditais()"> RR - Roraima</label>
-            <label><input type="checkbox" value="SC" onchange="loadEditais()"> SC - Santa Catarina</label>
-            <label><input type="checkbox" value="SP" onchange="loadEditais()"> SP - São Paulo</label>
-            <label><input type="checkbox" value="SE" onchange="loadEditais()"> SE - Sergipe</label>
-            <label><input type="checkbox" value="TO" onchange="loadEditais()"> TO - Tocantins</label>
+            <label><input type="checkbox" value="AC" onchange="loadEditais()"> Acre</label>
+            <label><input type="checkbox" value="AL" onchange="loadEditais()"> Alagoas</label>
+            <label><input type="checkbox" value="AP" onchange="loadEditais()"> Amapá</label>
+            <label><input type="checkbox" value="AM" onchange="loadEditais()"> Amazonas</label>
+            <label><input type="checkbox" value="BA" onchange="loadEditais()"> Bahia</label>
+            <label><input type="checkbox" value="CE" onchange="loadEditais()"> Ceará</label>
+            <label><input type="checkbox" value="DF" onchange="loadEditais()"> Distrito Federal</label>
+            <label><input type="checkbox" value="ES" onchange="loadEditais()"> Espírito Santo</label>
+            <label><input type="checkbox" value="GO" onchange="loadEditais()"> Goiás</label>
+            <label><input type="checkbox" value="MA" onchange="loadEditais()"> Maranhão</label>
+            <label><input type="checkbox" value="MT" onchange="loadEditais()"> Mato Grosso</label>
+            <label><input type="checkbox" value="MS" onchange="loadEditais()"> Mato Grosso do Sul</label>
+            <label><input type="checkbox" value="MG" onchange="loadEditais()"> Minas Gerais</label>
+            <label><input type="checkbox" value="PA" onchange="loadEditais()"> Pará</label>
+            <label><input type="checkbox" value="PB" onchange="loadEditais()"> Paraíba</label>
+            <label><input type="checkbox" value="PR" onchange="loadEditais()"> Paraná</label>
+            <label><input type="checkbox" value="PE" onchange="loadEditais()"> Pernambuco</label>
+            <label><input type="checkbox" value="PI" onchange="loadEditais()"> Piauí</label>
+            <label><input type="checkbox" value="RJ" onchange="loadEditais()"> Rio de Janeiro</label>
+            <label><input type="checkbox" value="RN" onchange="loadEditais()"> Rio Grande do Norte</label>
+            <label><input type="checkbox" value="RS" onchange="loadEditais()"> Rio Grande do Sul</label>
+            <label><input type="checkbox" value="RO" onchange="loadEditais()"> Rondônia</label>
+            <label><input type="checkbox" value="RR" onchange="loadEditais()"> Roraima</label>
+            <label><input type="checkbox" value="SC" onchange="loadEditais()"> Santa Catarina</label>
+            <label><input type="checkbox" value="SP" onchange="loadEditais()"> São Paulo</label>
+            <label><input type="checkbox" value="SE" onchange="loadEditais()"> Sergipe</label>
+            <label><input type="checkbox" value="TO" onchange="loadEditais()"> Tocantins</label>
           </div>
         </div>
         <div class="field">
@@ -435,9 +439,7 @@
 
         <div class="monitoramento-bloco full-row">
           <h4>Configurações de monitoramento</h4>
-          <p class="muted" style="font-size:11px;margin:0">Defina o que o radar monitora. Vazio em UFs = todas.</p>
-          <div class="field"><label>UFs monitoradas (siglas separadas por vírgula)</label>
-            <input id="c-ufs" placeholder="ex: PR,SP  (vazio = todas)"></div>
+          <p class="muted" style="font-size:11px;margin:0">Defina o que o radar monitora.</p>
           <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
             <input id="c-modalidades" placeholder="ex: 6,8,9,4">
             <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
@@ -830,7 +832,7 @@ function ajuda(texto){
 // e, ao abrir, desloca o balão pra dentro da tela quando ele estouraria a borda
 // lateral (comum em telas de celular perto das quinas).
 function _fecharAjuda(a){
-  a.classList.remove('aberto');
+  a.classList.remove('aberto', 'abre-baixo');
   a.style.removeProperty('--ajuda-shift');
 }
 function toggleAjuda(el, ev){
@@ -842,6 +844,12 @@ function toggleAjuda(el, ev){
   requestAnimationFrame(()=>{
     const bolha = el.querySelector('.bolha');
     if(!bolha) return;
+    // se abrir pra cima estourar o topo da lateral de filtros (que tem scroll
+    // próprio), o balão fica "atrás" do corte do overflow — abre pra baixo nesse caso
+    const scrollAncestor = el.closest('.filtros-lateral');
+    if(scrollAncestor && bolha.getBoundingClientRect().top < scrollAncestor.getBoundingClientRect().top + 8){
+      el.classList.add('abre-baixo');
+    }
     const r = bolha.getBoundingClientRect();
     const margem = 8;
     let shift = 0;
@@ -1379,7 +1387,6 @@ async function loadPrecos(){
 
 async function loadConfig(){
   const c=await api('/api/config');
-  $('#c-ufs').value=c.PNCP_UFS||'';
   $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
   $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
   const disp = c.IA_DISPONIVEL==='1';
@@ -1398,7 +1405,6 @@ async function loadConfig(){
 
 async function salvarConfig(){
   const body={
-    PNCP_UFS:$('#c-ufs').value.trim(),
     PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
     PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
     IA_ATIVA: $('#c-ia').checked ? '1' : '0',
