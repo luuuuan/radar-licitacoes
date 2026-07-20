@@ -285,10 +285,11 @@
   .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted)}
   .filtros-lateral .chk input{width:auto;flex-shrink:0;margin:0}
   .filtros-lateral .btn,.filtros-lateral a.btn{width:100%;text-align:center}
-  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;
-    border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--panel2)}
+  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr;gap:6px}
   .filtros-lateral .uf-checks label{display:flex;gap:5px;align-items:center;
-    font-size:12px;color:var(--txt);margin:0;cursor:pointer}
+    font-size:12px;color:var(--txt);margin:0;cursor:pointer;
+    border:1px solid var(--line);border-radius:6px;padding:5px 7px;background:var(--panel2)}
+  .filtros-lateral .uf-checks label:has(input:checked){border-color:var(--accent);color:var(--accent)}
   .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
   .editais-principal{min-width:0}
   @media (min-width:681px){
@@ -296,9 +297,10 @@
     .filtros-btn-mobile{display:none}
     .filtros-overlay{display:none !important}
     .filtros-lateral-head{display:none}
-    .filtros-lateral{display:flex;flex:0 0 290px;position:sticky;top:16px;left:auto;
+    .filtros-lateral{display:flex;flex:0 0 400px;position:sticky;top:16px;left:auto;
       height:auto;width:auto;max-width:none;margin:0;z-index:auto;
       border:1px solid var(--line);border-radius:10px;max-height:calc(100vh - 32px)}
+    .filtros-lateral .uf-checks{grid-template-columns:1fr 1fr}
     .editais-principal{flex:1;min-width:0}
   }
 
@@ -443,6 +445,7 @@
         <label class="chk"><input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos</label>
         <label class="chk"><input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia</label>
         <button class="btn ghost" onclick="loadEditais();fecharFiltrosMobile()">Filtrar</button>
+        <button class="btn ghost" onclick="limparFiltros()">Limpar filtros</button>
         <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
       </aside>
       <div class="editais-principal">
@@ -1070,6 +1073,19 @@ function navPaginacao(r, fnPagina, paginaAtual){
 }
 
 let paginaEditais = 1;
+
+// Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
+function limparFiltros(){
+  $('#f-nivel').value = '';
+  document.querySelectorAll('#f-uf-checks input:checked').forEach(c=>c.checked=false);
+  $('#f-tipo').value = 'todos';
+  $('#f-status').value = '';
+  $('#f-porpag').value = '20';
+  $('#f-naolidos').checked = false;
+  $('#f-hoje').checked = false;
+  loadEditais();
+  fecharFiltrosMobile();
+}
 
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
