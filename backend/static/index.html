@@ -259,46 +259,46 @@
     .nav-grupo:first-of-type::before{display:none}
   }
 
-  /* ---- Filtros dos editais: linha no celular, lateral fixa com scroll próprio
-     a partir do tablet (assim os filtros não empurram a lista de editais) ---- */
-  .editais-layout{display:flex;flex-direction:column;gap:14px}
-  .filtros-lateral{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .filtros-lateral .field{margin:0;flex:1 1 auto;min-width:0}
-  .filtros-lateral .field label{display:none}
+  /* ---- Filtros dos editais: no celular ficam escondidos atrás de um botão
+     "Filtros" e abrem num painel em tela cheia (mesmo padrão do menu lateral);
+     a partir do tablet viram uma lateral fixa e sempre visível, com scroll próprio
+     (assim os filtros não empurram a lista de editais). ---- */
+  .editais-layout{display:flex;flex-direction:column;gap:14px;position:relative}
+  .filtros-btn-mobile{display:inline-flex;align-items:center;gap:6px;margin-bottom:2px}
+  .filtros-overlay{display:none}
+  .filtros-overlay.aberto{display:block;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:5500}
+  .filtros-lateral-head{display:flex;justify-content:space-between;align-items:center;
+    font-weight:600;font-size:15px;margin-bottom:4px;color:var(--txt)}
+  .filtros-lateral-head .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;font-size:20px}
+  .filtros-lateral{display:none;flex-direction:column;gap:14px;
+    position:fixed;top:0;left:0;height:100%;width:85%;max-width:320px;margin:0;
+    background:var(--panel);border-right:1px solid var(--line);padding:16px;
+    z-index:6000;overflow-y:auto;overflow-x:hidden;
+    scrollbar-width:thin;scrollbar-color:var(--line) var(--panel)}
+  .filtros-lateral.aberto{display:flex}
+  .filtros-lateral::-webkit-scrollbar{width:8px}
+  .filtros-lateral::-webkit-scrollbar-track{background:var(--panel);border-radius:8px}
+  .filtros-lateral::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+  .filtros-lateral::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+  .filtros-lateral .field{margin:0}
   .filtros-lateral select,.filtros-lateral input{width:100%}
-  .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted);
-    flex:1 1 auto;justify-content:center}
+  .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted)}
   .filtros-lateral .chk input{width:auto;flex-shrink:0;margin:0}
-  .filtros-lateral .btn,.filtros-lateral a.btn{flex:1 1 auto;text-align:center}
-  .editais-principal{min-width:0}
-  /* campos que precisam do rótulo sempre visível (não são autoexplicativos como um
-     select) e que devem ocupar a linha inteira sozinhos mesmo no layout em linha do celular */
-  .filtros-lateral .full-row{flex:1 1 100%}
-  .filtros-lateral .field.field-visible > label{display:block}
+  .filtros-lateral .btn,.filtros-lateral a.btn{width:100%;text-align:center}
   .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;
     border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--panel2)}
-  .filtros-lateral .field .uf-checks label{display:flex;gap:5px;align-items:center;
+  .filtros-lateral .uf-checks label{display:flex;gap:5px;align-items:center;
     font-size:12px;color:var(--txt);margin:0;cursor:pointer}
   .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
-  /* bloco de configurações de monitoramento migrado da antiga aba Configurações */
-  .filtros-lateral .monitoramento-bloco{display:flex;flex-direction:column;gap:10px;
-    border-top:1px solid var(--line);margin-top:4px;padding-top:12px}
-  .filtros-lateral .monitoramento-bloco h4{margin:0;font-size:13px;color:var(--txt)}
-  .filtros-lateral .monitoramento-bloco .field label{display:block}
+  .editais-principal{min-width:0}
   @media (min-width:681px){
     .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
-    .filtros-lateral{flex:0 0 290px;flex-direction:column;align-items:stretch;flex-wrap:nowrap;
-      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;
-      position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;
-      scrollbar-width:thin;scrollbar-color:var(--line) var(--panel)}
-    .filtros-lateral::-webkit-scrollbar{width:8px}
-    .filtros-lateral::-webkit-scrollbar-track{background:var(--panel);border-radius:8px}
-    .filtros-lateral::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
-    .filtros-lateral::-webkit-scrollbar-thumb:hover{background:var(--muted)}
-    .filtros-lateral .field{margin-bottom:0}
-    .filtros-lateral .field label{display:block}
-    .filtros-lateral .chk{justify-content:flex-start}
-    .filtros-lateral .full-row{flex:none}
+    .filtros-btn-mobile{display:none}
+    .filtros-overlay{display:none !important}
+    .filtros-lateral-head{display:none}
+    .filtros-lateral{display:flex;flex:0 0 290px;position:sticky;top:16px;left:auto;
+      height:auto;width:auto;max-width:none;margin:0;z-index:auto;
+      border:1px solid var(--line);border-radius:10px;max-height:calc(100vh - 32px)}
     .editais-principal{flex:1;min-width:0}
   }
 
@@ -351,6 +351,7 @@
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <span class="nav-grupo" aria-hidden="true">Conta</span>
+    <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
     <div class="nav-footer">
@@ -361,8 +362,15 @@
 
   <!-- EDITAIS -->
   <section id="t-editais">
+    <button class="btn ghost filtros-btn-mobile" onclick="toggleFiltrosMobile()">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4z"/></svg> Filtros
+    </button>
     <div class="editais-layout">
+      <div class="filtros-overlay" id="filtros-overlay" onclick="toggleFiltrosMobile()"></div>
       <aside class="filtros-lateral" id="filtros-lateral">
+        <div class="filtros-lateral-head">Filtros
+          <button class="nav-close" onclick="toggleFiltrosMobile()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
         <div class="field">
           <label>Nível de compatibilidade</label>
           <select id="f-nivel" onchange="loadEditais()">
@@ -372,7 +380,7 @@
             <option value="fraco">Baixa compatibilidade</option>
           </select>
         </div>
-        <div class="field field-visible full-row">
+        <div class="field">
           <label>Estado (UF)</label>
           <div class="uf-checks" id="f-uf-checks">
             <label><input type="checkbox" value="AC" onchange="loadEditais()"> Acre</label>
@@ -434,20 +442,8 @@
         </div>
         <label class="chk"><input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos</label>
         <label class="chk"><input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia</label>
-        <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
+        <button class="btn ghost" onclick="loadEditais();fecharFiltrosMobile()">Filtrar</button>
         <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
-
-        <div class="monitoramento-bloco full-row">
-          <h4>Configurações de monitoramento</h4>
-          <p class="muted" style="font-size:11px;margin:0">Defina o que o radar monitora.</p>
-          <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
-            <input id="c-modalidades" placeholder="ex: 6,8,9,4">
-            <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
-          <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
-            <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
-          <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
-          <span id="config-msg" class="muted" style="display:block;margin-top:6px;font-size:12px"></span>
-        </div>
       </aside>
       <div class="editais-principal">
         <div id="lista-editais"></div>
@@ -649,6 +645,21 @@
     </div>
     <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th></tr></thead>
       <tbody id="lista-precos"></tbody></table>
+  </section>
+
+  <!-- CONFIGURAÇÕES -->
+  <section id="t-config" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Configurações de monitoramento</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora.</p>
+      <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
+        <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
+        <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
+      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
+        <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+      <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
+      <span id="config-msg" class="muted" style="margin-left:10px"></span>
+    </div>
   </section>
 
   <!-- PERFIL -->
@@ -863,11 +874,12 @@ document.addEventListener('click', e=>{
   if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
 });
 
-// Trava o scroll do fundo enquanto algum modal estiver aberto (estático via
-// classe "hidden" ou dinâmico via innerHTML do #modal-mount) — evita a tela
-// de trás rolar junto quando o usuário arrasta dentro do popup.
+// Trava o scroll do fundo sempre que a tela principal fica "atrás" de alguma
+// camada sobreposta — modal (estático via classe "hidden" ou dinâmico via
+// innerHTML do #modal-mount), menu lateral ou painel de filtros no celular —
+// pra tela de trás não rolar junto quando o usuário arrasta dentro do popup.
 function _atualizarScrollModal(){
-  const aberto = !!document.querySelector('.modal:not(.hidden)');
+  const aberto = !!document.querySelector('.modal:not(.hidden), #nav.open, #filtros-lateral.aberto');
   document.body.classList.toggle('modal-aberto', aberto);
 }
 new MutationObserver(_atualizarScrollModal)
@@ -916,9 +928,19 @@ function toggleMenu(){
   $('#nav-overlay').classList.toggle('open', open);
 }
 
+// painel de filtros no celular: abre/fecha como o menu lateral (mesmo padrão)
+function toggleFiltrosMobile(){
+  const open = $('#filtros-lateral').classList.toggle('aberto');
+  $('#filtros-overlay').classList.toggle('aberto', open);
+}
+function fecharFiltrosMobile(){
+  $('#filtros-lateral').classList.remove('aberto');
+  $('#filtros-overlay').classList.remove('aberto');
+}
+
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
@@ -928,6 +950,7 @@ function tab(name){
   if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
   if(name==='documentos') loadDocumentos();
+  if(name==='config') loadConfig();
   if(name==='perfil') loadPerfil();
   if(name==='logs') loadLogs();
 }
