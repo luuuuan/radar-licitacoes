@@ -76,6 +76,50 @@ def test_numero_solto_e_unidade_nao_contam_como_termo_em_comum():
     assert r.itens_compativeis == 0
 
 
+def test_anti_coincidencia_atua_mesmo_com_score_alto():
+    """Regressão do bug real: "Pasta L" (pasta de arquivo de escritório) é um
+    produto com descrição curta e genérica o suficiente pra o TF-IDF dar score
+    ~1.0 contra um item de edital de material odontológico só por compartilhar
+    a palavra "pasta" — mesmo sem nenhuma outra palavra distintiva em comum.
+    Antes da correção, a proteção anti-coincidência só rodava com melhor < 0.9
+    e esse caso escapava, virando "forte" indevidamente."""
+    eng = MatchingEngine([ProdutoCat(id=1, descricao="Pasta L")])
+    r = eng.avaliar("Material odontológico", [ItemEdt(
+        1, "CIMENTO de hidroxido de calcio, sem eugenol, pasta/pasta")])
+    assert r.itens_compativeis == 0
+    assert r.nivel == "fraco"
+
+
+def test_papel_nao_bate_com_fragmentadora_de_papel():
+    """Já funcionava antes da correção — garante que não regrediu."""
+    eng = MatchingEngine([ProdutoCat(id=1, descricao="Papel Sulfite A4 75g")])
+    r = eng.avaliar("Equipamentos de escritório",
+                     [ItemEdt(1, "Fragmentadora de papel 12 folhas")])
+    assert r.itens_compativeis == 0
+
+
+def test_papel_sulfite_bate_com_varias_palavras_em_comum():
+    """Vários termos distintivos em comum (papel, sulfite, a4, branco, resma)
+    — a correção não pode derrubar um match legítimo como esse."""
+    eng = MatchingEngine([ProdutoCat(id=1, descricao="Papel Sulfite A4 75g branco resma")])
+    r = eng.avaliar("Material de expediente",
+                     [ItemEdt(1, "Resma de papel sulfite A4 branco 75 gramas")])
+    assert r.itens_compativeis == 1
+    assert r.nivel == "forte"
+
+
+def test_codigo_catmat_exato_nao_e_afetado_pela_anti_coincidencia():
+    """Match por código exato retorna 1.0 antes de chegar na checagem de
+    palavras em comum (return antecipado na etapa 1) — não pode ser rebaixado
+    mesmo que as descrições não compartilhem nenhuma palavra distintiva."""
+    eng = MatchingEngine([ProdutoCat(id=1, descricao="Pasta L", catmat="150123")])
+    r = eng.avaliar("Material odontológico",
+                     [ItemEdt(1, "CIMENTO de hidroxido de calcio", catalogo_codigo="150123")])
+    assert r.nivel == "forte"
+    assert r.detalhe[0]["score_item"] == 1.0
+    assert r.detalhe[0]["motivo"].startswith("código CATMAT")
+
+
 def test_regra_exclusao_por_termo():
     ignora = aplicar_regras_exclusao(
         "Contratação de empresa de engenharia para reforma", [],

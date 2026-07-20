@@ -177,7 +177,11 @@ class MatchingEngine:
         # Anti-coincidência: se o casamento se apoia em UMA única palavra
         # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora
         # de papel"), rebaixa abaixo do limiar para não virar item compatível.
-        if melhor_prod is not None and melhor < 0.9:
+        # Roda sempre que há um candidato — inclusive com score alto: um score
+        # alto sustentado por uma única palavra em comum é o retrato do falso
+        # positivo (ex.: TF-IDF de "Pasta L" vs. item odontológico de "pasta"
+        # batendo 1.0 só por causa da palavra "pasta"), não um sinal de confiança.
+        if melhor_prod is not None:
             toks_item = {t for t in texto_item.split() if self._distintivo(t)}
             toks_prod = {t for t in melhor_prod.texto_busca().split() if self._distintivo(t)}
             comuns = toks_item & toks_prod
