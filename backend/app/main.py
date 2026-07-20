@@ -891,7 +891,7 @@ def _inicio_hoje_utc() -> datetime:
 @app.get("/api/editais")
 def listar_editais(
     nivel: str | None = Query(None),
-    uf: str | None = Query(None),
+    uf: list[str] | None = Query(None),
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
@@ -908,7 +908,7 @@ def listar_editais(
     if nivel:
         filtro.append(Match.nivel == nivel)
     if uf:
-        filtro.append(Edital.uf == uf.upper())
+        filtro.append(Edital.uf.in_([u.upper() for u in uf]))
     if status:
         filtro.append(Match.status == status)
     if apenas_nao_lidos:

@@ -266,6 +266,20 @@
     flex:1 1 auto;justify-content:center}
   .filtros-lateral .btn,.filtros-lateral a.btn{flex:1 1 auto;text-align:center}
   .editais-principal{min-width:0}
+  /* campos que precisam do rótulo sempre visível (não são autoexplicativos como um
+     select) e que devem ocupar a linha inteira sozinhos mesmo no layout em linha do celular */
+  .filtros-lateral .full-row{flex:1 1 100%}
+  .filtros-lateral .field.field-visible > label{display:block}
+  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;
+    border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--panel2)}
+  .filtros-lateral .field .uf-checks label{display:flex;gap:5px;align-items:center;
+    font-size:12px;color:var(--txt);margin:0;cursor:pointer}
+  .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
+  /* bloco de configurações de monitoramento migrado da antiga aba Configurações */
+  .filtros-lateral .monitoramento-bloco{display:flex;flex-direction:column;gap:10px;
+    border-top:1px solid var(--line);margin-top:4px;padding-top:12px}
+  .filtros-lateral .monitoramento-bloco h4{margin:0;font-size:13px;color:var(--txt)}
+  .filtros-lateral .monitoramento-bloco .field label{display:block}
   @media (min-width:681px){
     .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
     .filtros-lateral{flex:0 0 230px;flex-direction:column;align-items:stretch;flex-wrap:nowrap;
@@ -279,6 +293,7 @@
     .filtros-lateral .field{margin-bottom:0}
     .filtros-lateral .field label{display:block}
     .filtros-lateral .chk{justify-content:flex-start}
+    .filtros-lateral .full-row{flex:none}
     .editais-principal{flex:1;min-width:0}
   }
 
@@ -331,7 +346,6 @@
     <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
     <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
     <span class="nav-grupo" aria-hidden="true">Conta</span>
-    <button data-tab="config" onclick="tab('config')">Configurações</button>
     <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
     <button data-tab="logs" onclick="tab('logs')">Histórico</button>
     <div class="nav-footer">
@@ -353,38 +367,37 @@
             <option value="fraco">Baixa compatibilidade</option>
           </select>
         </div>
-        <div class="field">
+        <div class="field field-visible full-row">
           <label>Estado (UF)</label>
-          <select id="f-uf" onchange="loadEditais()">
-            <option value="">Todos os estados</option>
-            <option value="AC">AC - Acre</option>
-            <option value="AL">AL - Alagoas</option>
-            <option value="AP">AP - Amapá</option>
-            <option value="AM">AM - Amazonas</option>
-            <option value="BA">BA - Bahia</option>
-            <option value="CE">CE - Ceará</option>
-            <option value="DF">DF - Distrito Federal</option>
-            <option value="ES">ES - Espírito Santo</option>
-            <option value="GO">GO - Goiás</option>
-            <option value="MA">MA - Maranhão</option>
-            <option value="MT">MT - Mato Grosso</option>
-            <option value="MS">MS - Mato Grosso do Sul</option>
-            <option value="MG">MG - Minas Gerais</option>
-            <option value="PA">PA - Pará</option>
-            <option value="PB">PB - Paraíba</option>
-            <option value="PR">PR - Paraná</option>
-            <option value="PE">PE - Pernambuco</option>
-            <option value="PI">PI - Piauí</option>
-            <option value="RJ">RJ - Rio de Janeiro</option>
-            <option value="RN">RN - Rio Grande do Norte</option>
-            <option value="RS">RS - Rio Grande do Sul</option>
-            <option value="RO">RO - Rondônia</option>
-            <option value="RR">RR - Roraima</option>
-            <option value="SC">SC - Santa Catarina</option>
-            <option value="SP">SP - São Paulo</option>
-            <option value="SE">SE - Sergipe</option>
-            <option value="TO">TO - Tocantins</option>
-          </select>
+          <div class="uf-checks" id="f-uf-checks">
+            <label><input type="checkbox" value="AC" onchange="loadEditais()"> AC - Acre</label>
+            <label><input type="checkbox" value="AL" onchange="loadEditais()"> AL - Alagoas</label>
+            <label><input type="checkbox" value="AP" onchange="loadEditais()"> AP - Amapá</label>
+            <label><input type="checkbox" value="AM" onchange="loadEditais()"> AM - Amazonas</label>
+            <label><input type="checkbox" value="BA" onchange="loadEditais()"> BA - Bahia</label>
+            <label><input type="checkbox" value="CE" onchange="loadEditais()"> CE - Ceará</label>
+            <label><input type="checkbox" value="DF" onchange="loadEditais()"> DF - Distrito Federal</label>
+            <label><input type="checkbox" value="ES" onchange="loadEditais()"> ES - Espírito Santo</label>
+            <label><input type="checkbox" value="GO" onchange="loadEditais()"> GO - Goiás</label>
+            <label><input type="checkbox" value="MA" onchange="loadEditais()"> MA - Maranhão</label>
+            <label><input type="checkbox" value="MT" onchange="loadEditais()"> MT - Mato Grosso</label>
+            <label><input type="checkbox" value="MS" onchange="loadEditais()"> MS - Mato Grosso do Sul</label>
+            <label><input type="checkbox" value="MG" onchange="loadEditais()"> MG - Minas Gerais</label>
+            <label><input type="checkbox" value="PA" onchange="loadEditais()"> PA - Pará</label>
+            <label><input type="checkbox" value="PB" onchange="loadEditais()"> PB - Paraíba</label>
+            <label><input type="checkbox" value="PR" onchange="loadEditais()"> PR - Paraná</label>
+            <label><input type="checkbox" value="PE" onchange="loadEditais()"> PE - Pernambuco</label>
+            <label><input type="checkbox" value="PI" onchange="loadEditais()"> PI - Piauí</label>
+            <label><input type="checkbox" value="RJ" onchange="loadEditais()"> RJ - Rio de Janeiro</label>
+            <label><input type="checkbox" value="RN" onchange="loadEditais()"> RN - Rio Grande do Norte</label>
+            <label><input type="checkbox" value="RS" onchange="loadEditais()"> RS - Rio Grande do Sul</label>
+            <label><input type="checkbox" value="RO" onchange="loadEditais()"> RO - Rondônia</label>
+            <label><input type="checkbox" value="RR" onchange="loadEditais()"> RR - Roraima</label>
+            <label><input type="checkbox" value="SC" onchange="loadEditais()"> SC - Santa Catarina</label>
+            <label><input type="checkbox" value="SP" onchange="loadEditais()"> SP - São Paulo</label>
+            <label><input type="checkbox" value="SE" onchange="loadEditais()"> SE - Sergipe</label>
+            <label><input type="checkbox" value="TO" onchange="loadEditais()"> TO - Tocantins</label>
+          </div>
         </div>
         <div class="field">
           <label>Tipo de contratação</label>
@@ -418,6 +431,20 @@
         <label class="chk"><input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia</label>
         <button class="btn ghost" onclick="loadEditais()">Filtrar</button>
         <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+
+        <div class="monitoramento-bloco full-row">
+          <h4>Configurações de monitoramento</h4>
+          <p class="muted" style="font-size:11px;margin:0">Defina o que o radar monitora. Vazio em UFs = todas.</p>
+          <div class="field"><label>UFs monitoradas (siglas separadas por vírgula)</label>
+            <input id="c-ufs" placeholder="ex: PR,SP  (vazio = todas)"></div>
+          <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
+            <input id="c-modalidades" placeholder="ex: 6,8,9,4">
+            <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
+          <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
+            <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
+          <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
+          <span id="config-msg" class="muted" style="display:block;margin-top:6px;font-size:12px"></span>
+        </div>
       </aside>
       <div class="editais-principal">
         <div id="lista-editais"></div>
@@ -621,30 +648,6 @@
       <tbody id="lista-precos"></tbody></table>
   </section>
 
-  <!-- CONFIGURAÇÕES -->
-  <section id="t-config" class="hidden">
-    <div class="card">
-      <h3 style="margin-top:0">Configurações de monitoramento</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora. Vazio em UFs = todas.</p>
-      <div class="field"><label>UFs (siglas separadas por vírgula)</label>
-        <input id="c-ufs" style="width:100%" placeholder="ex: PR,SP  (vazio = todas)"></div>
-      <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
-        <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
-        <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
-      <div class="field"><label>Horizonte de busca (dias à frente) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Até quantos dias no futuro buscar editais com proposta ainda aberta. Ex.: 30 = editais que encerram nos próximos 30 dias.</span></span></label>
-        <input id="c-horizonte" type="number" min="1" max="180" style="width:120px"></div>
-      <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
-        <label>Refinamento por IA (semântico)</label>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <label class="switch"><input type="checkbox" id="c-ia"><span class="slider"></span></label>
-          <span id="ia-status" class="muted" style="font-size:12px"></span>
-        </div>
-      </div>
-      <button class="btn" onclick="salvarConfig()" id="btn-salvar-config">Salvar configurações</button>
-      <span id="config-msg" class="muted" style="margin-left:10px"></span>
-    </div>
-  </section>
-
   <!-- PERFIL -->
   <section id="t-perfil" class="hidden">
     <div class="card">
@@ -686,6 +689,13 @@
       <p class="muted" style="font-size:11px;margin-bottom:0">
         Dica: ao criar, restrinja a chave à "Generative Language API" por segurança.
       </p>
+      <div class="field" style="border-top:1px solid var(--line);padding-top:12px;margin-top:12px;margin-bottom:0">
+        <label>Refinamento por IA (semântico)</label>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <label class="switch"><input type="checkbox" id="c-ia" onchange="salvarConfig()"><span class="slider"></span></label>
+          <span id="ia-status" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -899,7 +909,7 @@ function toggleMenu(){
 
 function tab(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
-  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
@@ -909,7 +919,6 @@ function tab(name){
   if(name==='precos') loadPrecos();
   if(name==='regras') loadRegras();
   if(name==='documentos') loadDocumentos();
-  if(name==='config') loadConfig();
   if(name==='perfil') loadPerfil();
   if(name==='logs') loadLogs();
 }
@@ -1032,11 +1041,13 @@ let paginaEditais = 1;
 
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
-  const nivel=$('#f-nivel').value, uf=$('#f-uf').value,
+  const nivel=$('#f-nivel').value,
+        ufs=[...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
         st=$('#f-status').value, nl=$('#f-naolidos').checked;
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
   const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
-  if(nivel)qs.set('nivel',nivel); if(uf)qs.set('uf',uf);
+  if(nivel)qs.set('nivel',nivel);
+  ufs.forEach(u=>qs.append('uf',u));
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
@@ -1927,6 +1938,7 @@ async function salvarPerfil(){
   toast('Perfil salvo com sucesso.', 'ok', 3000);
   setTimeout(()=>{ $('#perfil-msg').textContent=''; }, 3000);
   loadPerfil();
+  loadConfig();
 }
 
 // ---- Portão de sessão: exige login para usar o dashboard ----
@@ -1949,7 +1961,7 @@ async function sair(){
 (async function(){
   const ok = await exigirLogin();
   if(!ok) return;   // já redirecionou para /login
-  Promise.all([loadResumo(), loadEditais(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
+  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
