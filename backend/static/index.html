@@ -466,7 +466,7 @@
       <h3 style="margin-top:0">Importar produtos por planilha (Excel)</h3>
       <p class="muted" style="font-size:12px;margin-top:0">Baixe o modelo, preencha (só a coluna <b>descricao</b> é obrigatória) e envie. Produtos com descrição já existente são atualizados; os novos são adicionados.</p>
       <div class="toolbar">
-        <button class="btn ghost" onclick="window.open('/api/produtos/modelo.xlsx','_blank')">${''}Baixar modelo .xlsx</button>
+        <button class="btn ghost" onclick="window.open('/api/produtos/modelo.xlsx','_blank')">Baixar modelo .xlsx</button>
         <label class="btn" style="cursor:pointer">Escolher planilha e importar
           <input type="file" id="imp-arquivo" accept=".xlsx" style="display:none" onchange="importarPlanilha(this)">
         </label>
