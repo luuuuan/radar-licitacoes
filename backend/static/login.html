@@ -73,6 +73,10 @@
   .voltar{display:inline-block;margin-top:14px;font-size:12px;color:var(--muted);
     text-decoration:none;background:none;border:none;cursor:pointer;padding:0}
   .voltar:hover{color:var(--txt)}
+  /* mensagem de campo obrigatório/inválido: abaixo do campo, no lugar do
+     balão nativo do navegador (que aparece solto, sem seguir o tema) */
+  input.campo-invalido{border-color:var(--destructive)}
+  .erro-campo{color:var(--destructive);font-size:11px;margin-top:4px}
 </style>
 <script>
   // aplica o mesmo tema (claro/escuro) escolhido no app principal, antes do
@@ -95,7 +99,7 @@
   </div>
 
   <!-- LOGIN -->
-  <form id="form-login" onsubmit="return entrar(event)">
+  <form id="form-login" novalidate onsubmit="return entrar(event)">
     <label>E-mail</label>
     <input id="l-email" type="email" autocomplete="email" required>
     <label>Senha</label>
@@ -108,7 +112,7 @@
   </form>
 
   <!-- CADASTRO -->
-  <form id="form-cadastro" class="hidden" onsubmit="return cadastrar(event)">
+  <form id="form-cadastro" class="hidden" novalidate onsubmit="return cadastrar(event)">
     <label>Nome ou razão social</label>
     <input id="c-nome" required>
     <label>CPF ou CNPJ <span style="opacity:.6">(opcional)</span></label>
@@ -126,7 +130,7 @@
   </form>
 
   <!-- ESQUECI MINHA SENHA -->
-  <form id="form-esqueci" class="hidden" onsubmit="return pedirRedefinicao(event)">
+  <form id="form-esqueci" class="hidden" novalidate onsubmit="return pedirRedefinicao(event)">
     <p class="sub" style="margin:0 0 4px">Informe seu e-mail. Se ele estiver cadastrado, enviaremos um link para redefinir a senha.</p>
     <label>E-mail</label>
     <input id="e-email" type="email" autocomplete="email" required>
@@ -135,7 +139,7 @@
   </form>
 
   <!-- REDEFINIR SENHA -->
-  <form id="form-redefinir" class="hidden" onsubmit="return redefinirSenha(event)">
+  <form id="form-redefinir" class="hidden" novalidate onsubmit="return redefinirSenha(event)">
     <label>Nova senha</label>
     <div class="campo-senha">
       <input id="r-senha" type="password" autocomplete="new-password" required oninput="medirForcaRedefinir()">
@@ -176,6 +180,38 @@ function mostrar(qual){
 function msg(t, tipo){
   const m=$('#msg'); m.textContent=t||''; m.className='msg'+(t?(' '+(tipo||'erro')):'');
 }
+// mensagem de campo obrigatório/inválido abaixo do próprio input, em vez do
+// balão nativo do navegador (novalidate nos <form> desliga só o balão — a
+// checkValidity() nativa continua funcionando e é reaproveitada aqui)
+function limparErroCampo(input){
+  const alvo = input.closest('.campo-senha') || input;
+  const prox = alvo.nextElementSibling;
+  if(prox && prox.classList.contains('erro-campo')) prox.remove();
+  input.classList.remove('campo-invalido');
+}
+function marcarErroCampo(input, texto){
+  limparErroCampo(input);
+  input.classList.add('campo-invalido');
+  const div = document.createElement('div');
+  div.className = 'erro-campo';
+  div.textContent = texto;
+  (input.closest('.campo-senha') || input).insertAdjacentElement('afterend', div);
+  input.addEventListener('input', function limpar(){ limparErroCampo(input); }, {once:true});
+}
+function validarCampos(form){
+  let primeiroInvalido=null;
+  form.querySelectorAll('input').forEach(input=>{
+    limparErroCampo(input);
+    if(!input.checkValidity()){
+      const texto = (input.validity.typeMismatch && input.type==='email')
+        ? 'Digite um e-mail válido.' : 'Preencha este campo.';
+      marcarErroCampo(input, texto);
+      if(!primeiroInvalido) primeiroInvalido=input;
+    }
+  });
+  if(primeiroInvalido) primeiroInvalido.focus();
+  return !primeiroInvalido;
+}
 function medirForcaEm(valor, barraEl, txtEl){
   let n=0;
   if(valor.length>=8)n++; if(/[A-Za-z]/.test(valor))n++; if(/\d/.test(valor))n++; if(/[^A-Za-z0-9]/.test(valor))n++;
@@ -208,6 +244,7 @@ async function post(url, body){
 }
 async function entrar(e){
   e.preventDefault(); msg('');
+  if(!validarCampos(e.target)) return false;
   const btn=$('#l-submit'); btn.disabled=true;
   const r=await post('/api/auth/login',{email:$('#l-email').value, senha:$('#l-senha').value});
   btn.disabled=false;
@@ -217,9 +254,12 @@ async function entrar(e){
 }
 async function cadastrar(e){
   e.preventDefault(); msg('');
+  if(!validarCampos(e.target)) return false;
   const email=($('#c-email').value||'').trim();
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
-    msg('Digite um e-mail válido (ex: nome@dominio.com).', 'erro'); return false;
+    marcarErroCampo($('#c-email'), 'Digite um e-mail válido (ex: nome@dominio.com).');
+    $('#c-email').focus();
+    return false;
   }
   const btn=$('#c-submit'); btn.disabled=true;
   const r=await post('/api/auth/cadastro',{
@@ -238,6 +278,7 @@ async function cadastrar(e){
 }
 async function pedirRedefinicao(e){
   e.preventDefault(); msg('');
+  if(!validarCampos(e.target)) return false;
   const email=($('#e-email').value||'').trim();
   const btn=$('#e-submit'); btn.disabled=true;
   const r=await post('/api/auth/esqueci-senha',{email});
@@ -248,8 +289,13 @@ async function pedirRedefinicao(e){
 }
 async function redefinirSenha(e){
   e.preventDefault(); msg('');
+  if(!validarCampos(e.target)) return false;
   const senha=$('#r-senha').value, senha2=$('#r-senha2').value;
-  if(senha!==senha2){ msg('As senhas não são iguais.', 'erro'); return false; }
+  if(senha!==senha2){
+    marcarErroCampo($('#r-senha2'), 'As senhas não são iguais.');
+    $('#r-senha2').focus();
+    return false;
+  }
   const params = new URLSearchParams(location.search);
   const token = params.get('token');
   if(!token){ msg('Link de redefinição inválido ou expirado.'); return false; }
