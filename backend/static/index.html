@@ -1391,7 +1391,8 @@ function atualizarBarraSelecaoProdutos(){
 async function excluirProdutosSelecionados(){
   const ids = Array.from(_produtosSelecionados);
   if(!ids.length) return;
-  if(!confirm(`Excluir ${ids.length} produto(s) selecionado(s)? Essa ação não pode ser desfeita.`)) return;
+  const ok = await confirmarExclusao(`Excluir ${ids.length} produto(s) selecionado(s)? Essa ação não pode ser desfeita.`);
+  if(!ok) return;
   await api('/api/produtos/excluir-varios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
   _produtosSelecionados.clear();
   loadProdutos(); loadResumo();
@@ -1538,7 +1539,8 @@ function editarFornecedor(id){
   $('#btn-salvar-forn').textContent='Salvar alterações';
 }
 async function delFornecedor(id){
-  if(!confirm('Excluir este fornecedor? Os produtos ligados a ele mantêm os dados atuais.')) return;
+  const ok = await confirmarExclusao('Excluir este fornecedor? Os produtos ligados a ele mantêm os dados atuais.');
+  if(!ok) return;
   await fetch('/api/fornecedores/'+id,{method:'DELETE'}); loadFornecedores();
 }
 
@@ -1702,6 +1704,46 @@ async function loadColetaStatus(){
       el.style.color='var(--muted)';
     }
   }catch(e){}
+}
+
+function confirmarExclusao(msg, textoBotao='Excluir'){
+  return new Promise(resolve=>{
+    let modal=document.getElementById('modal-confirmar');
+    if(!modal){
+      modal=document.createElement('div');
+      modal.id='modal-confirmar';
+      modal.className='modal hidden';
+      modal.innerHTML=`<div class="modal-card" style="max-width:420px">
+        <h3 style="margin-top:0">Confirmar exclusão</h3>
+        <p id="confirmar-msg" class="muted" style="font-size:14px;line-height:1.5"></p>
+        <div class="toolbar" style="margin-top:18px;justify-content:flex-end">
+          <button class="btn ghost" id="confirmar-btn-cancelar">Cancelar</button>
+          <button class="btn" id="confirmar-btn-ok" style="background:var(--destructive)">Excluir</button>
+        </div>
+      </div>`;
+      document.body.appendChild(modal);
+    }
+    $('#confirmar-msg').textContent = msg;
+    $('#confirmar-btn-ok').textContent = textoBotao;
+    modal.classList.remove('hidden');
+    const btnOk=$('#confirmar-btn-ok'), btnCancelar=$('#confirmar-btn-cancelar');
+    const fechar = resultado => {
+      modal.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+      btnCancelar.removeEventListener('click', onCancel);
+      modal.removeEventListener('click', onOverlay);
+      document.removeEventListener('keydown', onKey);
+      resolve(resultado);
+    };
+    const onOk = () => fechar(true);
+    const onCancel = () => fechar(false);
+    const onOverlay = e => { if(e.target===modal) fechar(false); };
+    const onKey = e => { if(e.key==='Escape') fechar(false); };
+    btnOk.addEventListener('click', onOk);
+    btnCancelar.addEventListener('click', onCancel);
+    modal.addEventListener('click', onOverlay);
+    document.addEventListener('keydown', onKey);
+  });
 }
 
 function toast(msg, tipo='aviso', ms=4000){
