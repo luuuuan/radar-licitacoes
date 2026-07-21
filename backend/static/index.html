@@ -200,6 +200,12 @@
       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .nav-footer .btn{flex-shrink:0}
     .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px}
+    /* "Meu negócio"/"Conta" viram só um rótulo de seção no celular (o dropdown
+       é irrelevante aqui, os itens já ficam expandidos direto na lista) */
+    .nav-grupo-btn{width:auto;background:transparent;border:none;cursor:default;
+      padding:10px 8px 4px;font-size:10px;font-weight:700;letter-spacing:.06em;
+      text-transform:uppercase;color:var(--muted)}
+    .nav-caret{display:none}
     .ed-top{flex-direction:column;gap:6px}
     .toolbar{gap:8px}
     .toolbar input,.toolbar select{flex:1 1 auto;min-width:0}
@@ -261,15 +267,24 @@
   /* ---- KPIs: indicador de cor sem precisar de ícone ---- */
   .kpi-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:middle}
 
-  /* ---- Nav: cabeçalhos de grupo (só organizam visualmente, não clicáveis) ---- */
-  .nav-grupo{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--muted);padding:10px 8px 4px;user-select:none}
-  nav .nav-grupo:first-of-type{padding-top:2px}
+  /* ---- Nav: "Meu negócio"/"Conta" viram dropdown no desktop (evita 10 itens
+     numa linha só, que quebrava linha em telas médias); no celular a marcação
+     "desaparece" (display:contents) e os itens ficam expandidos direto na
+     lista, como sempre foi. ---- */
+  .nav-grupo-wrap{display:contents}
+  .nav-dropdown{display:contents}
   @media (min-width:681px){
-    /* no desktop o nav é uma linha só: mostra grupos como separador vertical fino em vez de rótulo */
-    .nav-grupo{display:flex;align-items:center;padding:0 6px;font-size:0}
-    .nav-grupo::before{content:"";display:block;width:1px;height:20px;background:var(--line)}
-    .nav-grupo:first-of-type::before{display:none}
+    .nav-grupo-wrap{display:inline-flex;position:relative}
+    .nav-dropdown{display:none;position:absolute;top:100%;left:0;margin-top:6px;
+      flex-direction:column;gap:2px;background:var(--panel);border:1px solid var(--line);
+      border-radius:8px;padding:6px;min-width:210px;box-shadow:0 10px 30px rgba(0,0,0,.35);z-index:50}
+    .nav-grupo-wrap.aberto .nav-dropdown{display:flex}
+    .nav-grupo-btn{display:inline-flex;align-items:center;gap:5px}
+    .nav-grupo-btn.tem-ativo{border-color:var(--accent);color:var(--accent)}
+    .nav-caret{display:inline-block;transition:transform .15s;flex-shrink:0}
+    .nav-grupo-wrap.aberto .nav-caret{transform:rotate(180deg)}
+    .nav-dropdown button{width:100%;text-align:left;background:transparent;border:1px solid transparent}
+    .nav-dropdown button:hover{background:var(--panel2)}
   }
 
   /* ---- Filtros dos editais: no celular ficam escondidos atrás de um botão
@@ -356,19 +371,28 @@
   <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
   <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    <span class="nav-grupo" aria-hidden="true">Oportunidades</span>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
-    <span class="nav-grupo" aria-hidden="true">Meu negócio</span>
-    <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
-    <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
-    <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
-    <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
-    <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
-    <span class="nav-grupo" aria-hidden="true">Conta</span>
-    <button data-tab="config" onclick="tab('config')">Configurações</button>
-    <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
-    <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+    <div class="nav-grupo-wrap">
+      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
+        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="nav-dropdown">
+        <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+        <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
+        <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
+        <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+        <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+      </div>
+    </div>
+    <div class="nav-grupo-wrap">
+      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Conta
+        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="nav-dropdown">
+        <button data-tab="config" onclick="tab('config')">Configurações</button>
+        <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
+        <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+      </div>
+    </div>
     <div class="nav-footer">
       <span class="nav-user-nome" title="Sua conta">—</span>
       <button class="btn ghost" onclick="sair()">Sair</button>
@@ -888,7 +912,18 @@ function toggleAjuda(el, ev){
 // fecha tooltips abertos ao tocar fora (mobile)
 document.addEventListener('click', e=>{
   if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
+  if(!e.target.closest('.nav-grupo-wrap')) document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
 });
+
+// dropdown "Meu negócio"/"Conta" no nav (só tem efeito visual a partir do
+// desktop — no celular a marcação já vem expandida via display:contents)
+function toggleNavGrupo(el, ev){
+  ev.stopPropagation();
+  const grupo = el.closest('.nav-grupo-wrap');
+  const jaAberto = grupo.classList.contains('aberto');
+  document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
+  if(!jaAberto) grupo.classList.add('aberto');
+}
 
 // Trava o scroll do fundo sempre que a tela principal fica "atrás" de alguma
 // camada sobreposta — modal (estático via classe "hidden" ou dinâmico via
@@ -955,11 +990,17 @@ function fecharFiltrosMobile(){
 }
 
 function tab(name){
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  document.querySelectorAll('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  // destaca o botão "Meu negócio"/"Conta" quando a aba ativa está dentro dele
+  document.querySelectorAll('.nav-grupo-btn').forEach(b=>b.classList.remove('tem-ativo'));
+  const ativo = document.querySelector('nav button.active');
+  const grupo = ativo && ativo.closest('.nav-grupo-wrap');
+  if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
-  // fecha o menu lateral no mobile após escolher
+  // fecha o menu lateral no mobile e qualquer dropdown de grupo após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
+  document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
   if(name==='encerrados') loadEncerrados();
   if(name==='catalogo') loadProdutos();
   if(name==='fornecedores') loadFornecedores();
