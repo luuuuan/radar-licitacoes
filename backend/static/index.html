@@ -1447,7 +1447,7 @@ async function editarProduto(id){
 
 function cancelarEdicao(){
   editandoId = null;
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site'].forEach(i=>$('#'+i).value='');
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site','p-forn-sel'].forEach(i=>{ const el=$('#'+i); if(el) el.value=''; });
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
