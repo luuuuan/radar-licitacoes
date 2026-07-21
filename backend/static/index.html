@@ -1405,7 +1405,9 @@ let editandoId = null;
 function abrirFormProduto(){
   cancelarEdicao();            // limpa e prepara para novo cadastro
   carregarFornecedoresSelect();
-  $('#modal-produto').classList.remove('hidden');
+  const modal=$('#modal-produto');
+  modal.classList.remove('hidden');
+  modal.scrollTop = 0;
 }
 function fecharFormProduto(){
   $('#modal-produto').classList.add('hidden');
@@ -1442,7 +1444,9 @@ async function editarProduto(id){
   editandoId = id;
   $('#form-titulo').textContent = 'Editar produto';
   $('#btn-salvar-prod').textContent = 'Salvar alterações';
-  $('#modal-produto').classList.remove('hidden');
+  const modal=$('#modal-produto');
+  modal.classList.remove('hidden');
+  modal.scrollTop = 0;
 }
 
 function cancelarEdicao(){
