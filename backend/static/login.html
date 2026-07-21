@@ -23,6 +23,10 @@
   *{box-sizing:border-box}
   /* troca de tema (claro/escuro) suave em vez de instantânea */
   *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
+  /* filhos de <svg> não precisam de transição própria: currentColor já
+     herda ao vivo a cor do ancestral enquanto ELE transiciona (ver mesmo
+     comentário em index.html) */
+  svg *{transition:none}
   @media (prefers-reduced-motion:reduce){
     /* !important de propósito: é o "desliga tudo" de acessibilidade */
     *{transition:none !important}

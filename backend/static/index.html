@@ -23,6 +23,12 @@
   *{box-sizing:border-box}
   /* troca de tema (claro/escuro) suave em vez de instantânea */
   *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
+  /* filhos de <svg> (path/circle/etc dos ícones inline, tem vários por linha
+     de tabela) não precisam de transição própria: currentColor já herda ao
+     vivo a cor do ancestral enquanto ELE transiciona. Dar transição também a
+     cada filho só soma trabalho de recálculo/pintura por frame à toa, sem
+     mudar nada visualmente */
+  svg *{transition:none}
   /* overflow-x só num dos dois (não nos dois juntos): "html,body{overflow-x:hidden}"
      faz o body virar um segundo contêiner de scroll (overflow-y computa pra "auto"
      por baixo dos panos), e qualquer position:sticky descendente passa a "grudar"
