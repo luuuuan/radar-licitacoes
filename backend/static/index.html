@@ -21,8 +21,13 @@
     --destructive:#dc2626; --ring:#2563eb; --overlay:rgba(15,23,42,.45);
   }
   *{box-sizing:border-box}
-  html,body{max-width:100%;overflow-x:hidden}
-  body{margin:0;font-family:var(--font-body);
+  /* overflow-x só num dos dois (não nos dois juntos): "html,body{overflow-x:hidden}"
+     faz o body virar um segundo contêiner de scroll (overflow-y computa pra "auto"
+     por baixo dos panos), e qualquer position:sticky descendente passa a "grudar"
+     relativo a esse body — que nunca rola de verdade — em vez da página inteira,
+     quebrando o sticky silenciosamente. */
+  html{overflow-x:hidden}
+  body{margin:0;max-width:100%;font-family:var(--font-body);
     background:var(--bg);color:var(--txt);font-size:16px}
   h1,h2,h3{font-family:var(--font-heading)}
   button,.btn{font-family:inherit}
