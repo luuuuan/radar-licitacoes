@@ -1359,14 +1359,16 @@ function filtrarProdutos(){
   const q=($('#busca-produto')?.value||'').toLowerCase().trim();
   const ps=q?_produtos.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q)):_produtos;
   _produtosVisiveis = ps;
-  $('#lista-produtos').innerHTML=ps.map(p=>`<tr>
+  $('#lista-produtos').innerHTML = ps.length
+    ? ps.map(p=>`<tr>
     <td><input type="checkbox" class="chk-produto" onchange="toggleProdutoSelecionado(${p.id},this.checked)" ${_produtosSelecionados.has(p.id)?'checked':''}></td>
     <td>${esc(p.descricao)}</td><td>${esc(p.ncm||'—')}</td>
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
       <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
-    </td></tr>`).join('');
+    </td></tr>`).join('')
+    : `<tr><td colspan=6 class="muted">${q ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
   const chkTodos = $('#chk-todos-produtos');
   if(chkTodos) chkTodos.checked = ps.length>0 && ps.every(p=>_produtosSelecionados.has(p.id));
   atualizarBarraSelecaoProdutos();
@@ -1395,6 +1397,7 @@ async function excluirProdutosSelecionados(){
   if(!ok) return;
   await api('/api/produtos/excluir-varios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
   _produtosSelecionados.clear();
+  toast(ids.length===1 ? 'Produto excluído.' : `${ids.length} produtos excluídos.`, 'ok');
   loadProdutos(); loadResumo();
 }
 let editandoId = null;
@@ -1448,7 +1451,12 @@ function cancelarEdicao(){
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
-async function delProduto(id){ await fetch('/api/produtos/'+id,{method:'DELETE'}); _produtosSelecionados.delete(id); loadProdutos(); loadResumo(); }
+async function delProduto(id){
+  await fetch('/api/produtos/'+id,{method:'DELETE'});
+  _produtosSelecionados.delete(id);
+  toast('Produto excluído.', 'ok');
+  loadProdutos(); loadResumo();
+}
 
 function abrirCatalogoOficial(tipo){
   // abre o catálogo oficial já com a descrição do produto como termo de busca
