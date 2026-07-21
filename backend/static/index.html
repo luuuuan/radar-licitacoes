@@ -72,7 +72,10 @@
   .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
   nav{display:flex;gap:6px;flex-wrap:wrap}
   @media (min-width:1200px){
-    nav{max-height:200px;overflow:hidden;
+    /* overflow:hidden só entra junto com o recolhimento (.compacto lá embaixo)
+       — em repouso (altura normal) precisa ficar visible, senão corta o
+       dropdown "Meu negócio"/"Conta" que abre pra baixo do próprio #nav */
+    #nav{max-height:200px;
       transition:max-height .25s ease,opacity .2s ease,padding .25s ease}
   }
   nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
@@ -334,7 +337,7 @@
     #topo-spacer{display:block;height:147px;transition:height .3s ease}
     #topo-fixo.compacto ~ #topo-spacer{height:72px}
     #topo-fixo.compacto header h1 .logo-txt{max-width:0;opacity:0;margin-left:0}
-    #topo-fixo.compacto #nav{max-height:0;opacity:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent}
+    #topo-fixo.compacto #nav{max-height:0;opacity:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent;overflow:hidden}
     /* overflow:visible só quando expandido — em repouso (max-width:0) precisa
        do overflow:hidden pra esconder os botões de verdade; expandido, precisa
        de overflow:visible pra não cortar o dropdown "Meu negócio"/"Conta" que
