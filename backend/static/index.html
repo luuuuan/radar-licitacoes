@@ -40,15 +40,34 @@
   #topo-fixo{position:sticky;top:0;z-index:100;background:var(--bg)}
   header{padding:16px 24px;
     display:flex;align-items:center;gap:14px;background:var(--panel)}
-  header h1{font-size:18px;margin:0;font-weight:600}
+  header h1{display:flex;align-items:center;font-size:18px;margin:0;font-weight:600}
+  header h1 .logo-txt{display:inline-block;overflow:hidden;white-space:nowrap;
+    max-width:240px;opacity:1;margin-left:8px;
+    transition:max-width .25s ease,opacity .2s ease,margin .25s ease}
   header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
     padding:2px 8px;border-radius:20px}
+  /* menu compacto: some por padrão (só existe pra caber na mesma linha do
+     cabeçalho depois de rolar, em telas bem largas — ver .compacto abaixo) */
+  .nav-compacta{display:flex;align-items:center;gap:6px;overflow:hidden;
+    max-width:0;opacity:0;margin-left:0;flex-wrap:nowrap;
+    background:transparent;border-bottom:none;padding:0;
+    transition:max-width .3s ease,opacity .2s ease,margin .2s ease}
+  @media (max-width:1199px){
+    .nav-compacta{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    header h1 .logo-txt,#nav,.nav-compacta{transition:none}
+  }
   .wrap{max-width:1180px;margin:0 auto;padding:24px}
   .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
   .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
   .kpi .n{font-size:24px;font-weight:700}
   .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
   nav{display:flex;gap:6px;flex-wrap:wrap}
+  @media (min-width:1200px){
+    nav{max-height:200px;overflow:hidden;
+      transition:max-height .25s ease,opacity .2s ease,padding .25s ease}
+  }
   nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
     padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
   nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -296,6 +315,16 @@
     .nav-dropdown button:hover{background:var(--panel2)}
   }
 
+  /* ---- Modo compacto: só em telas bem largas (senão a lógica de menu já
+     preenche a linha do cabeçalho e voltaria a quebrar), a logo encolhe e o
+     menu reduzido some/aparece junto ao cabeçalho depois de rolar. Abaixo de
+     1200px mantém as duas linhas normais, sem esse comportamento. ---- */
+  @media (min-width:1200px){
+    #topo-fixo.compacto header h1 .logo-txt{max-width:0;opacity:0;margin-left:0}
+    #topo-fixo.compacto nav{max-height:0;opacity:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent}
+    #topo-fixo.compacto .nav-compacta{max-width:700px;opacity:1;margin-left:16px}
+  }
+
   /* ---- Filtros dos editais: no celular ficam escondidos atrás de um botão
      "Filtros" e abrem num painel em tela cheia (mesmo padrão do menu lateral);
      a partir do tablet viram uma lateral fixa e sempre visível, com scroll próprio
@@ -362,7 +391,35 @@
 <div id="topo-fixo">
 <header>
   <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Radar de Licitações</h1>
+  <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg><span class="logo-txt"> Radar de Licitações</span></h1>
+
+  <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
+       repetir a quebra de linha do menu), depois de rolar (ver .compacto).
+       Mantenha os itens em sincronia com o <nav id="nav"> logo abaixo. -->
+  <nav class="nav-compacta" id="nav-compacta">
+    <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
+    <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+    <div class="nav-grupo-wrap">
+      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
+        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="nav-dropdown">
+        <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+        <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
+        <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
+        <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+        <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+      </div>
+    </div>
+    <div class="nav-grupo-wrap">
+      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Conta
+        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="nav-dropdown">
+        <button data-tab="config" onclick="tab('config')">Configurações</button>
+        <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
+        <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+      </div>
+    </div>
+  </nav>
 
   <span style="flex:1"></span>
   <span id="coleta-status" class="badge">—</span>
@@ -990,6 +1047,18 @@ function toggleMenu(){
   $('#nav-overlay').classList.toggle('open', open);
 }
 
+// Modo compacto do cabeçalho: só tem efeito visual em telas largas (ver CSS,
+// @media min-width:1200px) — a logo encolhe e o menu reduzido (#nav-compacta)
+// aparece na mesma linha assim que a página rola um pouco.
+let _navCompacta = false;
+function _atualizarNavCompacta(){
+  const compacta = window.scrollY > 60;
+  if(compacta === _navCompacta) return;
+  _navCompacta = compacta;
+  $('#topo-fixo').classList.toggle('compacto', compacta);
+}
+window.addEventListener('scroll', _atualizarNavCompacta, {passive:true});
+
 // painel de filtros no celular: abre/fecha como o menu lateral (mesmo padrão)
 function toggleFiltrosMobile(){
   const open = $('#filtros-lateral').classList.toggle('aberto');
@@ -1003,10 +1072,12 @@ function fecharFiltrosMobile(){
 function tab(name){
   document.querySelectorAll('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
   // destaca o botão "Meu negócio"/"Conta" quando a aba ativa está dentro dele
+  // (repete pros dois menus — o normal e a cópia compacta do cabeçalho)
   document.querySelectorAll('.nav-grupo-btn').forEach(b=>b.classList.remove('tem-ativo'));
-  const ativo = document.querySelector('nav button.active');
-  const grupo = ativo && ativo.closest('.nav-grupo-wrap');
-  if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
+  document.querySelectorAll('nav button.active').forEach(ativo=>{
+    const grupo = ativo.closest('.nav-grupo-wrap');
+    if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
+  });
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // fecha o menu lateral no mobile e qualquer dropdown de grupo após escolher
   $('#nav').classList.remove('open');
