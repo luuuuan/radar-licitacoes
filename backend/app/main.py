@@ -878,6 +878,26 @@ def remover_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_u
     return {"ok": True}
 
 
+class ProdutosIdsIn(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/produtos/excluir-varios")
+def remover_produtos_varios(dados: ProdutosIdsIn,
+                            user: Usuario = Depends(_auth.get_current_user),
+                            db: Session = Depends(get_session)):
+    removidos = 0
+    for produto_id in dados.ids:
+        p = db.get(Produto, produto_id)
+        if not p or p.usuario_id != user.id:
+            continue
+        db.delete(p)
+        _limpar_matches_do_produto(db, user.id, produto_id)
+        removidos += 1
+    db.commit()
+    return {"ok": True, "removidos": removidos}
+
+
 # --------------------------- Editais / Matches ------------------------ #
 def _inicio_hoje_utc() -> datetime:
     """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
