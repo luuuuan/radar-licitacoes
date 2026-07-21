@@ -36,8 +36,15 @@
   img{max-width:100%;height:auto}
   /* cabeçalho + menu ficam juntos numa barra só, grudada no topo ao rolar
      (position:sticky — não precisa de padding-top compensando, o navegador já
-     reserva o espaço dela no fluxo normal antes de "grudar"). */
+     reserva o espaço dela no fluxo normal antes de "grudar").
+     Só a partir de 1200px (@media lá embaixo) ela vira position:fixed com um
+     "espaçador" (#topo-spacer) reservando o lugar: nessa largura a barra tem
+     altura ANIMADA (o modo compacto encolhe ela), e sendo sticky isso reduz a
+     altura rolável da página bem no meio do scroll do usuário — cabo de
+     guerra entre o scroll e a animação, que fazia a barra "piscar" entre os
+     dois estados. Fixed tira ela do fluxo e resolve. */
   #topo-fixo{position:sticky;top:0;z-index:100;background:var(--bg)}
+  #topo-spacer{display:none}
   header{padding:16px 24px;
     display:flex;align-items:center;gap:14px;background:var(--panel)}
   header h1{display:flex;align-items:center;font-size:18px;margin:0;font-weight:600}
@@ -320,9 +327,19 @@
      menu reduzido some/aparece junto ao cabeçalho depois de rolar. Abaixo de
      1200px mantém as duas linhas normais, sem esse comportamento. ---- */
   @media (min-width:1200px){
+    /* fixed (não sticky) só aqui — ver comentário em #topo-fixo lá em cima.
+       O espaçador reserva a altura da barra pro conteúdo não ficar embaixo
+       dela; a altura muda junto com a animação do modo compacto. */
+    #topo-fixo{position:fixed;top:0;left:0;right:0}
+    #topo-spacer{display:block;height:147px;transition:height .3s ease}
+    #topo-fixo.compacto ~ #topo-spacer{height:72px}
     #topo-fixo.compacto header h1 .logo-txt{max-width:0;opacity:0;margin-left:0}
     #topo-fixo.compacto #nav{max-height:0;opacity:0;padding-top:0;padding-bottom:0;border-bottom-color:transparent}
-    #topo-fixo.compacto .nav-compacta{max-width:700px;opacity:1;margin-left:16px}
+    /* overflow:visible só quando expandido — em repouso (max-width:0) precisa
+       do overflow:hidden pra esconder os botões de verdade; expandido, precisa
+       de overflow:visible pra não cortar o dropdown "Meu negócio"/"Conta" que
+       abre pra baixo */
+    #topo-fixo.compacto .nav-compacta{max-width:700px;opacity:1;margin-left:16px;overflow:visible}
   }
 
   /* ---- Filtros dos editais: no celular ficam escondidos atrás de um botão
@@ -463,6 +480,7 @@
     </div>
 </nav>
 </div>
+<div id="topo-spacer"></div>
 
 <div class="wrap">
   <div class="kpis" id="kpis"></div>
