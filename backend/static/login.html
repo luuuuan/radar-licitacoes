@@ -24,7 +24,8 @@
   /* troca de tema (claro/escuro) suave em vez de instantânea */
   *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
   @media (prefers-reduced-motion:reduce){
-    *{transition:none}
+    /* !important de propósito: é o "desliga tudo" de acessibilidade */
+    *{transition:none !important}
   }
   html{overflow-x:hidden}
   input{max-width:100%}

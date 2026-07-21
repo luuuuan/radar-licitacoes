@@ -52,7 +52,12 @@
   header h1{display:flex;align-items:center;font-size:18px;margin:0;font-weight:600}
   header h1 .logo-txt{display:inline-block;overflow:hidden;white-space:nowrap;
     max-width:240px;opacity:1;margin-left:8px;
-    transition:max-width .25s ease,opacity .2s ease,margin .25s ease}
+    /* precisa repetir background-color/color/border-color aqui: "transition"
+       não é aditivo — como esse seletor é mais específico que o "*" lá em
+       cima, ele SUBSTITUI a lista dele inteira, então sem repetir aqui a cor
+       trocava de tema instantânea enquanto o resto da página fazia fade */
+    transition:max-width .25s ease,opacity .2s ease,margin .25s ease,
+      background-color .25s ease,color .25s ease,border-color .25s ease}
   header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
     padding:2px 8px;border-radius:20px}
   /* menu compacto: some por padrão (só existe pra caber na mesma linha do
@@ -60,12 +65,16 @@
   .nav-compacta{display:flex;align-items:center;gap:6px;overflow:hidden;
     max-width:0;opacity:0;margin-left:0;flex-wrap:nowrap;
     background:transparent;border-bottom:none;padding:0;
-    transition:max-width .3s ease,opacity .2s ease,margin .2s ease}
+    transition:max-width .3s ease,opacity .2s ease,margin .2s ease,
+      background-color .25s ease,color .25s ease,border-color .25s ease}
   @media (max-width:1199px){
     .nav-compacta{display:none}
   }
   @media (prefers-reduced-motion:reduce){
-    *{transition:none}
+    /* !important de propósito: é o "desliga tudo" de acessibilidade — sem
+       isso um seletor universal nunca vence as transições mais específicas
+       (menu compacto, seta do dropdown, etc.), que continuariam animando */
+    *{transition:none !important}
   }
   .wrap{max-width:1180px;margin:0 auto;padding:24px}
   .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
@@ -78,7 +87,8 @@
        — em repouso (altura normal) precisa ficar visible, senão corta o
        dropdown "Meu negócio"/"Conta" que abre pra baixo do próprio #nav */
     #nav{max-height:200px;
-      transition:max-height .25s ease,opacity .2s ease,padding .25s ease}
+      transition:max-height .25s ease,opacity .2s ease,padding .25s ease,
+        background-color .25s ease,color .25s ease,border-color .25s ease}
   }
   nav button{background:var(--panel);border:1px solid var(--line);color:var(--muted);
     padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
@@ -221,7 +231,8 @@
     nav{position:fixed;top:0;left:0;height:100%;width:80%;max-width:300px;
       margin:0;display:flex;flex-direction:column;flex-wrap:nowrap;gap:2px;background:var(--panel);
       border-right:1px solid var(--line);padding:14px;z-index:6000;
-      transform:translateX(-100%);transition:transform .25s ease;overflow-y:auto}
+      transform:translateX(-100%);transition:transform .25s ease,
+        background-color .25s ease,color .25s ease,border-color .25s ease;overflow-y:auto}
     nav.open{transform:translateX(0)}
     /* itens em lista (sem caixinha) — só o item ativo/tocado ganha destaque */
     nav button{width:100%;text-align:left;padding:11px 14px;font-size:14.5px;
