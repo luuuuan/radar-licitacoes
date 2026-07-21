@@ -5,20 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Radar de Licitações</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
   :root{
     --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
     --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
     --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
+    --destructive:#ef4444; --ring:#3b82f6; --overlay:rgba(0,0,0,.6);
+    --font-body:'Source Sans 3',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --font-heading:'Lexend',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
   :root[data-theme="light"]{
     --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
     --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
     --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
+    --destructive:#dc2626; --ring:#2563eb; --overlay:rgba(15,23,42,.45);
   }
   *{box-sizing:border-box}
   html,body{max-width:100%;overflow-x:hidden}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-    background:var(--bg);color:var(--txt);font-size:14px}
+  body{margin:0;font-family:var(--font-body);
+    background:var(--bg);color:var(--txt);font-size:16px}
+  h1,h2,h3{font-family:var(--font-heading)}
+  button,.btn{font-family:inherit}
+  :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
   /* imagens nunca ultrapassam a largura disponível (ícones SVG têm tamanho fixo) */
   img{max-width:100%;height:auto}
   header{padding:16px 24px;border-bottom:1px solid var(--line);
@@ -57,7 +65,7 @@
   .ed-meta{color:var(--muted);font-size:12px;margin:8px 0;display:flex;gap:14px;flex-wrap:wrap}
   .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
   .prazo{font-weight:600}
-  .prazo.urg{color:#f87171}
+  .prazo.urg{color:var(--destructive)}
   .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
   .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
   table{width:100%;border-collapse:collapse}
@@ -87,7 +95,7 @@
   #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
 
   /* ---- Modal de detalhes ---- */
-  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:5000;
+  .modal{position:fixed;inset:0;background:var(--overlay);z-index:5000;
     display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
   .modal.hidden{display:none}
   body.modal-aberto{overflow:hidden}
@@ -101,7 +109,7 @@
   .preco-box{background:var(--panel2);border-radius:8px;padding:8px 10px}
   .preco-box .v{font-size:16px;font-weight:700}
   .preco-box .l{font-size:11px;color:var(--muted)}
-  .margem-pos{color:var(--forte)} .margem-neg{color:#f87171}
+  .margem-pos{color:var(--forte)} .margem-neg{color:var(--destructive)}
   /* Tooltip de ajuda (?) — funciona no hover e no clique/toque */
   .ajuda{position:relative;display:inline-flex;align-items:center;justify-content:center;
     width:16px;height:16px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);
@@ -134,7 +142,7 @@
   .status-sel.st-vou_participar{border-color:var(--medio);color:var(--medio)}
   .status-sel.st-proposta_enviada{border-color:#38bdf8;color:#38bdf8}
   .status-sel.st-ganho{border-color:var(--forte);color:var(--forte)}
-  .status-sel.st-perdido,.status-sel.st-descartado{border-color:#f87171;color:#f87171}
+  .status-sel.st-perdido,.status-sel.st-descartado{border-color:var(--destructive);color:var(--destructive)}
   .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
   .forn a{color:var(--accent);text-decoration:none}
   /* switch liga/desliga */
@@ -167,7 +175,7 @@
     .precos{grid-template-columns:1fr}
     /* menu lateral (gaveta) no mobile */
     .hamburger{display:inline-flex;align-items:center}
-    .nav-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:5500}
+    .nav-overlay.open{display:block;position:fixed;inset:0;background:var(--overlay);z-index:5500}
     nav{position:fixed;top:0;left:0;height:100%;width:80%;max-width:300px;
       margin:0;display:flex;flex-direction:column;flex-wrap:nowrap;gap:2px;background:var(--panel);
       border-right:1px solid var(--line);padding:14px;z-index:6000;
@@ -209,8 +217,8 @@
     /* ---- Fontes um pouco maiores no mobile: telas pequenas pedem texto
        maior pra leitura, não menor. Cobre tanto as classes do <style> quanto
        os font-size fixados inline nos templates JS (mesmo truque de
-       [style*=...] já usado acima pros inputs de largura fixa). ---- */
-    body{font-size:15px}
+       [style*=...] já usado acima pros inputs de largura fixa). O body já
+       herda os 16px base — não precisa de bump próprio aqui. ---- */
     th,td{font-size:14px}
     .pill{font-size:12px}
     .kpi .l{font-size:13px}
@@ -266,7 +274,7 @@
   .editais-layout{display:flex;flex-direction:column;gap:14px;position:relative}
   .filtros-btn-mobile{display:inline-flex;align-items:center;gap:6px;margin-bottom:2px}
   .filtros-overlay{display:none}
-  .filtros-overlay.aberto{display:block;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:5500}
+  .filtros-overlay.aberto{display:block;position:fixed;inset:0;background:var(--overlay);z-index:5500}
   .filtros-lateral-head{display:flex;justify-content:space-between;align-items:center;
     font-weight:600;font-size:15px;margin-bottom:4px;color:var(--txt)}
   .filtros-lateral-head .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;font-size:20px}
@@ -1159,10 +1167,10 @@ async function importarPlanilha(input){
       loadProdutos(); loadResumo();
     } else {
       msg.textContent = r.detail || 'Não foi possível importar (confira o cabeçalho da planilha).';
-      msg.style.color='#f87171';
+      msg.style.color='var(--destructive)';
     }
   }catch(e){
-    msg.textContent='Erro ao importar a planilha.'; msg.style.color='#f87171';
+    msg.textContent='Erro ao importar a planilha.'; msg.style.color='var(--destructive)';
   }
   input.value='';  // permite reenviar o mesmo arquivo
 }
@@ -1307,7 +1315,7 @@ async function salvarFornecedor(){
   const nome=$('#fn-nome').value.trim();
   if(!nome){ $('#forn-msg').textContent='Informe o nome.'; return; }
   const email=$('#fn-email').value.trim();
-  if(email && !emailValido(email)){ $('#forn-msg').textContent='E-mail inválido.'; $('#forn-msg').style.color='#f87171'; return; }
+  if(email && !emailValido(email)){ $('#forn-msg').textContent='E-mail inválido.'; $('#forn-msg').style.color='var(--destructive)'; return; }
   const body={nome, telefone:$('#fn-tel').value.trim()||null, whatsapp:$('#fn-wpp').value.trim()||null,
     email:email||null, site:$('#fn-site').value.trim()||null, observacao:$('#fn-obs').value.trim()||null};
   const url = editandoFornId ? '/api/fornecedores/'+editandoFornId : '/api/fornecedores';
@@ -1353,7 +1361,7 @@ async function loadDocumentos(){
   if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
   $('#lista-documentos').innerHTML=ds.map(d=>{
     let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
-    if(d.dias_para_vencer<0){ cor='#f87171'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+    if(d.dias_para_vencer<0){ cor='var(--destructive)'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
     else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
     const link = linkSeguro(d.link);
     return `<tr>
@@ -1481,9 +1489,9 @@ async function loadColetaStatus(){
     } else if(s.estado==='nunca'){
       el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
     } else if(s.estado==='travado'){
-      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Última coleta não finalizou'; el.style.color='#f87171';
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Última coleta não finalizou'; el.style.color='var(--destructive)';
     } else if(s.erro){
-      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Erro na última coleta'; el.style.color='#f87171';
+      el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Erro na última coleta'; el.style.color='var(--destructive)';
     } else {
       const r = s.novos!=null ? ` · ${s.novos} novos` : '';
       el.textContent=`Última coleta ${haTempo(s.ultima_fim_seg)}${r}`;
@@ -1594,7 +1602,7 @@ function acompanharRecalculo(){
     clearInterval(_recalcTimer); _recalcTimer=null;
     _setBtnRecalcularOcupado(false);
     if(s.erro){
-      el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+      el.textContent='Erro ao recalcular'; el.style.color='var(--destructive)';
       toast('O recálculo falhou: '+s.erro, 'erro', 6000);
     } else if(s.atualizados!=null){
       el.textContent=`✓ Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
@@ -1623,7 +1631,7 @@ async function recalcular(comIA){
   try{
     r=await api('/api/recalcular?com_ia='+(comIA?'true':'false'),{method:'POST'});
   }catch(e){
-    el.textContent='Erro ao recalcular'; el.style.color='#f87171';
+    el.textContent='Erro ao recalcular'; el.style.color='var(--destructive)';
     return;
   }
   if(r && r.em_andamento){
@@ -1735,7 +1743,7 @@ function renderProposta(){
       <td><input type="number" step="any" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
       <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
-      <td style="white-space:nowrap;color:${margItem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margItem)}</td>
+      <td style="white-space:nowrap;color:${margItem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margItem)}</td>
       <td><button class="btn ghost" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
     </tr>`;
   }).join('');
@@ -1748,7 +1756,7 @@ function renderProposta(){
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
     <div><div class="muted" style="font-size:11px">Total da proposta</div><strong style="font-size:18px">${fmtMoeda(tv)}</strong></div>
     <div><div class="muted" style="font-size:11px">Custo total</div><strong style="font-size:18px">${fmtMoeda(tc)}</strong></div>
-    <div><div class="muted" style="font-size:11px">Margem</div><strong style="font-size:18px;color:${margem<0?'#f87171':'var(--forte)'}">${fmtMoeda(margem)} (${pct.toFixed(1)}%)</strong></div>
+    <div><div class="muted" style="font-size:11px">Margem</div><strong style="font-size:18px;color:${margem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margem)} (${pct.toFixed(1)}%)</strong></div>
   </div>`;
 }
 
