@@ -21,6 +21,8 @@
     --destructive:#dc2626; --ring:#2563eb; --overlay:rgba(15,23,42,.45);
   }
   *{box-sizing:border-box}
+  /* troca de tema (claro/escuro) suave em vez de instantânea */
+  *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
   /* overflow-x só num dos dois (não nos dois juntos): "html,body{overflow-x:hidden}"
      faz o body virar um segundo contêiner de scroll (overflow-y computa pra "auto"
      por baixo dos panos), e qualquer position:sticky descendente passa a "grudar"
@@ -63,7 +65,7 @@
     .nav-compacta{display:none}
   }
   @media (prefers-reduced-motion:reduce){
-    header h1 .logo-txt,#nav,.nav-compacta{transition:none}
+    *{transition:none}
   }
   .wrap{max-width:1180px;margin:0 auto;padding:24px}
   .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}

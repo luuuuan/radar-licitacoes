@@ -21,6 +21,11 @@
     --destructive:#dc2626; --ring:#2563eb; --overlay:rgba(15,23,42,.45);
   }
   *{box-sizing:border-box}
+  /* troca de tema (claro/escuro) suave em vez de instantânea */
+  *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none}
+  }
   html{overflow-x:hidden}
   input{max-width:100%}
   body{margin:0;max-width:100%;font-family:var(--font-body);
