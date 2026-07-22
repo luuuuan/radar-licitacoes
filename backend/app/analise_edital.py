@@ -56,18 +56,16 @@ def ia_texto_disponivel(api_key: str | None = None) -> bool:
     return bool(api_key)   # só a chave do próprio usuário (sem fallback global)
 
 
-def _baixar_texto_pdf(url: str, timeout: int = 45,
-                      max_paginas: int = 40, max_chars: int = 24000) -> str:
-    try:
-        r = requests.get(url, timeout=timeout,
-                        headers={"User-Agent": "RadarLicitacoes/1.0"})
-    except requests.RequestException:
-        return ""
-    if r.status_code != 200 or not r.content:
-        return ""
+def _e_zip(conteudo: bytes) -> bool:
+    return conteudo[:4] == b"PK\x03\x04"
+
+
+def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
+    """Extrai texto de um PDF (bytes), com fallback de OCR se vier quase
+    vazio (PDF escaneado)."""
     try:
         import pypdf
-        leitor = pypdf.PdfReader(io.BytesIO(r.content))
+        leitor = pypdf.PdfReader(io.BytesIO(conteudo))
     except Exception:
         return ""
     partes, total = [], 0
@@ -90,10 +88,50 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
     # resto escaneado ficava abaixo do limiar final (300 chars combinados
     # em analisar()) sem nunca acionar o OCR.
     if len(texto.strip()) < 500 and settings.OCR_ATIVO:
-        ocr = _ocr_pdf(r.content)
+        ocr = _ocr_pdf(conteudo)
         if ocr:
             return ocr[:max_chars]
     return texto
+
+
+def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
+    """O PNCP às vezes publica um único 'documento' como um .zip contendo
+    vários PDFs (edital + anexos) em vez de um PDF direto. Sem isso, esses
+    editais caíam sempre em "sem_texto" (pypdf/pdf2image não leem .zip)."""
+    import zipfile
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(conteudo))
+    except Exception:
+        return ""
+    nomes_pdf = sorted(n for n in zf.namelist() if n.lower().endswith(".pdf"))
+    partes = []
+    total = 0
+    for nome in nomes_pdf[:5]:
+        if total >= max_chars:
+            break
+        try:
+            dados = zf.read(nome)
+        except Exception:
+            continue
+        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total)
+        if t:
+            partes.append(t)
+            total += len(t)
+    return "\n\n---\n\n".join(partes)[:max_chars]
+
+
+def _baixar_texto_pdf(url: str, timeout: int = 45,
+                      max_paginas: int = 40, max_chars: int = 24000) -> str:
+    try:
+        r = requests.get(url, timeout=timeout,
+                        headers={"User-Agent": "RadarLicitacoes/1.0"})
+    except requests.RequestException:
+        return ""
+    if r.status_code != 200 or not r.content:
+        return ""
+    if _e_zip(r.content):
+        return _texto_de_zip(r.content, max_paginas, max_chars)
+    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars)
 
 
 def _ocr_pdf(conteudo: bytes) -> str:
