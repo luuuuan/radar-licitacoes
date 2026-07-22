@@ -146,9 +146,14 @@ def telegram_item(titulo: str, it: dict) -> tuple[str, str, str | None]:
     """Monta uma mensagem de Telegram para UM edital.
     Retorna (titulo_negrito, corpo, link_para_botao)."""
     linhas = []
+    if it.get("orgao"):
+        linhas.append(f"<b>{_esc(it['orgao'])}</b>")
     if it.get("objeto"):
         linhas.append(_esc((it["objeto"] or "")[:400]))
     linhas.append("")
+    valor = _formatar_valor(it.get("valor_estimado"))
+    if valor:
+        linhas.append(f"<b>Valor estimado:</b> {_esc(valor)}")
     if it.get("abertura"):
         linhas.append(f"<b>Abertura:</b> {_esc(it['abertura'])}")
     if it.get("encerramento"):
