@@ -154,7 +154,7 @@
   .modal{position:fixed;inset:0;background:var(--overlay);z-index:5000;
     display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
   .modal.hidden{display:none}
-  body.modal-aberto{overflow:hidden}
+  html.modal-aberto{overflow-y:hidden}
   .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
     width:100%;max-width:780px;padding:22px}
   .modal-card h2{margin:0 0 4px;font-size:18px}
@@ -1043,7 +1043,13 @@ function toggleNavGrupo(el, ev){
 // pra tela de trás não rolar junto quando o usuário arrasta dentro do popup.
 function _atualizarScrollModal(){
   const aberto = !!document.querySelector('.modal:not(.hidden), #nav.open, #filtros-lateral.aberto');
-  document.body.classList.toggle('modal-aberto', aberto);
+  // trava no <html>, nunca no <body>: html já é o único ancestral com
+  // overflow-x restrito (ver comentário no CSS) — se o body também ganhar
+  // overflow restrito, os dois viram contêineres de scroll concorrentes e
+  // qualquer position:sticky descendente (o menu de filtros dos editais)
+  // passa a "grudar" relativo ao body, que nunca rola de verdade, e some
+  // da tela enquanto o popup está aberto.
+  document.documentElement.classList.toggle('modal-aberto', aberto);
 }
 new MutationObserver(_atualizarScrollModal)
   .observe(document.body, {childList:true, subtree:true, attributes:true, attributeFilter:['class']});
