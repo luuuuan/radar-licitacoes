@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # Requer no servidor os pacotes de sistema 'tesseract-ocr', 'tesseract-ocr-por'
     # e 'poppler-utils' (ver render/Dockerfile).
     OCR_ATIVO: bool = True
-    OCR_MAX_PAGINAS: int = 5     # só as primeiras N páginas (controla custo de CPU)
+    OCR_MAX_PAGINAS: int = 12    # só as primeiras N páginas (controla custo de CPU)
     OCR_DPI: int = 200           # resolução do raster (menor = mais rápido)
     OCR_IDIOMA: str = "por"      # português
 

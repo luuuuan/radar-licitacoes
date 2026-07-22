@@ -84,8 +84,12 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
             break
     texto = "\n".join(partes)[:max_chars]
 
-    # PDF escaneado (pypdf extraiu quase nada): tenta OCR como último recurso.
-    if len(texto.strip()) < 200 and settings.OCR_ATIVO:
+    # PDF escaneado (pypdf extraiu pouco ou nada): tenta OCR como último
+    # recurso. O limiar é alto de propósito — uma página com texto real de
+    # edital tem bem mais que isso; um PDF com só a capa "de texto" e o
+    # resto escaneado ficava abaixo do limiar final (300 chars combinados
+    # em analisar()) sem nunca acionar o OCR.
+    if len(texto.strip()) < 500 and settings.OCR_ATIVO:
         ocr = _ocr_pdf(r.content)
         if ocr:
             return ocr[:max_chars]
