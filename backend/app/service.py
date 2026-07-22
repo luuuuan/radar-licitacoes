@@ -3,10 +3,10 @@ Serviço de orquestração: coleta -> persiste -> casa com o catálogo ->
 pontua -> notifica. É chamado pela tarefa diária (Celery) e pelos scripts.
 """
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from .models import utcnow
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,6 +25,17 @@ from .notifications import formato
 log = logging.getLogger("servico")
 
 NIVEIS_ORDEM = {"fraco": 0, "medio": 1, "forte": 2}
+
+# histórico de coletas é log operacional, não dado de negócio — não precisa
+# ser guardado para sempre (a tela já só mostra as mais recentes)
+RETENCAO_LOGS_DIAS = 15
+
+
+def purgar_logs_antigos(db: Session) -> int:
+    limite = utcnow() - timedelta(days=RETENCAO_LOGS_DIAS)
+    resultado = db.execute(delete(LogColeta).where(LogColeta.iniciado_em < limite))
+    db.commit()
+    return resultado.rowcount or 0
 
 
 def _carregar_catalogo(db: Session, usuario_id: int) -> list[ProdutoCat]:
@@ -332,6 +343,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
                 log_usuario.finalizado_em = utcnow()
                 db.commit()
 
+    purgar_logs_antigos(db)
     log.info("Coleta concluída: %s", resumo)
     return resumo
 
