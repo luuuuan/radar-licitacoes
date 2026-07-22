@@ -2,8 +2,8 @@
 Análise de edital com IA (Gemini texto, free tier).
 
 Baixa o PDF do edital publicado no PNCP, extrai o texto e pede ao Gemini um
-resumo estruturado: objeto, documentos exigidos para habilitação, prazos,
-se exige amostra/visita, e pontos de atenção.
+resumo estruturado: objeto, documentos exigidos para habilitação, requisitos
+técnicos do objeto, prazos, se exige amostra/visita, e pontos de atenção.
 
 É OPCIONAL e tolerante a falhas:
 - sem GEMINI_API_KEY -> status "sem_ia"
@@ -29,12 +29,13 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 2
+VERSAO_PROMPT = 3
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente estas chaves:
 - "objeto": string. Resumo claro do que está sendo contratado, em 1 a 2 frases.
-- "exigencias": array de strings. Documentos/certidões de habilitação exigidos do licitante (ex.: regularidade fiscal federal, FGTS, trabalhista/CNDT, balanço patrimonial, atestado de capacidade técnica, etc.). Vazio se não encontrar.
+- "exigencias": array de strings. Documentos/certidões de HABILITAÇÃO exigidos do licitante (empresa) para poder participar (ex.: regularidade fiscal federal, FGTS, trabalhista/CNDT, balanço patrimonial, atestado de capacidade técnica, etc.). Vazio se não encontrar.
+- "requisitos_tecnicos": array de strings. Especificações TÉCNICAS que o produto/serviço contratado (o objeto em si) precisa atender: normas/certificações do produto, prazo e local de entrega ou execução, garantia mínima do produto, assistência técnica, nível de serviço (SLA), embalagem, ou qualquer especificação técnica do item. Não repita aqui os documentos de habilitação da empresa (isso vai em "exigencias"). Vazio se não encontrar.
 - "prazos": array de strings. Datas/prazos relevantes como aparecem (abertura, envio de propostas, sessão, entrega).
 - "exige_amostra": boolean. true se exigir amostra ou prova de conceito.
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
@@ -214,6 +215,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "fonte": fonte,
         "objeto": str(data.get("objeto") or ""),
         "exigencias": lista(data.get("exigencias")),
+        "requisitos_tecnicos": lista(data.get("requisitos_tecnicos")),
         "prazos": lista(data.get("prazos")),
         "exige_amostra": bool(data.get("exige_amostra")),
         "exige_visita": bool(data.get("exige_visita")),

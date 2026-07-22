@@ -1923,6 +1923,7 @@ async function analisarEdital(id, forcar){
         ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
         ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
         ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
+        ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
         ${_listaHTML('Prazos', r.prazos)}
         ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
         <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
