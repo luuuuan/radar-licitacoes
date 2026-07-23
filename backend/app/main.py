@@ -1718,21 +1718,29 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 
 
 # --------------------------- Inteligência de preço -------------------- #
-def _filtrar_outliers_preco(valores: list[float], multiplicador: float = 15,
-                            amostra_minima: int = 5) -> list[float]:
-    """Remove valores absurdamente distantes da mediana bruta da amostra —
-    normalmente erro de digitação do órgão no PNCP (ex.: valor total do lote
-    lançado no campo de valor unitário). Só age com amostra grande o
-    suficiente pra mediana bruta ser uma referência confiável; com poucas
-    ocorrências, uma variação real de preço poderia ser confundida com erro."""
+def _banda_outlier_preco(valores: list[float], multiplicador: float = 15,
+                         amostra_minima: int = 5) -> tuple[float, float] | None:
+    """Faixa [mediana_bruta/multiplicador, mediana_bruta*multiplicador] usada
+    pra reconhecer valor unitário absurdo (normalmente erro de digitação do
+    órgão no PNCP — ex.: valor total do lote lançado no campo de valor
+    unitário). None = amostra pequena demais pra mediana bruta ser confiável
+    (com poucas ocorrências, uma variação real de preço podia ser confundida
+    com erro)."""
     if len(valores) < amostra_minima:
-        return valores
+        return None
     ordenados = sorted(valores)
     n = len(ordenados)
     mediana_bruta = ordenados[n // 2] if n % 2 else (ordenados[n // 2 - 1] + ordenados[n // 2]) / 2
     if mediana_bruta <= 0:
+        return None
+    return mediana_bruta / multiplicador, mediana_bruta * multiplicador
+
+
+def _filtrar_outliers_preco(valores: list[float]) -> list[float]:
+    banda = _banda_outlier_preco(valores)
+    if banda is None:
         return valores
-    limite_inf, limite_sup = mediana_bruta / multiplicador, mediana_bruta * multiplicador
+    limite_inf, limite_sup = banda
     filtrados = [v for v in valores if limite_inf <= v <= limite_sup]
     return filtrados or valores   # nunca esvazia a amostra por engano
 
@@ -1803,6 +1811,59 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
         })
     saida.sort(key=lambda x: x["ocorrencias"], reverse=True)
     return saida
+
+
+@app.get("/api/inteligencia-preco/{produto_id}/editais")
+def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.get_current_user),
+                               db: Session = Depends(get_session)):
+    """Lista os editais que embasam as estatísticas de um produto na
+    Inteligência de preço, pra conferir de onde vêm os números (inclui os
+    que foram descartados do cálculo, com o motivo)."""
+    _produto_do_usuario(db, produto_id, user)   # 404 se o produto não é do usuário
+    matches = db.execute(
+        select(Match).where(Match.usuario_id == user.id, Match.detalhe.is_not(None))
+    ).scalars().all()
+
+    referencias = []   # (edital_id, numero do item)
+    for m in matches:
+        for d in (m.detalhe or {}).get("itens", []):
+            if d.get("produto_id") == produto_id and d.get("item") is not None:
+                referencias.append((m.edital_id, d["item"]))
+    if not referencias:
+        return []
+
+    edital_ids = {eid for eid, _ in referencias}
+    editais = {e.id: e for e in db.execute(
+        select(Edital).where(Edital.id.in_(edital_ids))).scalars()}
+    itens_map = {(it.edital_id, it.numero): it for it in db.execute(
+        select(ItemEdital).where(ItemEdital.edital_id.in_(edital_ids))).scalars()}
+
+    valores_validos = [it.valor_unitario for it in itens_map.values()
+                       if it.valor_unitario is not None and it.valor_unitario > 0]
+    banda = _banda_outlier_preco(valores_validos)
+
+    linhas = []
+    for edital_id, numero in referencias:
+        it = itens_map.get((edital_id, numero))
+        ed = editais.get(edital_id)
+        if not it or not ed:
+            continue
+        valor = it.valor_unitario
+        tem_valor = valor is not None and valor > 0
+        motivo_exclusao = None
+        if not tem_valor:
+            motivo_exclusao = "sem_valor"
+        elif banda is not None and not (banda[0] <= valor <= banda[1]):
+            motivo_exclusao = "fora_do_padrao"
+        linhas.append({
+            "edital_id": edital_id, "orgao": ed.orgao,
+            "municipio": ed.municipio, "uf": ed.uf,
+            "descricao_item": it.descricao, "valor_unitario": valor,
+            "link": ed.link, "usado_no_calculo": motivo_exclusao is None,
+            "motivo_exclusao": motivo_exclusao,
+        })
+    linhas.sort(key=lambda x: (not x["usado_no_calculo"], -(x["valor_unitario"] or 0)))
+    return linhas
 
 
 # --------------------------- Dashboard estático ----------------------- #

@@ -793,9 +793,9 @@
   <section id="t-precos" class="hidden">
     <div class="card">
       <h3 style="margin-top:0">Inteligência de preço</h3>
-      <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor estimado</strong> dos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
+      <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor unitário do item</strong> nos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
     </div>
-    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th></tr></thead>
+    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th><th></th></tr></thead>
       <tbody id="lista-precos"></tbody></table>
   </section>
 
@@ -1648,15 +1648,51 @@ async function mudarStatus(matchId, status){
 
 const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 
+let _precosCache = [];
 async function loadPrecos(){
-  $('#lista-precos').innerHTML=`<tr><td colspan=6 class="muted">${ICN.relogio} Calculando referências de preço…</td></tr>`;
+  $('#lista-precos').innerHTML=`<tr><td colspan=7 class="muted">${ICN.relogio} Calculando referências de preço…</td></tr>`;
   const ps=await api('/api/inteligencia-preco');
-  if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=6 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
+  _precosCache = ps;
+  if(!ps.length){ $('#lista-precos').innerHTML='<tr><td colspan=7 class="muted">Sem dados ainda. As referências aparecem conforme o radar coleta editais que casem com seus produtos.</td></tr>'; return; }
   $('#lista-precos').innerHTML=ps.map(p=>`<tr>
     <td>${esc(p.descricao)}</td><td>${p.ocorrencias}</td>
     <td>${fmtR(p.minimo)}</td><td><strong>${fmtR(p.mediana)}</strong></td>
     <td>${fmtR(p.maximo)}</td><td class="muted">${fmtR(p.preco_venda)}</td>
+    <td><button class="btn ghost" onclick="abrirEditaisPreco(${p.produto_id})">ver editais</button></td>
   </tr>`).join('');
+}
+
+async function abrirEditaisPreco(produtoId){
+  const descricao = (_precosCache.find(p=>p.produto_id===produtoId)||{}).descricao||'';
+  const mount=$('#modal-mount');
+  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando editais…</p></div></div>';
+  try{
+    const linhas=await api(`/api/inteligencia-preco/${produtoId}/editais`);
+    const motivoTxt={sem_valor:'sem valor informado pelo órgão', fora_do_padrao:'valor muito fora do padrão (provável erro do órgão)'};
+    const corpo = linhas.length ? `<table style="width:100%"><thead><tr>
+        <th>Órgão</th><th>Local</th><th>Valor do item</th><th></th></tr></thead>
+        <tbody>${linhas.map(l=>{
+          const local = [l.municipio, l.uf].filter(Boolean).join('/');
+          const link = linkSeguro(l.link);
+          const excluido = !l.usado_no_calculo;
+          return `<tr${excluido?' style="opacity:.55"':''}>
+            <td>${esc(l.orgao||'—')}</td>
+            <td class="muted">${esc(local||'—')}</td>
+            <td>${fmtR(l.valor_unitario)}${excluido?`<br><span class="muted" style="font-size:11px">excluído do cálculo — ${esc(motivoTxt[l.motivo_exclusao]||'')}</span>`:''}</td>
+            <td>${link?`<a href="${esc(link)}" target="_blank">Abrir edital ↗</a>`:''}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`
+      : '<p class="muted">Nenhum edital encontrado para este produto.</p>';
+    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
+      <div class="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Editais — ${esc(descricao)}</h3>
+          <button class="btn ghost" onclick="fecharModal()">fechar</button>
+        </div>${corpo}
+      </div></div>`;
+  }catch(e){
+    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao carregar os editais.</p></div></div>';
+  }
 }
 
 async function loadConfig(){
