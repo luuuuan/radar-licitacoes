@@ -1718,6 +1718,25 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 
 
 # --------------------------- Inteligência de preço -------------------- #
+def _filtrar_outliers_preco(valores: list[float], multiplicador: float = 15,
+                            amostra_minima: int = 5) -> list[float]:
+    """Remove valores absurdamente distantes da mediana bruta da amostra —
+    normalmente erro de digitação do órgão no PNCP (ex.: valor total do lote
+    lançado no campo de valor unitário). Só age com amostra grande o
+    suficiente pra mediana bruta ser uma referência confiável; com poucas
+    ocorrências, uma variação real de preço poderia ser confundida com erro."""
+    if len(valores) < amostra_minima:
+        return valores
+    ordenados = sorted(valores)
+    n = len(ordenados)
+    mediana_bruta = ordenados[n // 2] if n % 2 else (ordenados[n // 2 - 1] + ordenados[n // 2]) / 2
+    if mediana_bruta <= 0:
+        return valores
+    limite_inf, limite_sup = mediana_bruta / multiplicador, mediana_bruta * multiplicador
+    filtrados = [v for v in valores if limite_inf <= v <= limite_sup]
+    return filtrados or valores   # nunca esvazia a amostra por engano
+
+
 @app.get("/api/inteligencia-preco")
 def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
                        db: Session = Depends(get_session)):
@@ -1746,13 +1765,16 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
             referencias.append((m.edital_id, numero, produto_id))
             numeros_por_edital.setdefault(m.edital_id, set()).add(numero)
 
-    # busca de uma vez o valor unitário de todos os itens referenciados
+    # busca de uma vez o valor unitário de todos os itens referenciados —
+    # valor <= 0 conta como ausente (órgão não preencheu; PNCP manda 0 em vez
+    # de vazio), senão o "mínimo" da referência fica sempre zerado à toa.
     valor_do_item: dict[tuple[int, int], float] = {}
     if numeros_por_edital:
         for it in db.execute(
             select(ItemEdital).where(ItemEdital.edital_id.in_(numeros_por_edital.keys()))
         ).scalars():
-            if it.valor_unitario is not None and it.numero in numeros_por_edital.get(it.edital_id, ()):
+            if (it.valor_unitario is not None and it.valor_unitario > 0
+                    and it.numero in numeros_por_edital.get(it.edital_id, ())):
                 valor_do_item[(it.edital_id, it.numero)] = it.valor_unitario
 
     valores_por_produto: dict[int, list[float]] = {}
@@ -1766,6 +1788,7 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
         valores = valores_por_produto.get(p.id)
         if not valores:
             continue
+        valores = _filtrar_outliers_preco(valores)
         valores.sort()
         n = len(valores)
         mediana = valores[n // 2] if n % 2 else (valores[n // 2 - 1] + valores[n // 2]) / 2
