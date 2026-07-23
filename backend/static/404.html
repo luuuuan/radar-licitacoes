@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Página não encontrada — Radar de Licitações</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
+    --font-body:'Source Sans 3',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --font-heading:'Lexend',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
+    --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
+  }
+  *{box-sizing:border-box}
+  *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
+  svg *{transition:none}
+  @media (prefers-reduced-motion:reduce){ *{transition:none !important} }
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--txt);font-family:var(--font-body);
+    display:flex;align-items:center;justify-content:center;padding:24px}
+  .caixa{max-width:420px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .radar-ilustracao{width:150px;height:150px;margin-bottom:10px}
+  .radar-disco{position:relative;width:150px;height:150px;border-radius:50%;
+    border:2px solid var(--line);overflow:hidden;background:var(--panel)}
+  .radar-disco::before{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0 300deg, rgba(59,130,246,.5) 360deg);
+    animation:girar 2.6s linear infinite}
+  .radar-disco::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle, transparent 24%, var(--line) 25%, transparent 26%,
+      transparent 49%, var(--line) 50%, transparent 51%, transparent 74%, var(--line) 75%, transparent 76%)}
+  @keyframes girar{to{transform:rotate(360deg)}}
+  .radar-cruz{position:absolute;inset:0}
+  .radar-cruz::before,.radar-cruz::after{content:"";position:absolute;background:var(--line)}
+  .radar-cruz::before{left:0;right:0;top:50%;height:1px}
+  .radar-cruz::after{top:0;bottom:0;left:50%;width:1px}
+  .numero-404{font-family:var(--font-heading);font-size:56px;font-weight:700;
+    line-height:1;letter-spacing:1px;margin:6px 0 0;
+    background:linear-gradient(180deg,var(--txt),var(--muted));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  h1{font-family:var(--font-heading);font-size:20px;font-weight:600;margin:6px 0 0}
+  p{color:var(--muted);font-size:14px;line-height:1.5;margin:8px 0 22px;max-width:340px}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--accent);
+    border:none;color:#fff;padding:11px 22px;border-radius:8px;cursor:pointer;
+    font-size:14px;font-weight:600;font-family:inherit;text-decoration:none}
+  .btn:hover{filter:brightness(1.08)}
+  .rota{margin-top:20px;font-size:12px;color:var(--muted);
+    background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+    padding:6px 10px;font-family:monospace;word-break:break-all;max-width:100%}
+</style>
+<script>
+  // mesmo tema (claro/escuro) escolhido no app principal, antes do primeiro
+  // paint, pra essa página não ficar sempre escura nem "piscar"
+  try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('radar-tema')||'dark'); }
+  catch(e){}
+</script>
+</head>
+<body>
+  <div class="caixa">
+    <div class="radar-ilustracao">
+      <div class="radar-disco"><div class="radar-cruz"></div></div>
+    </div>
+    <div class="numero-404">404</div>
+    <h1>Página não encontrada</h1>
+    <p>O radar não encontrou nada neste endereço. A página pode ter sido movida ou o link está incorreto.</p>
+    <a class="btn" href="/">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+      Ir para o início
+    </a>
+    <div class="rota" id="rota-atual"></div>
+  </div>
+  <script>
+    // mostra o endereço que não foi encontrado, útil pra quem digitou errado
+    // ou seguiu um link quebrado perceber o que aconteceu
+    var el = document.getElementById('rota-atual');
+    if(el) el.textContent = location.pathname + location.search;
+  </script>
+</body>
+</html>

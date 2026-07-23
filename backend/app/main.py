@@ -30,8 +30,9 @@ from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse, Response
+from fastapi.responses import StreamingResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select, func
@@ -71,6 +72,17 @@ _PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
 BASE_DIR = os.path.dirname(__file__)
 # A pasta static fica em backend/static (um nível acima de backend/app)
 STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _pagina_de_erro(request: Request, exc: StarletteHTTPException):
+    """Página 404 personalizada pra navegação (link quebrado, URL digitada
+    errada). Chamadas de API continuam recebendo JSON — quem consome /api/*
+    é o próprio JS do app, que espera {"detail": ...}, não HTML."""
+    if exc.status_code == 404 and not request.url.path.startswith("/api/"):
+        return FileResponse(os.path.join(STATIC_DIR, "404.html"), status_code=404)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                        headers=getattr(exc, "headers", None))
 
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 
