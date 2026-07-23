@@ -7,8 +7,7 @@ from datetime import date, datetime, timedelta
 from .models import utcnow
 
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from .config import settings, parse_csv_str
@@ -138,6 +137,11 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
 
     resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
     novos_fortes: list[Edital] = []   # editais dos matches fortes recém-criados
+    # retrato do que já foi de fato persistido (o commit em lote pode falhar
+    # e ser desfeito por rollback — sem isso, o resumo/aviso reportaria
+    # progresso que na verdade nunca chegou a salvar no banco).
+    resumo_commitado = dict(resumo)
+    novos_fortes_commitados: list[Edital] = []
     for _i, ed in enumerate(editais):
         if progresso and _i % 50 == 0:
             progresso(_i, total)
@@ -147,10 +151,24 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         if _i > 0 and _i % 200 == 0:
             try:
                 db.commit()
+                resumo_commitado = dict(resumo)
+                novos_fortes_commitados = list(novos_fortes)
             except IntegrityError:
                 db.rollback()
+                resumo, novos_fortes = dict(resumo_commitado), list(novos_fortes_commitados)
                 log.warning("Conflito de matches em paralelo (usuário %s) — ignorado neste lote.",
                             usuario.id)
+            except OperationalError:
+                # a conexão com o banco caiu no meio da rodada (rodadas longas,
+                # com chamadas de IA intercaladas, dão tempo da conexão expirar
+                # do lado do provedor). O commit falho é desfeito por completo
+                # pelo rollback — só o que foi commitado em lotes ANTERIORES
+                # está realmente salvo, então o resumo volta pra esse ponto.
+                db.rollback()
+                resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
+                log.warning("Conexão com o banco caiu durante os matches do usuário %s "
+                           "— parando nesta rodada com o progresso já salvo.", usuario.id)
+                break
         existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
@@ -196,6 +214,14 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         db.rollback()
         log.warning("Conflito de matches em paralelo (usuário %s) — ignorado.", usuario.id)
         return {"editais": 0, "atualizados": 0, "fortes": 0}
+    except OperationalError:
+        # conexão caiu bem no commit final — o rollback desfaz essa última
+        # leva pendente, então o resumo/aviso voltam pro que foi de fato
+        # commitado nos lotes anteriores (o resto já está salvo no banco).
+        db.rollback()
+        resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
+        log.warning("Conexão com o banco caiu ao finalizar os matches do usuário %s "
+                   "— mantendo o progresso já commitado nesta rodada.", usuario.id)
 
     if novos_fortes and not recalcular_todos:
         _notificar_usuario(usuario, novos_fortes)
@@ -337,11 +363,21 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             db.commit()
         except Exception as e:
             log.exception("Falha ao gerar matches do usuário %s", u.id)
-            db.rollback()
-            if log_usuario is not None and u.id == usuario_id:
-                log_usuario.erro = str(e)[:500]
-                log_usuario.finalizado_em = utcnow()
-                db.commit()
+            # a própria recuperação do erro (rollback + salvar o erro no log)
+            # também pode falhar se foi a conexão com o banco que caiu — sem
+            # este try/except aqui dentro, essa segunda falha escapa e derruba
+            # a coleta inteira, deixando todo mundo depois de u sem log fechado.
+            try:
+                db.rollback()
+                if log_usuario is not None and u.id == usuario_id:
+                    log_usuario.erro = str(e)[:500]
+                    log_usuario.finalizado_em = utcnow()
+                    db.commit()
+            except Exception:
+                log.exception("Também falhou ao registrar o erro do usuário %s "
+                              "(provável conexão com o banco indisponível) — seguindo "
+                              "para o próximo usuário.", u.id)
+                db.rollback()
 
     purgar_logs_antigos(db)
     log.info("Coleta concluída: %s", resumo)
