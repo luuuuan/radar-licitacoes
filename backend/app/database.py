@@ -83,6 +83,8 @@ if ("abertura_avisada", "BOOLEAN DEFAULT FALSE") not in _COLUNAS_NOVAS["matches"
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])
 if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("usuario_id", "INTEGER"))
+if ("origem", "VARCHAR(10)") not in _COLUNAS_NOVAS["logs_coleta"]:
+    _COLUNAS_NOVAS["logs_coleta"].append(("origem", "VARCHAR(10)"))
 _COLUNAS_NOVAS.setdefault("documentos", [])
 if ("link", "VARCHAR(500)") not in _COLUNAS_NOVAS["documentos"]:
     _COLUNAS_NOVAS["documentos"].append(("link", "VARCHAR(500)"))

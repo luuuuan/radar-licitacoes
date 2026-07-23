@@ -1445,7 +1445,7 @@ def logs(user: Usuario = Depends(_auth.get_current_user),
         .order_by(LogColeta.id.desc()).limit(30)
     ).scalars().all()
     return [{
-        "id": l.id, "fonte": l.fonte,
+        "id": l.id, "fonte": l.fonte, "origem": l.origem,
         "iniciado_em": _brt(l.iniciado_em),
         "finalizado_em": _brt(l.finalizado_em),
         "editais_novos": l.editais_novos, "editais_vistos": l.editais_vistos,

@@ -188,6 +188,7 @@ class LogColeta(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     fonte: Mapped[str] = mapped_column(String(40))
+    origem: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "manual" ou "cron"
     iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finalizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     editais_novos: Mapped[int] = mapped_column(Integer, default=0)

@@ -265,7 +265,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
     # preso mostrando a última coleta antiga (ou "nunca") até tudo finalizar.
     log_usuario = None
     if usuario_id is not None:
-        log_usuario = LogColeta(usuario_id=usuario_id, fonte="coleta", iniciado_em=utcnow())
+        log_usuario = LogColeta(usuario_id=usuario_id, fonte="coleta", origem="manual", iniciado_em=utcnow())
         db.add(log_usuario)
         db.commit()
 
@@ -328,7 +328,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
                 log_usuario.matches_fortes = r.get("fortes", 0)
             else:
                 db.add(LogColeta(
-                    usuario_id=u.id, fonte=fonte_label,
+                    usuario_id=u.id, fonte=fonte_label, origem="cron",
                     iniciado_em=inicio_user, finalizado_em=utcnow(),
                     editais_vistos=r.get("editais", 0),
                     editais_novos=r.get("atualizados", 0),

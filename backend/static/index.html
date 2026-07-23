@@ -804,6 +804,9 @@
     <div class="card">
       <h3 style="margin-top:0">Configurações de monitoramento</h3>
       <p class="muted" style="font-size:12px;margin-top:0">Defina o que o radar monitora.</p>
+      <div class="field"><label>Estados (UFs separadas por vírgula) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Restringe a busca no PNCP só a esses estados — a coleta fica bem mais rápida. Deixe em branco para buscar no Brasil inteiro.</span></span></label>
+        <input id="c-ufs" style="width:100%" placeholder="ex: SP,RJ,MG">
+        <span class="muted" style="font-size:11px">Vazio = busca em todos os estados</span></div>
       <div class="field"><label>Modalidades (códigos PNCP separados por vírgula)</label>
         <input id="c-modalidades" style="width:100%" placeholder="ex: 6,8,9,4">
         <span class="muted" style="font-size:11px">6=Pregão Eletrônico · 8=Dispensa · 9=Inexigibilidade · 4=Concorrência Eletrônica</span></div>
@@ -903,7 +906,7 @@
 
   <!-- LOGS -->
   <section id="t-logs" class="hidden">
-    <table><thead><tr><th>Fonte</th><th>Início</th><th>Fim</th>
+    <table><thead><tr><th>Fonte</th><th>Origem</th><th>Início</th><th>Fim</th>
       <th>Vistos <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Total de editais que a coleta examinou nessa rodada (tudo que o PNCP retornou para os seus filtros).</span></span></th>
       <th>Novos <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Desses, quantos eram inéditos e entraram no sistema (os que você ainda não tinha).</span></span></th>
       <th>Alta compat. <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Quantos editais novos ficaram com alta compatibilidade com o seu catálogo.</span></span></th>
@@ -1658,6 +1661,7 @@ async function loadPrecos(){
 
 async function loadConfig(){
   const c=await api('/api/config');
+  $('#c-ufs').value=c.PNCP_UFS||'';
   $('#c-modalidades').value=c.PNCP_MODALIDADES||'';
   $('#c-horizonte').value=c.PNCP_HORIZONTE_DIAS||'30';
   const disp = c.IA_DISPONIVEL==='1';
@@ -1676,6 +1680,7 @@ async function loadConfig(){
 
 async function salvarConfig(){
   const body={
+    PNCP_UFS:$('#c-ufs').value.trim().toUpperCase(),
     PNCP_MODALIDADES:$('#c-modalidades').value.trim(),
     PNCP_HORIZONTE_DIAS:$('#c-horizonte').value.trim()||'30',
     IA_ATIVA: $('#c-ia').checked ? '1' : '0',
@@ -1688,12 +1693,14 @@ async function salvarConfig(){
 
 async function loadLogs(){
   const ls=await api('/api/logs');
+  const origemTxt = {manual:'Manual', cron:'Automática'};
   $('#lista-logs').innerHTML=ls.map(l=>`<tr>
-    <td>${esc(l.fonte)}</td><td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
+    <td>${esc(l.fonte)}</td><td class="muted">${origemTxt[l.origem]||'—'}</td>
+    <td>${(l.iniciado_em||'').replace('T',' ').slice(0,16)}</td>
     <td>${(l.finalizado_em||'—').replace('T',' ').slice(0,16)}</td>
     <td>${l.editais_vistos}</td><td>${l.editais_novos}</td><td>${l.matches_fortes}</td>
     <td class="muted">${esc(l.erro||'')}</td></tr>`).join('')
-    ||'<tr><td colspan=7 class="muted">Sem coletas ainda.</td></tr>';
+    ||'<tr><td colspan=8 class="muted">Sem coletas ainda.</td></tr>';
 }
 
 function haTempo(seg){
