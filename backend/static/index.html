@@ -370,6 +370,15 @@
        de overflow:visible pra não cortar o dropdown "Meu negócio"/"Conta" que
        abre pra baixo */
     #topo-fixo.compacto .nav-compacta{max-width:700px;opacity:1;margin-left:16px;overflow:visible}
+    /* Folga extra no fim da página — sem ela, em telas com pouco conteúdo
+       (poucos editais, abas curtas etc.) o scroll máximo fica bem perto do
+       limiar de 60px que liga o modo compacto: ligar o compacto encolhe o
+       cabeçalho (147px→72px), o que reduz a altura total da página e
+       empurra o scroll de volta pra baixo de 60px — desligando o compacto,
+       que aumenta o cabeçalho de novo, cruzando o limiar outra vez. Um
+       piscar infinito bem na borda. Essa folga garante que sempre sobra
+       altura suficiente pra nunca ficar oscilando em cima do limiar. */
+    .wrap{padding-bottom:220px}
   }
 
   /* ---- Filtros dos editais: no celular ficam escondidos atrás de um botão
