@@ -149,6 +149,11 @@
       transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
   @keyframes spin{to{transform:rotate(360deg)}}
   #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
+  /* spinner pequeno pra estados de carregamento inline (reaproveita o mesmo
+     @keyframes spin do splash) */
+  .spinner-inline{display:inline-block;width:15px;height:15px;flex-shrink:0;
+    border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
+    animation:spin .8s linear infinite}
 
   /* ---- Modal de detalhes ---- */
   .modal{position:fixed;inset:0;background:var(--overlay);z-index:5000;
@@ -2000,6 +2005,17 @@ function _msgErroIA(detalhe){
 let _paginaEditalId = null;
 let _paginaEditalDetalhe = null;
 let _abaEditalAtual = 'itens';
+// incrementado a cada troca de aba/edital — uma resposta assíncrona (ex.: a
+// análise por IA, que pode demorar segundos) só é aplicada na tela se o
+// token que ela carrega ainda for o atual; senão o usuário já saiu daquela
+// aba/edital e a resposta chegando atrasada não deve sobrescrever o que
+// está sendo mostrado agora.
+let _abaEditalToken = 0;
+let _analiseCache = null;
+
+function _spinnerHTML(texto){
+  return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0"><span class="spinner-inline"></span>${esc(texto)}</p>`;
+}
 
 function abrirPaginaEdital(editalId, aba='itens'){
   history.pushState({view:'edital', editalId}, '', '/edital/'+editalId);
@@ -2026,10 +2042,11 @@ window.addEventListener('popstate', ev=>{
 
 async function _renderPaginaEdital(editalId, aba){
   _paginaEditalId = editalId;
+  _analiseCache = null;   // não carrega a análise de um edital antigo pro novo
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
-  $('#edital-cabecalho').innerHTML = '<p class="muted">Carregando…</p>';
+  $('#edital-cabecalho').innerHTML = _spinnerHTML('Carregando…');
   $('#edital-conteudo').innerHTML = '';
   try{
     _paginaEditalDetalhe = await api(`/api/editais/${editalId}/detalhe`);
@@ -2080,25 +2097,56 @@ async function _mudarStatusPaginaEdital(status){
 }
 
 async function abaEdital(nome, forcar){
+  const meuToken = ++_abaEditalToken;
+  const ativo = () => meuToken === _abaEditalToken;
   _abaEditalAtual = nome;
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===nome));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
+
+  // análise por IA não roda sozinha: mostra um botão (ou o resultado já
+  // buscado nesta sessão da página) em vez de disparar a IA a cada clique
+  // na aba.
+  if(nome==='analise'){
+    if(forcar) return _rodarAnaliseEdital(true);
+    cont.innerHTML = _analiseCache || _corpoAnaliseIntro();
+    return;
+  }
+
   try{
     if(nome==='itens'){
       cont.innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
     } else if(nome==='documentos'){
-      cont.innerHTML = '<p class="muted">Buscando documentos no PNCP…</p>';
-      cont.innerHTML = await _corpoDocumentosEdital(id);
-    } else if(nome==='analise'){
-      cont.innerHTML = '<p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p>';
-      cont.innerHTML = await _corpoAnaliseEdital(id, forcar);
+      cont.innerHTML = _spinnerHTML('Buscando documentos no PNCP…');
+      const html = await _corpoDocumentosEdital(id);
+      if(ativo()) cont.innerHTML = html;
     } else if(nome==='proposta'){
-      cont.innerHTML = '<p class="muted">Carregando proposta…</p>';
-      await _montarPropostaEdital(id);
+      cont.innerHTML = _spinnerHTML('Carregando proposta…');
+      await _montarPropostaEdital(id, ativo);
     }
   }catch(e){
-    cont.innerHTML = '<p>Erro ao carregar esta aba. Tente de novo.</p>';
+    if(ativo()) cont.innerHTML = '<p>Erro ao carregar esta aba. Tente de novo.</p>';
+  }
+}
+
+function _corpoAnaliseIntro(){
+  return `<p class="muted" style="margin-top:0;max-width:560px">A análise por IA lê o texto do edital publicado no PNCP e resume documentos exigidos, requisitos técnicos, prazos e pontos de atenção.</p>
+    <button class="btn" onclick="_rodarAnaliseEdital(false)">${ICN.ia||''} Realizar análise com IA</button>`;
+}
+
+async function _rodarAnaliseEdital(forcar){
+  const meuToken = ++_abaEditalToken;
+  _abaEditalAtual = 'analise';
+  document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba==='analise'));
+  const cont = $('#edital-conteudo');
+  const id = _paginaEditalId;
+  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+  try{
+    const html = await _corpoAnaliseEdital(id, forcar);
+    _analiseCache = html;
+    if(meuToken === _abaEditalToken) cont.innerHTML = html;
+  }catch(e){
+    if(meuToken === _abaEditalToken) cont.innerHTML = '<p>Erro ao analisar o edital.</p>';
   }
 }
 
@@ -2216,9 +2264,13 @@ async function _corpoAnaliseEdital(id, forcar){
 
 let _propEditalId = null;
 
-async function _montarPropostaEdital(id){
-  _propEditalId = id;
+async function _montarPropostaEdital(id, ativo){
   const p=await api(`/api/editais/${id}/proposta`);
+  // usuário já saiu desta aba/edital enquanto a proposta carregava — não
+  // sobrescreve o que está sendo mostrado agora, nem troca _propEditalId
+  // (senão "Salvar proposta" salvaria no edital errado).
+  if(ativo && !ativo()) return;
+  _propEditalId = id;
   window._propItens = (p.itens||[]).map(i=>({
     descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
