@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor
 from .service import processar_coleta
 from .catalogo import catmat
 
@@ -1721,25 +1721,49 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 @app.get("/api/inteligencia-preco")
 def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
                        db: Session = Depends(get_session)):
-    """Para cada produto, estatísticas dos valores estimados dos editais já
-    coletados em que ele apareceu como compatível. Dá uma referência de mercado
-    com base no histórico que o próprio sistema acumulou.
+    """Para cada produto, estatísticas do valor unitário estimado pelo órgão
+    nos itens de edital em que ele apareceu como compatível. Dá uma referência
+    de mercado com base no histórico que o próprio sistema acumulou.
 
-    Obs.: usa o valor ESTIMADO do edital (não o preço homologado do vencedor —
-    isso exigiria puxar os resultados/atas do PNCP, um passo futuro)."""
+    Obs.: usa o valor unitário ESTIMADO do item (não o preço homologado do
+    vencedor — isso exigiria puxar os resultados/atas do PNCP, um passo
+    futuro). Importante: é o valor do ITEM, não o valor total do edital —
+    um edital pode ter dezenas de itens somando milhões, mas o item que
+    casou com este produto pode valer poucos reais."""
     produtos = db.execute(select(Produto).where(Produto.usuario_id == user.id)).scalars().all()
+    matches = db.execute(
+        select(Match).where(Match.usuario_id == user.id, Match.detalhe.is_not(None))
+    ).scalars().all()
+
+    # (edital_id, número do item) -> produto_id, a partir do detalhe de cada match
+    numeros_por_edital: dict[int, set] = {}
+    referencias: list[tuple[int, int, int]] = []  # (edital_id, numero, produto_id)
+    for m in matches:
+        for d in (m.detalhe or {}).get("itens", []):
+            numero, produto_id = d.get("item"), d.get("produto_id")
+            if numero is None or produto_id is None:
+                continue
+            referencias.append((m.edital_id, numero, produto_id))
+            numeros_por_edital.setdefault(m.edital_id, set()).add(numero)
+
+    # busca de uma vez o valor unitário de todos os itens referenciados
+    valor_do_item: dict[tuple[int, int], float] = {}
+    if numeros_por_edital:
+        for it in db.execute(
+            select(ItemEdital).where(ItemEdital.edital_id.in_(numeros_por_edital.keys()))
+        ).scalars():
+            if it.valor_unitario is not None and it.numero in numeros_por_edital.get(it.edital_id, ()):
+                valor_do_item[(it.edital_id, it.numero)] = it.valor_unitario
+
+    valores_por_produto: dict[int, list[float]] = {}
+    for edital_id, numero, produto_id in referencias:
+        v = valor_do_item.get((edital_id, numero))
+        if v is not None:
+            valores_por_produto.setdefault(produto_id, []).append(v)
+
     saida = []
     for p in produtos:
-        # editais cujos matches DESTE usuário citam este produto no detalhe
-        q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-            .where(Match.usuario_id == user.id)
-        valores = []
-        for match, ed in db.execute(q).all():
-            if ed.valor_estimado is None:
-                continue
-            itens = (match.detalhe or {}).get("itens", []) if match.detalhe else []
-            if any(it.get("produto_id") == p.id for it in itens):
-                valores.append(ed.valor_estimado)
+        valores = valores_por_produto.get(p.id)
         if not valores:
             continue
         valores.sort()
