@@ -1919,6 +1919,17 @@ function _listaHTML(titulo, itens){
   return `<div style="margin-top:10px"><strong>${esc(titulo)}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${esc(i)}</li>`).join('')}</ul></div>`;
 }
 
+// mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
+// um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
+// pro usuário como se fosse limite diário do plano gratuito, o que confunde.
+function _msgErroIA(detalhe){
+  if(detalhe==='http_429') return 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
+  if(detalhe==='http_503'||detalhe==='http_502'||detalhe==='http_504') return 'O serviço de IA está sobrecarregado no momento (instabilidade do lado do Google, não é limite da sua conta). Tente novamente em alguns minutos.';
+  if(detalhe && detalhe.indexOf('rede:')===0) return 'Não foi possível conectar à IA agora (falha de rede ou tempo esgotado). Tente novamente.';
+  if(detalhe==='sem_resposta') return 'A IA não devolveu uma resposta válida agora. Tente refazer.';
+  return 'A IA não respondeu agora. Tente mais tarde.';
+}
+
 async function analisarEdital(id, forcar){
   const mount=$('#modal-mount');
   mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p></div></div>';
@@ -1950,7 +1961,7 @@ async function analisarEdital(id, forcar){
         sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
         vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
         sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
-        erro_ia:'A IA não respondeu agora (pode ser limite diário do plano gratuito). Tente mais tarde.',
+        erro_ia:_msgErroIA(r.detalhe),
         resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
       const portal = linkSeguro(r.portal);
       corpo = `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
