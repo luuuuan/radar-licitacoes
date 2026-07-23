@@ -199,6 +199,11 @@ class MatchingEngine:
         "peca", "pecas", "item", "itens", "produto", "produtos", "jogo", "jogos",
         "par", "pares", "embalagem", "tipo", "modelo", "diversos", "geral", "linha",
         "aquisicao", "servico", "servicos", "fornecimento", "tamanho",
+        # atributos descritivos genéricos demais (não identificam O QUE é o
+        # produto, só uma característica dele — ex.: "cor"/"cores" bate tanto
+        # em "Lápis de Cor" quanto em "resina odontológica NAS CORES A3,A2",
+        # produtos completamente diferentes que só compartilham o atributo)
+        "cor", "cores", "bloco", "blocos",
     }
     # palavras de ligação (preposições/artigos/conjunções) — não contam como "termo
     # em comum" na checagem de anti-coincidência, senão inflam a contagem sem
