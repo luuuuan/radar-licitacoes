@@ -201,6 +201,14 @@
   .status-sel.st-perdido,.status-sel.st-descartado{border-color:var(--destructive);color:var(--destructive)}
   .forn{margin-top:10px;font-size:13px;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px}
   .forn a{color:var(--accent);text-decoration:none}
+  /* abas internas da página do edital (itens/documentos/análise/proposta) */
+  .edital-abas{display:flex;gap:4px;flex-wrap:wrap;margin:16px 0 0;border-bottom:1px solid var(--line)}
+  .edital-abas button{background:none;border:none;border-bottom:2px solid transparent;
+    color:var(--muted);padding:10px 14px;min-height:44px;font-size:14px;font-family:inherit;
+    cursor:pointer;transition:color .15s,border-color .15s}
+  .edital-abas button:hover{color:var(--txt)}
+  .edital-abas button.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  #edital-conteudo{padding-top:16px}
   /* switch liga/desliga */
   .switch{position:relative;display:inline-block;width:46px;height:26px}
   .switch input{opacity:0;width:0;height:0}
@@ -606,6 +614,19 @@
       <p class="muted" style="font-size:12px;margin-top:0">Editais com o prazo já vencido e marcados como “proposta enviada”, “ganho” ou “perdido”. Atualize a situação de um edital na aba Editais para ele aparecer aqui.</p>
     </div>
     <div id="lista-encerrados"></div>
+  </section>
+
+  <!-- PÁGINA DO EDITAL (itens, documentos, análise IA, proposta num só lugar) -->
+  <section id="t-edital" class="hidden">
+    <button class="btn ghost" onclick="voltarDoEdital()" style="margin-bottom:14px">← Voltar</button>
+    <div id="edital-cabecalho"></div>
+    <div class="edital-abas">
+      <button data-aba="itens" onclick="abaEdital('itens')">Itens / margem</button>
+      <button data-aba="documentos" onclick="abaEdital('documentos')">Documentos</button>
+      <button data-aba="analise" onclick="abaEdital('analise')">Análise por IA</button>
+      <button data-aba="proposta" onclick="abaEdital('proposta')">Proposta</button>
+    </div>
+    <div id="edital-conteudo"></div>
   </section>
 
   <!-- CATALOGO -->
@@ -1230,10 +1251,7 @@ function cardEdital(e){
     ${det?`<div class="det">${det}</div>`:''}
     <div class="acoes">
       ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
-      <button class="btn ghost" onclick="baixarDocumentos(${e.edital_id})">${ICN.baixar} Baixar documentos</button>
-      <button class="btn ghost" onclick="analisarEdital(${e.edital_id})">${ICN.ia||''} Analisar com IA</button>
-      <button class="btn ghost" onclick="abrirProposta(${e.edital_id})">${ICN.proposta||''} Proposta</button>
-      <button class="btn ghost" onclick="abrirDetalhe(${e.edital_id})">${ICN.detalhe} detalhes / margem</button>
+      <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
       <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
         <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
@@ -1966,87 +1984,247 @@ function _msgErroIA(detalhe){
   return 'A IA não respondeu agora. Tente mais tarde.';
 }
 
-async function analisarEdital(id, forcar){
-  const mount=$('#modal-mount');
-  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p></div></div>';
+// ---------------------------------------------------------------------
+// Página do edital (/edital/{id}) — reúne itens/margem, documentos, análise
+// por IA e proposta num só lugar, no lugar dos 4 popups separados de antes.
+// ---------------------------------------------------------------------
+let _paginaEditalId = null;
+let _paginaEditalDetalhe = null;
+let _abaEditalAtual = 'itens';
+
+function abrirPaginaEdital(editalId, aba='itens'){
+  history.pushState({view:'edital', editalId}, '', '/edital/'+editalId);
+  _renderPaginaEdital(editalId, aba);
+}
+
+// NÃO usa history.back(): depender do histórico do navegador é frágil (se o
+// usuário chegou colando a URL direto ou vindo de outro site, back() pode
+// sair do app ou não fazer nada). Navega direto e explicitamente pro
+// dashboard, sempre.
+function voltarDoEdital(){
+  history.pushState({view:'dashboard'}, '', '/');
+  _fecharPaginaEdital();
+}
+function _fecharPaginaEdital(){
+  $('#t-edital').classList.add('hidden');
+  tab('editais');
+}
+window.addEventListener('popstate', ev=>{
+  const st = ev.state;
+  if(st && st.view==='edital') _renderPaginaEdital(st.editalId, 'itens');
+  else _fecharPaginaEdital();
+});
+
+async function _renderPaginaEdital(editalId, aba){
+  _paginaEditalId = editalId;
+  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
+    .forEach(t=>$('#t-'+t).classList.add('hidden'));
+  $('#t-edital').classList.remove('hidden');
+  $('#edital-cabecalho').innerHTML = '<p class="muted">Carregando…</p>';
+  $('#edital-conteudo').innerHTML = '';
   try{
-    const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`);
-    let corpo;
-    if(r.status==='ok'){
-      const flags=[];
-      if(r.exige_amostra) flags.push('Exige amostra');
-      if(r.exige_visita) flags.push('Exige visita técnica');
-      if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
-      if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
-      else if(r.julgamento==='item') flags.push('Julgamento por item');
-      corpo = `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
-        ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
-        ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
-        ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
-        ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
-        ${_listaHTML('Prazos', r.prazos)}
-        ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
-        <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
-          Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
-          <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="analisarEdital(${id},true)">refazer</button>
-        </div>`;
-    } else {
-      const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
-        sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
-        sem_ref:'Não foi possível localizar este edital no PNCP.',
-        sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
-        vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
-        sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
-        erro_ia:_msgErroIA(r.detalhe),
-        resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
-      const portal = linkSeguro(r.portal);
-      corpo = `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
-        ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
-    }
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
-      <div class="modal-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <h3 style="margin:0">Análise do edital (IA)</h3>
-          <button class="btn ghost" onclick="fecharModal()">fechar</button>
-        </div>${corpo}
-      </div></div>`;
+    _paginaEditalDetalhe = await api(`/api/editais/${editalId}/detalhe`);
+    _renderCabecalhoEdital();
+    abaEdital(aba);
   }catch(e){
-    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao analisar o edital.</p></div></div>';
+    $('#edital-cabecalho').innerHTML = '<div class="card"><p>Não consegui carregar este edital agora.</p></div>';
   }
+}
+
+function _renderCabecalhoEdital(){
+  const e = _paginaEditalDetalhe.edital;
+  const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
+  const linkPortal = linkSeguro(e.link);
+  $('#edital-cabecalho').innerHTML = `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div>
+        <h2 style="margin:0 0 4px">${esc(e.orgao||'Órgão')}</h2>
+        <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}${e.valor_estimado!=null?' · '+fmtMoeda(e.valor_estimado):''}</div>
+      </div>
+      ${e.match_id?`<select class="status-sel st-${e.status}" onchange="_mudarStatusPaginaEdital(this.value)" title="Acompanhamento">
+        <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+        <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+        <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+        <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+        <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+        <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+      </select>`:''}
+    </div>
+    <p style="line-height:1.45;margin:12px 0">${esc(e.objeto||'')}</p>
+    <div class="toolbar">
+      ${linkPortal?`<a class="btn ghost" href="${esc(linkPortal)}" target="_blank">Abrir edital no portal ${ICN.externo}</a>`:''}
+      ${e.match_id?`<button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>`:''}
+    </div>
+  </div>`;
+}
+
+async function _marcarPaginaEdital(campo, val){
+  await marcar(_paginaEditalDetalhe.edital.match_id, campo, val);
+  _paginaEditalDetalhe.edital[campo] = val;
+  _renderCabecalhoEdital();
+}
+async function _mudarStatusPaginaEdital(status){
+  await mudarStatus(_paginaEditalDetalhe.edital.match_id, status);
+  _paginaEditalDetalhe.edital.status = status;
+  _renderCabecalhoEdital();
+}
+
+async function abaEdital(nome, forcar){
+  _abaEditalAtual = nome;
+  document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===nome));
+  const cont = $('#edital-conteudo');
+  const id = _paginaEditalId;
+  try{
+    if(nome==='itens'){
+      cont.innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
+    } else if(nome==='documentos'){
+      cont.innerHTML = '<p class="muted">Buscando documentos no PNCP…</p>';
+      cont.innerHTML = await _corpoDocumentosEdital(id);
+    } else if(nome==='analise'){
+      cont.innerHTML = '<p class="muted">Lendo o edital e analisando com IA… isso pode levar alguns segundos.</p>';
+      cont.innerHTML = await _corpoAnaliseEdital(id, forcar);
+    } else if(nome==='proposta'){
+      cont.innerHTML = '<p class="muted">Carregando proposta…</p>';
+      await _montarPropostaEdital(id);
+    }
+  }catch(e){
+    cont.innerHTML = '<p>Erro ao carregar esta aba. Tente de novo.</p>';
+  }
+}
+
+function _corpoItensEdital(d){
+  function _itemRowHtml(it){
+    let bloco='';
+    if(it.compativel && it.produto){
+      const f=it.produto;
+      const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
+      const temConv = f.itens_por_unidade && f.itens_por_unidade>1;
+      const cu = it.custo_comparavel!=null ? fmtMoeda(it.custo_comparavel) : (f.preco_custo!=null?fmtMoeda(f.preco_custo):'—');
+      const cuLabel = temConv ? `meu custo / ${f.unidade_venda||'unid.'}` : 'meu custo';
+      let mg='—',cls='';
+      if(it.alerta_unidade){
+        mg='⚠ conferir'; cls='margem-neg';
+      } else if(it.margem!=null){
+        mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'');
+        cls=it.margem>=0?'margem-pos':'margem-neg';
+      }
+      bloco=`<div class="precos">
+          <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
+          <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
+          <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
+        </div>
+        ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
+        <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
+      if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
+        const siteForn = linkSeguro(f.fornecedor_site);
+        bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` · <a href="${esc(siteForn)}" target="_blank">site ↗</a>`:''}</div>`;
+      } else {
+        bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
+      }
+    } else {
+      bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
+    }
+    return `<div class="item-row ${it.compativel?'match':''}">
+      <strong>${it.compativel?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
+  }
+  if(!d.itens.length) return '<p class="muted">Este edital não trouxe itens detalhados.</p>';
+  const compativeis = d.itens.filter(it=>it.compativel);
+  const semMatch = d.itens.filter(it=>!it.compativel);
+  return `
+    ${compativeis.length?`<h3 style="margin:0 0 4px;font-size:14px">Itens compatíveis com seu catálogo (${compativeis.length})</h3>${compativeis.map(_itemRowHtml).join('')}`:''}
+    ${semMatch.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens sem produto compatível (${semMatch.length})</h3>${semMatch.map(_itemRowHtml).join('')}`:''}`;
+}
+
+async function _corpoDocumentosEdital(id){
+  const r=await api(`/api/editais/${id}/documentos`);
+  const arqs=r.arquivos||[];
+  if(arqs.length){
+    window._docsAtuais = arqs;
+    return `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
+      + (arqs.length>1?`<button class="btn ghost" onclick="baixarTodosDocumentos()" style="margin-bottom:10px">${ICN.baixar} Baixar todos (${arqs.length})</button>`:'')
+      + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
+          <a class="btn ghost" href="${esc(linkSeguro(a.url))}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
+          <span style="flex:1">${esc(a.titulo)}${a.tipo?` <span class="muted">· ${esc(a.tipo)}</span>`:''}</span>
+        </div>`).join('');
+  }
+  const motivo = r.status==='vazio' ? 'Este edital não tem arquivos publicados no PNCP.'
+    : 'Não foi possível obter os arquivos pela API do PNCP (alguns órgãos só publicam no portal próprio).';
+  const portal = linkSeguro(r.portal);
+  return `<p style="line-height:1.5">${motivo}</p>`
+    + (portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
+}
+
+// Baixa cada arquivo pelo proxy do backend (força download em vez de abrir
+// aba). Evita o bloqueador de pop-up do navegador — que só permite 1 aba por
+// clique — porque nenhuma aba nova chega a ser aberta.
+function baixarTodosDocumentos(){
+  (window._docsAtuais||[]).forEach(a=>{
+    const url = linkSeguro(a.url);
+    if(!url) return;
+    const link = document.createElement('a');
+    link.href = `/api/documentos/baixar?url=${encodeURIComponent(url)}&nome=${encodeURIComponent(a.titulo||'documento')}`;
+    link.download = a.titulo || 'documento';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  });
+}
+
+async function _corpoAnaliseEdital(id, forcar){
+  const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`);
+  if(r.status==='ok'){
+    const flags=[];
+    if(r.exige_amostra) flags.push('Exige amostra');
+    if(r.exige_visita) flags.push('Exige visita técnica');
+    if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+    if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
+    else if(r.julgamento==='item') flags.push('Julgamento por item');
+    return `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
+      ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
+      ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
+      ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
+      ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
+      ${_listaHTML('Prazos', r.prazos)}
+      ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
+      <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
+        Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
+        <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">refazer</button>
+      </div>`;
+  }
+  const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
+    sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
+    sem_ref:'Não foi possível localizar este edital no PNCP.',
+    sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
+    vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
+    sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
+    erro_ia:_msgErroIA(r.detalhe),
+    resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
+  const portal = linkSeguro(r.portal);
+  return `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
+    ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
 }
 
 let _propEditalId = null;
 
-async function abrirProposta(id){
+async function _montarPropostaEdital(id){
   _propEditalId = id;
-  const mount=$('#modal-mount');
-  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando proposta…</p></div></div>';
-  try{
-    const p=await api(`/api/editais/${id}/proposta`);
-    window._propItens = (p.itens||[]).map(i=>({
-      descricao:i.descricao||'', quantidade:+i.quantidade||0,
-      custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
-      <div class="modal-card" style="max-width:880px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <h3 style="margin:0">Proposta — ${esc(p.orgao||'edital')}</h3>
-          <button class="btn ghost" onclick="fecharModal()">fechar</button>
-        </div>
-        <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
-        <div id="prop-tabela"></div>
-        <div class="field" style="margin-top:10px"><label>Observações</label>
-          <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
-        <div class="toolbar" style="margin-top:10px">
-          <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
-          <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
-          <span style="flex:1"></span>
-          <span id="prop-msg" class="muted" style="font-size:12px"></span>
-        </div>
-      </div></div>`;
-    renderProposta();
-  }catch(e){
-    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao abrir a proposta.</p></div></div>';
-  }
+  const p=await api(`/api/editais/${id}/proposta`);
+  window._propItens = (p.itens||[]).map(i=>({
+    descricao:i.descricao||'', quantidade:+i.quantidade||0,
+    custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
+  $('#edital-conteudo').innerHTML = `
+    <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
+    <div id="prop-tabela"></div>
+    <div class="field" style="margin-top:10px"><label>Observações</label>
+      <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
+    <div class="toolbar" style="margin-top:10px">
+      <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
+      <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
+      <span style="flex:1"></span>
+      <span id="prop-msg" class="muted" style="font-size:12px"></span>
+    </div>`;
+  renderProposta();
 }
 
 function renderProposta(){
@@ -2097,116 +2275,6 @@ async function salvarProposta(){
   }catch(e){ $('#prop-msg').textContent='erro ao salvar'; }
 }
 
-async function baixarDocumentos(id){
-  const mount=$('#modal-mount');
-  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Buscando documentos no PNCP…</p></div></div>';
-  try{
-    const r=await api(`/api/editais/${id}/documentos`);
-    const arqs=r.arquivos||[];
-    let corpo;
-    if(arqs.length){
-      window._docsAtuais = arqs;
-      corpo = `<p class="muted" style="font-size:12px;margin-top:0">Arquivos publicados pelo órgão no PNCP. Clique para baixar.</p>`
-        + (arqs.length>1?`<button class="btn ghost" onclick="baixarTodosDocumentos()" style="margin-bottom:10px">${ICN.baixar} Baixar todos (${arqs.length})</button>`:'')
-        + arqs.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center">
-            <a class="btn ghost" href="${esc(linkSeguro(a.url))}" target="_blank" style="white-space:nowrap">${ICN.baixar} baixar</a>
-            <span style="flex:1">${esc(a.titulo)}${a.tipo?` <span class="muted">· ${esc(a.tipo)}</span>`:''}</span>
-          </div>`).join('');
-    } else {
-      const motivo = r.status==='vazio' ? 'Este edital não tem arquivos publicados no PNCP.'
-        : 'Não foi possível obter os arquivos pela API do PNCP (alguns órgãos só publicam no portal próprio).';
-      const portal = linkSeguro(r.portal);
-      corpo = `<p style="line-height:1.5">${motivo}</p>`
-        + (portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:'');
-    }
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
-      <div class="modal-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <h3 style="margin:0">Documentos do edital</h3>
-          <button class="btn ghost" onclick="fecharModal()">fechar</button>
-        </div>${corpo}
-      </div></div>`;
-  }catch(e){
-    mount.innerHTML='<div class="modal" onclick="fecharModal()"><div class="modal-card"><p>Erro ao buscar documentos.</p></div></div>';
-  }
-}
-
-// Baixa cada arquivo pelo proxy do backend (força download em vez de abrir
-// aba). Evita o bloqueador de pop-up do navegador — que só permite 1 aba por
-// clique — porque nenhuma aba nova chega a ser aberta.
-function baixarTodosDocumentos(){
-  (window._docsAtuais||[]).forEach(a=>{
-    const url = linkSeguro(a.url);
-    if(!url) return;
-    const link = document.createElement('a');
-    link.href = `/api/documentos/baixar?url=${encodeURIComponent(url)}&nome=${encodeURIComponent(a.titulo||'documento')}`;
-    link.download = a.titulo || 'documento';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  });
-}
-
-async function abrirDetalhe(id){
-  const mount=$('#modal-mount');
-  mount.innerHTML='<div class="modal"><div class="modal-card"><p class="muted">Carregando…</p></div></div>';
-  try{
-    const d=await api(`/api/editais/${id}/detalhe`);
-    const e=d.edital;
-    const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
-    function _itemRowHtml(it){
-      let bloco='';
-      if(it.compativel && it.produto){
-        const f=it.produto;
-        const vo=it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—';
-        const temConv = f.itens_por_unidade && f.itens_por_unidade>1;
-        const cu = it.custo_comparavel!=null ? fmtMoeda(it.custo_comparavel) : (f.preco_custo!=null?fmtMoeda(f.preco_custo):'—');
-        const cuLabel = temConv ? `meu custo / ${f.unidade_venda||'unid.'}` : 'meu custo';
-        let mg='—',cls='';
-        if(it.alerta_unidade){
-          mg='⚠ conferir'; cls='margem-neg';
-        } else if(it.margem!=null){
-          mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'');
-          cls=it.margem>=0?'margem-pos':'margem-neg';
-        }
-        bloco=`<div class="precos">
-            <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
-            <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
-            <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
-          </div>
-          ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
-          <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
-        if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
-          const siteForn = linkSeguro(f.fornecedor_site);
-          bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` · <a href="${esc(siteForn)}" target="_blank">site ↗</a>`:''}</div>`;
-        } else {
-          bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
-        }
-      } else {
-        bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
-      }
-      return `<div class="item-row ${it.compativel?'match':''}">
-        <strong>${it.compativel?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
-    }
-    const compativeis = d.itens.filter(it=>it.compativel);
-    const semMatch = d.itens.filter(it=>!it.compativel);
-    const itensHtml = `
-      ${compativeis.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens compatíveis com seu catálogo (${compativeis.length})</h3>${compativeis.map(_itemRowHtml).join('')}`:''}
-      ${semMatch.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens sem produto compatível (${semMatch.length})</h3>${semMatch.map(_itemRowHtml).join('')}`:''}`;
-    const linkEditalDet = linkSeguro(e.link);
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()">
-      <div class="modal-card">
-        <button class="close-x" onclick="fecharModal()">×</button>
-        <h2>${esc(e.orgao||'Órgão')}</h2>
-        <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}</div>
-        <p style="line-height:1.45">${esc(e.objeto||'')}</p>
-        ${linkEditalDet?`<a href="${esc(linkEditalDet)}" target="_blank" style="color:var(--accent)">Abrir edital no portal ↗</a>`:''}
-        ${d.itens.length?itensHtml:'<p class="muted">Este edital não trouxe itens detalhados.</p>'}
-      </div></div>`;
-  }catch(err){
-    mount.innerHTML=`<div class="modal" onclick="if(event.target===this)fecharModal()"><div class="modal-card"><button class="close-x" onclick="fecharModal()">×</button><p>Não consegui carregar os detalhes agora.</p></div></div>`;
-  }
-}
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
 
@@ -2338,6 +2406,15 @@ async function sair(){
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
+
+  // carregado direto em /edital/{id} (link colado/compartilhado/recarregado)
+  // — mesmo padrão do login.html: decide pela URL. Usa replaceState (não
+  // pushState) pra não empilhar um estado de história duplicado da mesma URL.
+  const mEdital = location.pathname.match(/^\/edital\/(\d+)$/);
+  if(mEdital){
+    history.replaceState({view:'edital', editalId:+mEdital[1]}, '', location.pathname);
+    _renderPaginaEdital(+mEdital[1], 'itens');
+  }
 })();
 </script>
 </body>

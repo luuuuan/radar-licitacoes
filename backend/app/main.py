@@ -1095,6 +1095,10 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "dias_restantes": dias,
             "nivel": match.nivel if match else None,
             "score": match.score if match else None,
+            "match_id": match.id if match else None,
+            "lido": match.lido if match else None,
+            "interessante": match.interessante if match else None,
+            "status": match.status if match else None,
         },
         "itens": itens,
     }
@@ -1869,6 +1873,17 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
 # --------------------------- Dashboard estático ----------------------- #
 @app.get("/")
 def index():
+    return FileResponse(
+        os.path.join(STATIC_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/edital/{edital_id}")
+def pagina_edital(edital_id: int):
+    """Página própria de um edital (itens, documentos, análise por IA,
+    proposta). Mesmo dashboard servido em '/' — o JS decide o que mostrar
+    lendo location.pathname (mesmo padrão de /login e afins abaixo)."""
     return FileResponse(
         os.path.join(STATIC_DIR, "index.html"),
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
