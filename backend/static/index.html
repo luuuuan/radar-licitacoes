@@ -1172,6 +1172,16 @@ function tab(name){
   // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
   // deixava a página do edital sobreposta, sem nunca sumir da tela.
   $('#t-edital').classList.add('hidden');
+  // devolve a URL pra "/" quando essa troca de aba parte de dentro de
+  // /edital/{id}. Checa location.pathname (não uma flag fixa) de propósito:
+  // se algo já mudou a URL antes de chamar tab() (ex.: voltarDoEdital, que
+  // já dá pushState pra "/"), o pathname aqui já não começa mais com
+  // "/edital/" e a gente não empurra um segundo estado de história à toa;
+  // e quando é o próprio evento popstate (voltar do navegador) que chamou
+  // tab() indiretamente, o navegador já trocou a URL sozinho antes do
+  // evento disparar, então também não entra aqui — evita duplicar/poluir
+  // o histórico de navegação.
+  if(location.pathname.startsWith('/edital/')) history.pushState({view:'dashboard'}, '', '/');
   // fecha o menu lateral no mobile e qualquer dropdown de grupo após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
