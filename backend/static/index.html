@@ -1167,6 +1167,11 @@ function tab(name){
     if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   });
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  // a página de um edital (#t-edital) não faz parte da lista acima — sem
+  // isso, ir para qualquer aba normal a partir dela (inclusive pelos cards
+  // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
+  // deixava a página do edital sobreposta, sem nunca sumir da tela.
+  $('#t-edital').classList.add('hidden');
   // fecha o menu lateral no mobile e qualquer dropdown de grupo após escolher
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
