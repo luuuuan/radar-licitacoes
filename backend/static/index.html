@@ -714,8 +714,11 @@
           <div class="field"><label>Contato do fornecedor</label>
             <input id="p-forn-contato" style="width:100%" placeholder="WhatsApp / e-mail"></div>
         </div>
-        <div class="field"><label>Site do fornecedor</label>
-          <input id="p-forn-site" style="width:100%" placeholder="https://..."></div>
+        <div class="field"><label>Site do fornecedor / página do item</label>
+          <div style="display:flex;gap:6px">
+            <input id="p-forn-site" style="flex:1" placeholder="https://...">
+            <button type="button" class="btn ghost" onclick="abrirSiteFornecedor()">abrir ↗</button>
+          </div></div>
 
         <div class="toolbar" style="margin-top:8px">
           <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
@@ -1614,6 +1617,12 @@ function aoEscolherFornecedor(){
   $('#p-forn-contato').value = f.whatsapp || f.telefone || f.email || '';
   $('#p-forn-site').value = f.site || '';
 }
+function abrirSiteFornecedor(){
+  const bruto = ($('#p-forn-site').value||'').trim();
+  if(!bruto) return;
+  const url = linkSeguro(bruto.startsWith('http')?bruto:'https://'+bruto);
+  if(url) window.open(url, '_blank');
+}
 
 let editandoFornId = null;
 let _fornecedores=[];   // cache local pra editarFornecedor(id) não precisar embutir JSON no HTML
@@ -1626,9 +1635,9 @@ async function loadFornecedores(){
     const wpp = f.whatsapp ? linkWhatsapp(f.whatsapp) : '';
     return `<tr>
     <td>${esc(f.nome)}</td><td>${esc(f.telefone||'—')}</td>
-    <td>${wpp?`<a href="${esc(wpp)}" target="_blank">${esc(f.whatsapp)} ↗</a>`:'—'}</td>
+    <td>${wpp?`<a class="btn ghost" href="${esc(wpp)}" target="_blank">WhatsApp ↗</a>`:'—'}</td>
     <td>${esc(f.email||'—')}</td>
-    <td>${site?`<a href="${esc(site)}" target="_blank">abrir ↗</a>`:'—'}</td>
+    <td>${site?`<a class="btn ghost" href="${esc(site)}" target="_blank">Site ↗</a>`:'—'}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarFornecedor(${f.id})">editar</button>
       <button class="btn ghost" onclick="delFornecedor(${f.id})">excluir</button>
@@ -2257,7 +2266,7 @@ function _corpoItensEdital(d){
         <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
       if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
         const siteForn = linkSeguro(f.fornecedor_site);
-        bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` · <a href="${esc(siteForn)}" target="_blank">site ↗</a>`:''}</div>`;
+        bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` <a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:6px;padding:2px 8px;font-size:11px">abrir página do item ↗</a>`:''}</div>`;
       } else {
         bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
       }
