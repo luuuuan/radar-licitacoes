@@ -178,8 +178,23 @@ class MatchingEngine:
                 and token not in self._STOPWORDS_RAD
                 and token not in self._UNIDADES_RAD)
 
+    def _tfidf_lote(self, textos: list[str]) -> list[tuple[float, int | None]]:
+        """Similaridade TF-IDF de VÁRIOS itens de uma vez (uma chamada só ao
+        vectorizer/cosine em vez de uma por item). O sklearn faz validação de
+        entrada (check_array) a cada chamada — repetir isso item a item numa
+        base com milhares de editais domina o tempo à toa, já que o resultado
+        matemático é idêntico ao de transformar um item por vez (bag-of-words
+        não tem interação entre linhas)."""
+        if self._vectorizer is None or self._matriz_prod is None or not textos:
+            return [(0.0, None)] * len(textos)
+        vecs = self._vectorizer.transform(textos)
+        sims = cosine_similarity(vecs, self._matriz_prod)
+        return [(float(row[j]), int(j)) for row, j in zip(sims, sims.argmax(axis=1))]
+
     # ---- score de um único item do edital contra todo o catálogo ----------
-    def _score_item(self, item: ItemEdt) -> tuple[float, ProdutoCat | None, str]:
+    def _score_item(self, item: ItemEdt, texto_busca: str | None = None,
+                    tfidf: tuple[float, int | None] | None = None,
+                    ) -> tuple[float, ProdutoCat | None, str]:
         melhor = 0.0
         melhor_prod: ProdutoCat | None = None
         motivo = ""
@@ -192,12 +207,17 @@ class MatchingEngine:
                 idx = self._idx_codigo[f"{chave}:{valor}"][0]
                 return 1.0, self.produtos[idx], f"código {chave.upper()} {valor}"
 
-        texto_item = item.texto_busca()
+        texto_item = texto_busca if texto_busca is not None else item.texto_busca()
         if not texto_item:
             return melhor, melhor_prod, motivo
 
-        # 2) similaridade TF-IDF
-        if self._vectorizer is not None and self._matriz_prod is not None:
+        # 2) similaridade TF-IDF — usa o resultado pré-calculado em lote por
+        # avaliar() quando disponível; senão calcula avulso (uso isolado, ex. testes).
+        if tfidf is not None:
+            sim, j = tfidf
+            if j is not None and sim > melhor:
+                melhor, melhor_prod, motivo = sim, self.produtos[j], "similaridade textual"
+        elif self._vectorizer is not None and self._matriz_prod is not None:
             vec = self._vectorizer.transform([texto_item])
             sims = cosine_similarity(vec, self._matriz_prod)[0]
             j = int(sims.argmax())
@@ -349,7 +369,14 @@ class MatchingEngine:
         alvos = itens if itens else [ItemEdt(numero=None, descricao=objeto or "")]
 
         # 1) Score TEXTUAL primeiro (grátis): é a peneira que decide se vale IA.
-        base = [self._score_item(it) for it in alvos]   # (sc, prod, motivo)
+        #    texto_busca() e o TF-IDF são calculados em LOTE (todos os itens do
+        #    edital de uma vez) em vez de item a item — editais com dezenas/
+        #    centenas de itens pagavam a validação de entrada do sklearn a cada
+        #    chamada individual, o que domina o tempo numa base grande.
+        textos_alvos = [it.texto_busca() for it in alvos]
+        tfidf_lote = self._tfidf_lote(textos_alvos)
+        base = [self._score_item(it, texto_busca=textos_alvos[i], tfidf=tfidf_lote[i])
+               for i, it in enumerate(alvos)]   # (sc, prod, motivo)
         max_txt = max((b[0] for b in base), default=0.0)
 
         # 2) Quando rodar a IA semântica:

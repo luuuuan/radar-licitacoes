@@ -164,7 +164,7 @@ def test_ia_sem_sinal_nao_penaliza_score_textual(monkeypatch):
     textual que já era bom."""
     catalogo = _catalogo()
     monkeypatch.setattr(MatchingEngine, "_score_item",
-                         lambda self, item: (0.5, catalogo[0], "similaridade textual"))
+                         lambda self, item, **kwargs: (0.5, catalogo[0], "similaridade textual"))
     _ligar_ia_falsa(monkeypatch, ia_score=0.0, ia_prod=None)
 
     eng = MatchingEngine(catalogo, usar_ia=True, gemini_key="fake-key")
@@ -181,7 +181,7 @@ def test_ia_com_sinal_combina_score(monkeypatch):
     catalogo = _catalogo()
     produto_ia = catalogo[1]
     monkeypatch.setattr(MatchingEngine, "_score_item",
-                         lambda self, item: (0.5, catalogo[0], "similaridade textual"))
+                         lambda self, item, **kwargs: (0.5, catalogo[0], "similaridade textual"))
     _ligar_ia_falsa(monkeypatch, ia_score=0.8, ia_prod=produto_ia)
 
     eng = MatchingEngine(catalogo, usar_ia=True, gemini_key="fake-key")
