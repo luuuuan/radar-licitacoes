@@ -664,6 +664,9 @@
           <button class="btn ghost" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
         </div>
         <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="filtrarProdutos()">
+        <select id="filtro-fornecedor" onchange="filtrarProdutos()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
+          <option value="">Todos os fornecedores</option>
+        </select>
         <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
       </div>
     </div>
@@ -1407,13 +1410,30 @@ let _produtos=[];
 async function loadProdutos(){
   const r=await api('/api/produtos?por_pagina=500');
   _produtos=r.resultados||[];
+  atualizarFiltroFornecedor();
   filtrarProdutos();
+}
+function atualizarFiltroFornecedor(){
+  // opções vêm dos fornecedores que aparecem em algum produto (não de
+  // /api/fornecedores) — assim não mostra fornecedor cadastrado sem
+  // nenhum produto vinculado, o que deixaria o filtro vazio sem explicação.
+  const sel = $('#filtro-fornecedor');
+  if(!sel) return;
+  const atual = sel.value;
+  const nomes = [...new Set(_produtos.map(p=>p.fornecedor_nome).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  sel.innerHTML = '<option value="">Todos os fornecedores</option>'
+    + nomes.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if(nomes.includes(atual)) sel.value = atual;
 }
 let _produtosVisiveis = [];
 let _produtosSelecionados = new Set();
 function filtrarProdutos(){
   const q=($('#busca-produto')?.value||'').toLowerCase().trim();
-  const ps=q?_produtos.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q)):_produtos;
+  const forn=$('#filtro-fornecedor')?.value||'';
+  let ps=_produtos;
+  if(forn) ps=ps.filter(p=>(p.fornecedor_nome||'')===forn);
+  if(q) ps=ps.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q));
   _produtosVisiveis = ps;
   $('#lista-produtos').innerHTML = ps.length
     ? ps.map(p=>`<tr>
@@ -1424,7 +1444,7 @@ function filtrarProdutos(){
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
       <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
     </td></tr>`).join('')
-    : `<tr><td colspan=6 class="muted">${q ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
+    : `<tr><td colspan=6 class="muted">${(q||forn) ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
   const chkTodos = $('#chk-todos-produtos');
   if(chkTodos) chkTodos.checked = ps.length>0 && ps.every(p=>_produtosSelecionados.has(p.id));
   atualizarBarraSelecaoProdutos();
