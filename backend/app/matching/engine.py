@@ -143,6 +143,12 @@ class MatchingEngine:
         self._prod_emb = None  # embeddings dos produtos (gerados sob demanda)
         self._textos_prod = [p.texto_busca() for p in produtos]         # stemizado, p/ TF-IDF
         self._textos_prod_naturais = [p.texto_natural() for p in produtos]  # p/ IA
+        # pré-computa palavras-chave (normalizar+sinônimos+stemming) UMA VEZ por
+        # produto — sem isso, _melhor_por_keywords reprocessaria o catálogo
+        # inteiro a cada item de cada edital, o que pesa muito com bases grandes
+        # (milhares de editais x itens x produtos).
+        self._keywords_prod = [p.keywords() for p in produtos]
+        self._prod_indice = {id(p): i for i, p in enumerate(produtos)}
         self._vectorizer = None
         self._matriz_prod = None
         if any(self._textos_prod):
@@ -216,7 +222,11 @@ class MatchingEngine:
         # batendo 1.0 só por causa da palavra "pasta"), não um sinal de confiança.
         if melhor_prod is not None:
             toks_item = {t for t in texto_item.split() if self._distintivo(t)}
-            toks_prod = {t for t in melhor_prod.texto_busca().split() if self._distintivo(t)}
+            # usa o texto já pré-computado no __init__ (self._textos_prod) em vez
+            # de chamar melhor_prod.texto_busca() de novo — evita reprocessar
+            # normalizar+sinônimos+stemming a cada item.
+            texto_prod = self._textos_prod[self._prod_indice[id(melhor_prod)]]
+            toks_prod = {t for t in texto_prod.split() if self._distintivo(t)}
             comuns = toks_item & toks_prod
             if len(comuns) <= 1 and melhor > 0.34:
                 termo = next(iter(comuns), "")
@@ -270,9 +280,9 @@ class MatchingEngine:
         """Avalia o catálogo contra o texto do item somando palavras-chave que
         casam. Retorna (score, produto, motivo) ou None."""
         melhor = None
-        for p in self.produtos:
+        for p, kws in zip(self.produtos, self._keywords_prod):
             especificas, genericas = [], 0
-            for kw in p.keywords():
+            for kw in kws:
                 if not kw or len(kw) < 2:
                     continue
                 casou = kw in texto_item
