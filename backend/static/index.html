@@ -1539,11 +1539,58 @@ async function delProduto(id){
 }
 
 function abrirCatalogoOficial(tipo){
-  // abre o catálogo oficial já com a descrição do produto como termo de busca
-  const termo = ($('#p-desc').value || '').trim();
-  const base = 'https://catalogo.compras.gov.br/cnbs-web/busca';
-  const url = termo ? `${base}?pesquisa=${encodeURIComponent(termo)}` : base;
-  window.open(url, '_blank');
+  const termoInicial = ($('#p-desc').value || '').trim();
+  const campoDestino = tipo==='material' ? 'p-catmat' : 'p-catser';
+  const rotulo = tipo==='material' ? 'CATMAT (material)' : 'CATSER (serviço)';
+  const mount = $('#modal-mount');
+  // z-index mais alto que .modal (5000): este modal abre POR CIMA do
+  // modal de cadastro de produto, que já está aberto e tem o mesmo
+  // z-index — sem isso, o desempate por ordem no DOM deixa o modal de
+  // produto por cima e intercepta os cliques deste aqui.
+  mount.innerHTML = `<div class="modal" style="z-index:5100" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:640px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0">Buscar ${rotulo} no catálogo oficial</h3>
+        <button class="btn ghost" onclick="fecharModal()">fechar</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input id="catmat-termo" style="flex:1" placeholder="Ex: papel sulfite A4" value="${esc(termoInicial)}"
+          onkeydown="if(event.key==='Enter')buscarCatalogoOficial('${tipo}','${campoDestino}')">
+        <button class="btn" onclick="buscarCatalogoOficial('${tipo}','${campoDestino}')">Buscar</button>
+      </div>
+      <div id="catmat-resultado"><p class="muted">Digite a descrição e clique em Buscar. Pode levar alguns segundos — a busca consulta o catálogo oficial do governo em tempo real.</p></div>
+    </div></div>`;
+  if(termoInicial) buscarCatalogoOficial(tipo, campoDestino);
+}
+
+async function buscarCatalogoOficial(tipo, campoDestino){
+  const termo = ($('#catmat-termo').value||'').trim();
+  const alvo = $('#catmat-resultado');
+  if(!alvo) return;   // modal foi fechado enquanto buscava
+  if(termo.length<2){ alvo.innerHTML='<p class="muted">Digite ao menos 2 caracteres.</p>'; return; }
+  alvo.innerHTML='<p class="muted">Buscando no catálogo oficial…</p>';
+  try{
+    const r = await api(`/api/catmat?tipo=${tipo}&descricao=${encodeURIComponent(termo)}`);
+    if(!$('#catmat-resultado')) return;   // fechou o modal antes da resposta chegar
+    if(!r.resultados || !r.resultados.length){
+      $('#catmat-resultado').innerHTML='<p class="muted">Nenhum resultado. Tente um termo mais genérico (ex.: "papel" em vez de "papel A4 branco 75g").</p>';
+      return;
+    }
+    $('#catmat-resultado').innerHTML = `<table style="width:100%"><thead><tr>
+        <th>Código</th><th>Descrição</th><th></th></tr></thead>
+      <tbody>${r.resultados.map(it=>`<tr>
+        <td style="white-space:nowrap;vertical-align:top">${esc(it.codigo)}</td>
+        <td style="font-size:13px">${esc(it.descricao)}${it.classe?`<br><span class="muted" style="font-size:11px">${esc(it.classe)}${it.unidade?' · '+esc(it.unidade):''}</span>`:''}${it.ativo===false?'<br><span class="muted" style="font-size:11px;color:var(--destructive)">inativo</span>':''}</td>
+        <td style="vertical-align:top"><button class="btn ghost" onclick="usarCodigoCatalogo('${campoDestino}',${it.codigo})">usar ${esc(it.codigo)}</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  }catch(e){
+    if($('#catmat-resultado')) $('#catmat-resultado').innerHTML='<p class="muted">Erro ao consultar o catálogo oficial. Tente novamente em instantes.</p>';
+  }
+}
+
+function usarCodigoCatalogo(campoDestino, codigo){
+  $('#'+campoDestino).value = codigo;
+  fecharModal();
 }
 
 // ---- Fornecedores ----
