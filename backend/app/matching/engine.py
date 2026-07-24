@@ -6,15 +6,18 @@ Estratégia em camadas, da mais forte para a mais fraca:
 1. Correspondência EXATA de código (NCM, CATMAT/CATSER, EAN) entre um produto
    do catálogo e um item do edital. Quando bate, é o sinal mais confiável.
 2. Similaridade TEXTUAL por TF-IDF + cosseno entre a descrição/keywords do
-   produto e a descrição do item.
+   produto e a descrição do item — o texto passa antes por sinônimos de
+   domínio (sinonimos.py) e stemming (stemming.py), pra "notebook"/
+   "computador portátil" e "caneta"/"canetas" contarem como o mesmo termo.
 3. Reforço por fuzzy matching de palavras-chave (rapidfuzz) para pegar
    variações de grafia.
 
 Cada item do edital recebe o melhor score contra o catálogo. O edital recebe
 um score agregado e um nível: fraco | medio | forte.
 
-Funciona 100% sem GPU e sem baixar modelos. Para busca semântica real
-(embeddings), veja matching/embeddings.py e o README.
+Funciona 100% sem GPU e sem baixar modelos (o stemmer Snowball do nltk é
+código puro, sem download). Para busca semântica real (embeddings), veja
+matching/embeddings.py e o README.
 """
 from __future__ import annotations
 import re
@@ -27,6 +30,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from ..config import settings
 from .embeddings import embeddings as _ia_embeddings, cosseno as _ia_cosseno, ia_disponivel
+from .sinonimos import aplicar_sinonimos
+from .stemming import radical, stemizar_texto
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +46,23 @@ def normalizar(texto: str | None) -> str:
     texto = re.sub(r"[^a-z0-9\s]", " ", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto
+
+
+def preparar_natural(texto: str | None) -> str:
+    """Normaliza e expande sinônimos, SEM stemming — usado para texto que
+    ainda precisa parecer linguagem natural (ex.: enviado à IA semântica,
+    que já entende sinônimo/flexão sozinha e piora com radicais truncados
+    tipo "comput")."""
+    return aplicar_sinonimos(normalizar(texto))
+
+
+def preparar(texto: str | None) -> str:
+    """Pipeline completo usado para comparar textos no matching TEXTUAL
+    local (TF-IDF/keyword): normaliza, expande sinônimos/abreviações de
+    domínio e aplica stemming. Mais agressivo que preparar_natural() — não
+    usar para texto mandado à IA nem em regra de exclusão (onde o termo deve
+    casar literalmente com o que o usuário digitou)."""
+    return stemizar_texto(preparar_natural(texto))
 
 
 def so_digitos(codigo: str | None) -> str:
@@ -64,7 +86,11 @@ class ProdutoCat:
     palavras_chave: str = ""
 
     def texto_busca(self) -> str:
-        return normalizar(f"{self.descricao} {self.palavras_chave or ''}")
+        return preparar(f"{self.descricao} {self.palavras_chave or ''}")
+
+    def texto_natural(self) -> str:
+        """Sem stemming — para mandar à IA semântica (embeddings)."""
+        return preparar_natural(f"{self.descricao} {self.palavras_chave or ''}")
 
     def codigos(self) -> dict[str, str]:
         return {
@@ -75,7 +101,7 @@ class ProdutoCat:
         }
 
     def keywords(self) -> list[str]:
-        return [normalizar(k) for k in (self.palavras_chave or "").split(",") if k.strip()]
+        return [preparar(k) for k in (self.palavras_chave or "").split(",") if k.strip()]
 
 
 @dataclass
@@ -86,7 +112,11 @@ class ItemEdt:
     catalogo_codigo: str = ""  # CATMAT/CATSER
 
     def texto_busca(self) -> str:
-        return normalizar(self.descricao)
+        return preparar(self.descricao)
+
+    def texto_natural(self) -> str:
+        """Sem stemming — para mandar à IA semântica (embeddings)."""
+        return preparar_natural(self.descricao)
 
 
 @dataclass
@@ -111,7 +141,8 @@ class MatchingEngine:
             settings.IA_ORCAMENTO_EXPLORACAO
             if (self.usar_ia and settings.IA_EXPLORAR_SEM_SINAL) else 0)
         self._prod_emb = None  # embeddings dos produtos (gerados sob demanda)
-        self._textos_prod = [p.texto_busca() for p in produtos]
+        self._textos_prod = [p.texto_busca() for p in produtos]         # stemizado, p/ TF-IDF
+        self._textos_prod_naturais = [p.texto_natural() for p in produtos]  # p/ IA
         self._vectorizer = None
         self._matriz_prod = None
         if any(self._textos_prod):
@@ -133,11 +164,13 @@ class MatchingEngine:
 
     def _distintivo(self, token: str) -> bool:
         """True se o token pode contar como termo distintivo em comum (não é
-        genérico, stopword, unidade de medida ou número solto)."""
+        genérico, stopword, unidade de medida ou número solto). Os tokens
+        aqui já passaram por stemming (via texto_busca/preparar), por isso a
+        checagem usa as versões stemizadas das listas de exclusão."""
         return (len(token) >= 2 and not token.isdigit()
-                and token not in self._GENERICAS
-                and token not in self._STOPWORDS
-                and token not in self._UNIDADES)
+                and token not in self._GENERICAS_RAD
+                and token not in self._STOPWORDS_RAD
+                and token not in self._UNIDADES_RAD)
 
     # ---- score de um único item do edital contra todo o catálogo ----------
     def _score_item(self, item: ItemEdt) -> tuple[float, ProdutoCat | None, str]:
@@ -223,6 +256,16 @@ class MatchingEngine:
         "cm2", "cm3", "pol", "polegada", "polegadas",
     }
 
+    # versões stemizadas das listas acima — o texto comparado nas checagens
+    # (_distintivo, _melhor_por_keywords) já passa por preparar()/radical(),
+    # então as listas de exclusão precisam do mesmo tratamento pra continuar
+    # batendo (ex.: "unidades" vira "unidad"). Como as listas originais já
+    # trazem singular E plural, o conjunto resultante cobre as duas formas
+    # mesmo quando o stemmer as reduz de jeitos diferentes.
+    _GENERICAS_RAD = {radical(w) for w in _GENERICAS}
+    _STOPWORDS_RAD = {radical(w) for w in _STOPWORDS}
+    _UNIDADES_RAD = {radical(w) for w in _UNIDADES}
+
     def _melhor_por_keywords(self, texto_item: str):
         """Avalia o catálogo contra o texto do item somando palavras-chave que
         casam. Retorna (score, produto, motivo) ou None."""
@@ -239,7 +282,7 @@ class MatchingEngine:
                         casou = True
                 if not casou:
                     continue
-                if kw in self._GENERICAS:
+                if kw in self._GENERICAS_RAD:
                     genericas += 1
                 else:
                     especificas.append(kw)
@@ -272,7 +315,7 @@ class MatchingEngine:
     # ---- avalia um edital inteiro -----------------------------------------
     def _emb_produtos(self):
         if self._prod_emb is None:
-            self._prod_emb = _ia_embeddings(self._textos_prod, api_key=self.gemini_key)
+            self._prod_emb = _ia_embeddings(self._textos_prod_naturais, api_key=self.gemini_key)
         return self._prod_emb
 
     def _ia_score_item(self, item_emb) -> tuple[float, ProdutoCat | None]:
@@ -315,7 +358,7 @@ class MatchingEngine:
         item_embs = [None] * len(alvos)
         if usar_ia_aqui:
             idxs = [i for i, (sc, _, _) in enumerate(base) if sc < settings.LIMIAR_FORTE]
-            textos = [(alvos[i].texto_busca() or normalizar(objeto or "")) for i in idxs]
+            textos = [(alvos[i].texto_natural() or preparar_natural(objeto or "")) for i in idxs]
             embs = _ia_embeddings(textos, api_key=self.gemini_key)
             for k, i in enumerate(idxs):
                 item_embs[i] = embs[k]
