@@ -2145,7 +2145,7 @@ function cadastrarDocumentoChecklist(idx){
 // pro usuário como se fosse limite diário do plano gratuito, o que confunde.
 function _msgErroIA(detalhe){
   if(detalhe==='http_429') return 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
-  if(detalhe==='http_503'||detalhe==='http_502'||detalhe==='http_504') return 'O serviço de IA está sobrecarregado no momento (instabilidade do lado do Google, não é limite da sua conta). Tente novamente em alguns minutos.';
+  if(detalhe==='http_503'||detalhe==='http_502'||detalhe==='http_504') return 'O serviço de IA está sobrecarregado no momento. Tente novamente em alguns minutos.';
   if(detalhe && detalhe.indexOf('rede:')===0) return 'Não foi possível conectar à IA agora (falha de rede ou tempo esgotado). Tente novamente.';
   if(detalhe==='sem_resposta') return 'A IA não devolveu uma resposta válida agora. Tente refazer.';
   return 'A IA não respondeu agora. Tente mais tarde.';
@@ -2460,23 +2460,48 @@ async function _corpoCotacaoEdital(id){
   const d = _paginaEditalDetalhe;
   const itens = (d && d.itens) || [];
   const compativeis = itens.filter(it=>it.compativel);
-  const linkDownload = `/api/editais/${id}/cotacao.xlsx`;
   if(!compativeis.length){
     return '<p class="muted" style="margin-top:0">Nenhum item deste edital bate com o seu catálogo — não há o que cotar.</p>';
   }
   const analisado = !!(d.edital && d.edital.analisado);
-  const itemTxt = compativeis.length === 1 ? 'item compatível' : 'itens compatíveis';
-  return `<p class="muted" style="margin-top:0">Exportar planilha de cotação com ${compativeis.length} ${itemTxt} do seu catálogo — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos.</p>
+  const linhas = compativeis.map(it=>{
+    const desc = it.descricao||'';
+    const descCurta = desc.length>100 ? desc.slice(0,100)+'…' : desc;
+    return `<tr>
+      <td><input type="checkbox" class="chk-cotacao-item" value="${it.numero}" checked></td>
+      <td style="white-space:nowrap">${esc(it.numero??'')}</td>
+      <td style="font-size:13px">${esc(descCurta)}</td>
+      <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
+    </tr>`;
+  }).join('');
+  return `<p class="muted" style="margin-top:0">Selecione os itens que entram na planilha de cotação — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos.</p>
+    <div style="overflow-x:auto"><table>
+      <thead><tr>
+        <th><input type="checkbox" id="chk-cotacao-todos" checked onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
+        <th>Item</th><th>Descrição</th><th>Produto do catálogo</th>
+      </tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+    <div style="margin-top:12px">
     ${analisado ? `
-      <button class="btn" onclick="window.open('${linkDownload}','_blank')">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
+      <button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
     ` : `
       <div class="pill medio" style="display:inline-block;margin-bottom:6px">A análise por IA ainda não foi feita para este edital</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
       <div class="toolbar">
-        <button class="btn ghost" onclick="window.open('${linkDownload}','_blank')">Gerar mesmo assim</button>
+        <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
         <button class="btn" onclick="_analisarEAtualizarCotacao()">${ICN.ia||''} Realizar análise com IA</button>
       </div>
-    `}`;
+    `}
+    </div>`;
+}
+function toggleTodosCotacao(chk){
+  document.querySelectorAll('.chk-cotacao-item').forEach(el=>{ el.checked = chk.checked; });
+}
+function baixarCotacao(){
+  const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
+  if(!selecionados.length){ alert('Selecione ao menos um item para cotar.'); return; }
+  window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?itens=${selecionados.join(',')}`, '_blank');
 }
 
 async function _analisarEAtualizarCotacao(){

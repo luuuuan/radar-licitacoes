@@ -1469,13 +1469,17 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
 
 
 @app.get("/api/editais/{edital_id}/cotacao.xlsx")
-def cotacao_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+def cotacao_edital(edital_id: int, itens: str | None = Query(None),
+                   user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
     """Planilha de cotação (mesmo modelo usado no dia do pregão): só os itens
     compatíveis com o catálogo, com fabricante/marca/modelo e valor mínimo
     (a partir do custo cadastrado). Alguns campos do cabeçalho (plataforma,
     horário da sessão) só saem preenchidos se a análise por IA já tiver
-    rodado pra este edital — o resto funciona sem ela."""
+    rodado pra este edital — o resto funciona sem ela.
+    `itens`: números separados por vírgula (ex.: "3,4") — o usuário escolhe
+    quais itens compatíveis entram na planilha; sem o parâmetro, entram
+    todos (mantém o link antigo funcionando)."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
     import json as _json
@@ -1498,13 +1502,21 @@ def cotacao_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         produtos = {p.id: p for p in db.execute(
             select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
 
+    numeros_selecionados: set[int] | None = None
+    if itens:
+        try:
+            numeros_selecionados = {int(n) for n in itens.split(",") if n.strip()}
+        except ValueError:
+            raise HTTPException(400, "Parâmetro 'itens' inválido — use números separados por vírgula.")
+
     itens_edital = db.execute(
         select(ItemEdital).where(ItemEdital.edital_id == edital_id)
         .order_by(ItemEdital.numero.asc())).scalars().all()
     linhas = [(it, produtos[mapa_produto[it.numero]]) for it in itens_edital
-             if it.numero in mapa_produto and mapa_produto[it.numero] in produtos]
+             if it.numero in mapa_produto and mapa_produto[it.numero] in produtos
+             and (numeros_selecionados is None or it.numero in numeros_selecionados)]
     if not linhas:
-        raise HTTPException(400, "Nenhum item deste edital bate com o seu catálogo — não há o que cotar.")
+        raise HTTPException(400, "Nenhum item selecionado bate com o seu catálogo — não há o que cotar.")
 
     analise = None
     if ed.analise_ia:
