@@ -639,6 +639,7 @@
       <button data-aba="documentos" onclick="abaEdital('documentos')">Documentos</button>
       <button data-aba="analise" onclick="abaEdital('analise')">Análise por IA</button>
       <button data-aba="proposta" onclick="abaEdital('proposta')">Proposta</button>
+      <button data-aba="cotacao" onclick="abaEdital('cotacao')">Cotação</button>
     </div>
     <div id="edital-conteudo"></div>
   </section>
@@ -688,6 +689,15 @@
 
         <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
           <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div class="field"><label>Fabricante</label>
+            <input id="p-fabricante" style="width:100%" placeholder="ex: Maxprint"></div>
+          <div class="field"><label>Marca</label>
+            <input id="p-marca" style="width:100%" placeholder="ex: Maxprint"></div>
+          <div class="field"><label>Modelo</label>
+            <input id="p-modelo" style="width:100%" placeholder="ex: MX-G20C"></div>
+        </div>
 
         <div class="grid2">
           <div class="field"><label>Meu custo (R$) — quanto você paga</label>
@@ -1502,6 +1512,7 @@ async function salvarProduto(){
   const txt = id => $('#'+id).value.trim()||null;
   const body={descricao:$('#p-desc').value,ncm:$('#p-ncm').value,ean:$('#p-ean').value,
     catmat:$('#p-catmat').value,catser:$('#p-catser').value,palavras_chave:$('#p-kw').value,
+    fabricante:txt('p-fabricante'), marca:txt('p-marca'), modelo:txt('p-modelo'),
     preco_custo:num('p-custo'), preco_venda:num('p-venda'),
     unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site'),
@@ -1520,6 +1531,7 @@ async function editarProduto(id){
   const set=(campo,val)=>$('#'+campo).value = (val==null?'':val);
   set('p-desc',p.descricao); set('p-ncm',p.ncm); set('p-ean',p.ean);
   set('p-catmat',p.catmat); set('p-catser',p.catser); set('p-kw',p.palavras_chave);
+  set('p-fabricante',p.fabricante); set('p-marca',p.marca); set('p-modelo',p.modelo);
   set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
   set('p-unidade',p.unidade_venda); set('p-itens-unid',p.itens_por_unidade);
   set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
@@ -1534,7 +1546,7 @@ async function editarProduto(id){
 
 function cancelarEdicao(){
   editandoId = null;
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site','p-forn-sel'].forEach(i=>{ const el=$('#'+i); if(el) el.value=''; });
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-fabricante','p-marca','p-modelo','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site','p-forn-sel'].forEach(i=>{ const el=$('#'+i); if(el) el.value=''; });
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
@@ -2264,6 +2276,10 @@ async function abaEdital(nome, forcar){
     } else if(nome==='proposta'){
       cont.innerHTML = _spinnerHTML('Carregando proposta…');
       await _montarPropostaEdital(id, ativo);
+    } else if(nome==='cotacao'){
+      cont.innerHTML = _spinnerHTML('Carregando cotação…');
+      const html = await _corpoCotacaoEdital(id);
+      if(ativo()) cont.innerHTML = html;
     }
   }catch(e){
     if(ativo()) cont.innerHTML = '<p>Erro ao carregar esta aba. Tente de novo.</p>';
@@ -2436,6 +2452,45 @@ async function _corpoAnaliseEdital(id, forcar){
   const portal = linkSeguro(r.portal);
   return `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
     ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
+}
+
+// ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens
+// compatíveis com o catálogo, no modelo que o usuário já usa em pregão. ----
+async function _corpoCotacaoEdital(id){
+  const d = _paginaEditalDetalhe;
+  const itens = (d && d.itens) || [];
+  const compativeis = itens.filter(it=>it.compativel);
+  const linkDownload = `/api/editais/${id}/cotacao.xlsx`;
+  if(!compativeis.length){
+    return '<p class="muted" style="margin-top:0">Nenhum item deste edital bate com o seu catálogo — não há o que cotar.</p>';
+  }
+  const analisado = !!(d.edital && d.edital.analisado);
+  return `<p class="muted" style="margin-top:0">A planilha sai com os ${compativeis.length} item(ns) do edital que batem com o seu catálogo, no mesmo modelo que você já usa (fabricante/marca/modelo, valor mínimo a partir do seu custo cadastrado).</p>
+    ${analisado ? `
+      <button class="btn" onclick="window.open('${linkDownload}','_blank')">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
+    ` : `
+      <div class="pill medio" style="display:inline-block;margin-bottom:6px">A análise por IA ainda não foi feita para este edital</div>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
+      <div class="toolbar">
+        <button class="btn ghost" onclick="window.open('${linkDownload}','_blank')">Gerar mesmo assim</button>
+        <button class="btn" onclick="_analisarEAtualizarCotacao()">${ICN.ia||''} Realizar análise com IA</button>
+      </div>
+    `}`;
+}
+
+async function _analisarEAtualizarCotacao(){
+  const id = _paginaEditalId;
+  const cont = $('#edital-conteudo');
+  const meuToken = ++_abaEditalToken;
+  const ativo = () => meuToken === _abaEditalToken;
+  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+  try{
+    const r = await api(`/api/editais/${id}/analise`);
+    if(r && r.status==='ok' && _paginaEditalDetalhe && _paginaEditalDetalhe.edital){
+      _paginaEditalDetalhe.edital.analisado = true;
+    }
+  }catch(e){}
+  if(ativo()) cont.innerHTML = await _corpoCotacaoEdital(id);
 }
 
 let _propEditalId = null;

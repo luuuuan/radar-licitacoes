@@ -90,7 +90,8 @@ if ("link", "VARCHAR(500)") not in _COLUNAS_NOVAS["documentos"]:
     _COLUNAS_NOVAS["documentos"].append(("link", "VARCHAR(500)"))
 _COLUNAS_NOVAS.setdefault("produtos", [])
 for _c in (("unidade_venda", "VARCHAR(20)"), ("itens_por_unidade", "FLOAT"),
-           ("fornecedor_id", "INTEGER")):
+           ("fornecedor_id", "INTEGER"), ("fabricante", "VARCHAR(160)"),
+           ("marca", "VARCHAR(160)"), ("modelo", "VARCHAR(160)")):
     if _c not in _COLUNAS_NOVAS["produtos"]:
         _COLUNAS_NOVAS["produtos"].append(_c)
 

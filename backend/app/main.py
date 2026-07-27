@@ -539,6 +539,9 @@ class ProdutoIn(BaseModel):
     catmat: str | None = None
     catser: str | None = None
     palavras_chave: str | None = None
+    fabricante: str | None = None
+    marca: str | None = None
+    modelo: str | None = None
     preco_custo: float | None = None
     preco_venda: float | None = None
     unidade_venda: str | None = None
@@ -636,6 +639,7 @@ def _produto_dict(p: Produto) -> dict:
         "id": p.id, "descricao": p.descricao, "ncm": p.ncm, "cest": p.cest,
         "ean": p.ean, "catmat": p.catmat, "catser": p.catser,
         "palavras_chave": p.palavras_chave, "ativo": p.ativo,
+        "fabricante": p.fabricante, "marca": p.marca, "modelo": p.modelo,
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
         "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
@@ -672,16 +676,19 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     ws = wb.active
     ws.title = "Produtos"
     cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
+             "fabricante", "marca", "modelo",
              "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
     ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
-               "7891234567890", "150123", "", "18,90", "24,50", "resma", "500",
+               "7891234567890", "150123", "", "", "", "",
+               "18,90", "24,50", "resma", "500",
                "(45) 99999-0000", "", "", ""])
     ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
-               "", "", "", "1,20", "2,00", "unidade", "",
+               "", "", "", "", "", "",
+               "1,20", "2,00", "unidade", "",
                "", "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
-    ws["K1"].comment = Comment(
+    ws["N1"].comment = Comment(
         "Se o telefone bater com um fornecedor já cadastrado na aba Fornecedores, "
         "o produto é vinculado a ele automaticamente (nome/contato/site vêm de lá "
         "— não precisa preencher as 3 colunas seguintes). Preencha-as só se o "
@@ -738,6 +745,7 @@ _COLS_IMPORT = {
     "palavras_chave": "palavras_chave", "palavras-chave": "palavras_chave",
     "palavras chave": "palavras_chave", "ncm": "ncm", "cest": "cest", "ean": "ean",
     "catmat": "catmat", "catser": "catser",
+    "fabricante": "fabricante", "marca": "marca", "modelo": "modelo",
     "preco_custo": "preco_custo", "preço_custo": "preco_custo", "custo": "preco_custo",
     "preco_venda": "preco_venda", "preço_venda": "preco_venda", "venda": "preco_venda",
     "unidade_venda": "unidade_venda", "unidade de venda": "unidade_venda",
@@ -1111,6 +1119,9 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "lido": match.lido if match else None,
             "interessante": match.interessante if match else None,
             "status": match.status if match else None,
+            # só indica SE já existe análise em cache — não dispara uma nova
+            # (evitar acionar a IA sem o usuário pedir explicitamente).
+            "analisado": bool(ed.analise_ia),
         },
         "itens": itens,
     }
@@ -1418,6 +1429,163 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
     return _anexar_checklist_documentos(resultado, user, db)
+
+
+# --------------------------- Cotação (planilha) ------------------------ #
+_MODALIDADE_ABREV = {
+    "pregao eletronico": "PE", "pregao presencial": "PP",
+    "concorrencia eletronica": "CE", "concorrencia presencial": "CP",
+    "dispensa": "DISPENSA", "inexigibilidade": "INEXIG.",
+    "credenciamento": "CREDENC.", "leilao eletronico": "LE",
+    "leilao presencial": "LP", "dialogo competitivo": "DC",
+    "concurso": "CONCURSO", "manifestacao de interesse": "MIP",
+    "pre qualificacao": "PRÉ-QUALIF.",
+}
+
+
+def _numero_processo_pncp(ed: Edital) -> str:
+    """Extrai ano/sequencial do PNCP (raw._ref_itens) pra montar "Nº seq/ano"
+    sem depender da IA — é dado estruturado, sempre confiável quando existe."""
+    raw = ed.raw or {}
+    ref = raw.get("_ref_itens")
+    if isinstance(ref, (list, tuple)) and len(ref) == 3 and ref[1] and ref[2]:
+        return f"{ref[2]}/{ref[1]}"
+    # fallback: o link do PNCP tem o mesmo ano/sequencial no formato
+    # .../editais/{cnpj}/{ano}/{sequencial}
+    if ed.link:
+        m = re.search(r"/editais/\d+/(\d{4})/(\d+)", ed.link)
+        if m:
+            return f"{m.group(2)}/{m.group(1)}"
+    return ""
+
+
+def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
+    from .matching.engine import normalizar
+    abrev = _MODALIDADE_ABREV.get(normalizar(ed.modalidade or ""), (ed.modalidade or "").upper())
+    numero = _numero_processo_pncp(ed)
+    orgao_dados = (analise or {}).get("dados_orgao") or {}
+    plataforma = orgao_dados.get("plataforma") or ""
+    data_sessao = orgao_dados.get("data_sessao") or (
+        ed.data_abertura.strftime("%d/%m/%Y") if ed.data_abertura else "")
+    partes = [p for p in ([f"Nº {numero}"] if numero else []) + [plataforma, data_sessao] if p]
+    return " - ".join([abrev] + partes) if abrev else " - ".join(partes)
+
+
+@app.get("/api/editais/{edital_id}/cotacao.xlsx")
+def cotacao_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                   db: Session = Depends(get_session)):
+    """Planilha de cotação (mesmo modelo usado no dia do pregão): só os itens
+    compatíveis com o catálogo, com fabricante/marca/modelo e valor mínimo
+    (a partir do custo cadastrado). Alguns campos do cabeçalho (plataforma,
+    horário da sessão) só saem preenchidos se a análise por IA já tiver
+    rodado pra este edital — o resto funciona sem ela."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment
+    import json as _json
+
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    mapa_produto: dict[int, int] = {}
+    if match and match.detalhe:
+        for d in (match.detalhe.get("itens") or []):
+            if d.get("item") is not None and d.get("produto_id"):
+                mapa_produto[d["item"]] = d["produto_id"]
+
+    prod_ids = set(mapa_produto.values())
+    produtos = {}
+    if prod_ids:
+        produtos = {p.id: p for p in db.execute(
+            select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
+
+    itens_edital = db.execute(
+        select(ItemEdital).where(ItemEdital.edital_id == edital_id)
+        .order_by(ItemEdital.numero.asc())).scalars().all()
+    linhas = [(it, produtos[mapa_produto[it.numero]]) for it in itens_edital
+             if it.numero in mapa_produto and mapa_produto[it.numero] in produtos]
+    if not linhas:
+        raise HTTPException(400, "Nenhum item deste edital bate com o seu catálogo — não há o que cotar.")
+
+    analise = None
+    if ed.analise_ia:
+        try:
+            analise = _json.loads(ed.analise_ia)
+        except ValueError:
+            analise = None
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cotação"
+    negrito = Font(bold=True)
+    quebra = Alignment(wrap_text=True, vertical="top")
+
+    ws.append([f"CLIENTE: {ed.orgao or ''}  CNPJ: {ed.cnpj_orgao or ''}"])
+    ws["A1"].font = negrito
+    ws.append([_linha_cabecalho_cotacao(ed, analise)])
+    ws.append([])
+    cabec = ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL",
+             "VALOR MÍNIMO UNI.", "VALOR MÍNIMO TOTAL", "FABRICANTE", "MARCA", "MODELO"]
+    ws.append(cabec)
+    for c in ws[4]:
+        c.font = negrito
+
+    linha = 5
+    for it, prod in linhas:
+        ws.append([
+            it.numero, it.descricao, it.quantidade,
+            prod.preco_venda, f"=D{linha}*C{linha}",
+            prod.preco_custo, f"=F{linha}*C{linha}",
+            prod.fabricante, prod.marca, prod.modelo,
+        ])
+        ws.cell(row=linha, column=2).alignment = quebra
+        linha += 1
+
+    linha += 1  # linha em branco antes das notas
+    proposta = (analise or {}).get("dados_proposta") or {}
+    notas = []
+    if proposta.get("validade_dias"):
+        notas.append(f"PROPOSTA: {proposta['validade_dias']}")
+    if proposta.get("prazo_entrega"):
+        notas.append(f"ENTREGA: {proposta['prazo_entrega']}")
+    if proposta.get("garantia_produto"):
+        notas.append(f"GARANTIA: {proposta['garantia_produto']}")
+    for nota in notas:
+        ws.cell(row=linha, column=2, value=nota)
+        linha += 1
+
+    if notas:
+        linha += 1
+    for texto_fixo in (
+        "Todas as especificações do objeto conterão na proposta, principalmente "
+        "VALORES E MARCA (quando for o caso), garantia, especificações adicionais "
+        "do produto. Ainda poderá complementar as informações anexando à proposta "
+        "CATÁLOGOS e ATESTADOS, bem como demais documentos que pormenorizem",
+        "Declaração Conjunta de Anexo VI, e, aos participantes que deem preferência "
+        "à ASSINATURA DIGITAL nos documentos que exijam a assinatura da empresa ou "
+        "dos sócios",
+    ):
+        cel = ws.cell(row=linha, column=2, value=texto_fixo)
+        cel.alignment = quebra
+        linha += 2
+
+    larguras = {"A": 8, "B": 50, "C": 8, "D": 12, "E": 12,
+               "F": 14, "G": 14, "H": 16, "I": 16, "J": 16}
+    for col, larg in larguras.items():
+        ws.column_dimensions[col].width = larg
+
+    numero = _numero_processo_pncp(ed).replace("/", "-")
+    nome_arquivo = f"Cotacao_{numero}.xlsx" if numero else f"Cotacao_edital_{edital_id}.xlsx"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
 
 
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])

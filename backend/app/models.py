@@ -83,6 +83,10 @@ class Produto(Base):
     catser: Mapped[str | None] = mapped_column(String(20), nullable=True)  # serviço
     # Palavras-chave separadas por vírgula
     palavras_chave: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Usados na planilha de cotação (aba Cotação, na página do edital)
+    fabricante: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    marca: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    modelo: Mapped[str | None] = mapped_column(String(160), nullable=True)
     # Preços (para cálculo de margem)
     preco_custo: Mapped[float | None] = mapped_column(Float, nullable=True)   # quanto você paga
     preco_venda: Mapped[float | None] = mapped_column(Float, nullable=True)   # seu preço de venda
