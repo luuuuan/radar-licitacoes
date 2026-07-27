@@ -2482,6 +2482,22 @@ async function _corpoCotacaoEdital(id){
       </tr></thead>
       <tbody>${linhas}</tbody>
     </table></div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="field"><label>Frete de entrada (total) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Quanto custa trazer estes itens do fornecedor até você. É um valor total (não por item) — o sistema divide entre os itens selecionados proporcionalmente ao valor de cada um.</span></span></label>
+        <input id="cot-frete-entrada" type="number" step="0.01" style="width:100%" placeholder="ex: 80.00">
+        <label style="font-size:12px;font-weight:400;margin-top:4px;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="cot-frete-entrada-gratis" onchange="_toggleFreteInput('entrada')"> Frete de entrada grátis
+        </label>
+      </div>
+      <div class="field"><label>Frete de saída (total) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Quanto custa você entregar estes itens no órgão. É um valor total (não por item) — o sistema divide entre os itens selecionados proporcionalmente ao valor de cada um.</span></span></label>
+        <input id="cot-frete-saida" type="number" step="0.01" style="width:100%" placeholder="ex: 120.00">
+        <label style="font-size:12px;font-weight:400;margin-top:4px;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="cot-frete-saida-gratis" onchange="_toggleFreteInput('saida')"> Frete de saída grátis
+        </label>
+      </div>
+    </div>
+
     <div style="margin-top:12px">
     ${analisado ? `
       <button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
@@ -2498,10 +2514,23 @@ async function _corpoCotacaoEdital(id){
 function toggleTodosCotacao(chk){
   document.querySelectorAll('.chk-cotacao-item').forEach(el=>{ el.checked = chk.checked; });
 }
+function _toggleFreteInput(qual){
+  const gratis = $(`#cot-frete-${qual}-gratis`).checked;
+  const input = $(`#cot-frete-${qual}`);
+  input.disabled = gratis;
+  if(gratis) input.value = '';
+}
 function baixarCotacao(){
   const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
   if(!selecionados.length){ alert('Selecione ao menos um item para cotar.'); return; }
-  window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?itens=${selecionados.join(',')}`, '_blank');
+  const params = new URLSearchParams({itens: selecionados.join(',')});
+  const freteEntradaGratis = $('#cot-frete-entrada-gratis').checked;
+  const freteSaidaGratis = $('#cot-frete-saida-gratis').checked;
+  params.set('frete_entrada_gratis', freteEntradaGratis ? 'true' : 'false');
+  params.set('frete_saida_gratis', freteSaidaGratis ? 'true' : 'false');
+  if(!freteEntradaGratis && $('#cot-frete-entrada').value) params.set('frete_entrada', $('#cot-frete-entrada').value);
+  if(!freteSaidaGratis && $('#cot-frete-saida').value) params.set('frete_saida', $('#cot-frete-saida').value);
+  window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?${params.toString()}`, '_blank');
 }
 
 async function _analisarEAtualizarCotacao(){

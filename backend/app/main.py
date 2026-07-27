@@ -1470,16 +1470,25 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
 
 @app.get("/api/editais/{edital_id}/cotacao.xlsx")
 def cotacao_edital(edital_id: int, itens: str | None = Query(None),
+                   frete_entrada: float | None = Query(None),
+                   frete_entrada_gratis: bool = Query(False),
+                   frete_saida: float | None = Query(None),
+                   frete_saida_gratis: bool = Query(False),
                    user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
     """Planilha de cotação (mesmo modelo usado no dia do pregão): só os itens
     compatíveis com o catálogo, com fabricante/marca/modelo e valor mínimo
-    (a partir do custo cadastrado). Alguns campos do cabeçalho (plataforma,
-    horário da sessão) só saem preenchidos se a análise por IA já tiver
-    rodado pra este edital — o resto funciona sem ela.
+    (custo cadastrado + frete rateado entre os itens). Alguns campos do
+    cabeçalho (plataforma, horário da sessão) só saem preenchidos se a
+    análise por IA já tiver rodado pra este edital — o resto funciona sem ela.
     `itens`: números separados por vírgula (ex.: "3,4") — o usuário escolhe
     quais itens compatíveis entram na planilha; sem o parâmetro, entram
-    todos (mantém o link antigo funcionando)."""
+    todos (mantém o link antigo funcionando).
+    `frete_entrada`/`frete_saida`: valor TOTAL do frete (fornecedor→você e
+    você→órgão), informado na hora — muda a cada cotação, não fica salvo em
+    lugar nenhum. Rateado entre os itens proporcionalmente ao valor total de
+    cada um (valor do órgão × quantidade). `*_gratis=true` zera o respectivo
+    frete mesmo que um valor tenha vindo no campo."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
     import json as _json
@@ -1518,6 +1527,18 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     if not linhas:
         raise HTTPException(400, "Nenhum item selecionado bate com o seu catálogo — não há o que cotar.")
 
+    frete_entrada_total = 0.0 if frete_entrada_gratis else (frete_entrada or 0.0)
+    frete_saida_total = 0.0 if frete_saida_gratis else (frete_saida or 0.0)
+    # rateio proporcional ao valor total de cada item (valor do órgão × qtd) —
+    # item mais caro "puxa" mais frete que um barato. Sem valor do órgão em
+    # nenhum item (raro, mas acontece), cai pra rateio igual entre os itens.
+    valores_item = [(it.valor_unitario or 0.0) * (it.quantidade or 0.0) for it, _ in linhas]
+    soma_valores = sum(valores_item)
+    if soma_valores > 0:
+        pesos = [v / soma_valores for v in valores_item]
+    else:
+        pesos = [1.0 / len(linhas)] * len(linhas)
+
     analise = None
     if ed.analise_ia:
         try:
@@ -1542,11 +1563,14 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         c.font = negrito
 
     linha = 5
-    for it, prod in linhas:
+    for (it, prod), peso in zip(linhas, pesos):
+        qtd = it.quantidade or 0.0
+        frete_rateado_unit = ((frete_entrada_total + frete_saida_total) * peso / qtd) if qtd else 0.0
+        custo_com_frete = round((prod.preco_custo or 0.0) + frete_rateado_unit, 4)
         ws.append([
             it.numero, it.descricao, it.quantidade,
-            prod.preco_venda, f"=D{linha}*C{linha}",
-            prod.preco_custo, f"=F{linha}*C{linha}",
+            it.valor_unitario, f"=D{linha}*C{linha}",
+            custo_com_frete, f"=F{linha}*C{linha}",
             prod.fabricante, prod.marca, prod.modelo,
         ])
         ws.cell(row=linha, column=2).alignment = quebra
@@ -1555,6 +1579,14 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     linha += 1  # linha em branco antes das notas
     proposta = (analise or {}).get("dados_proposta") or {}
     notas = []
+    if frete_entrada_gratis:
+        notas.append("FRETE DE ENTRADA: grátis")
+    elif frete_entrada:
+        notas.append(f"FRETE DE ENTRADA (total, rateado entre os itens): R$ {frete_entrada:.2f}")
+    if frete_saida_gratis:
+        notas.append("FRETE DE SAÍDA: grátis")
+    elif frete_saida:
+        notas.append(f"FRETE DE SAÍDA (total, rateado entre os itens): R$ {frete_saida:.2f}")
     if proposta.get("validade_dias"):
         notas.append(f"PROPOSTA: {proposta['validade_dias']}")
     if proposta.get("prazo_entrega"):
