@@ -165,9 +165,16 @@ class Match(Base):
     detalhe: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # quais itens casaram
     lido: Mapped[bool] = mapped_column(Boolean, default=False)
     interessante: Mapped[bool] = mapped_column(Boolean, default=False)
-    notificado: Mapped[bool] = mapped_column(Boolean, default=False)
-    prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado
-    abertura_avisada: Mapped[bool] = mapped_column(Boolean, default=False)  # aviso de abertura próxima já enviado
+    # e-mail (imediato, agrupado) e Telegram (menu interativo) têm cada um seu
+    # próprio controle de "já avisei isso" — o Telegram só marca quando o
+    # usuário efetivamente pede pra ver aquela categoria no menu, então não
+    # pode reusar a mesma flag do e-mail (senão o e-mail marcaria e o item
+    # nunca mais apareceria no menu do Telegram, mesmo sem o usuário ter visto).
+    notificado: Mapped[bool] = mapped_column(Boolean, default=False)  # alta compatibilidade -> Telegram
+    prazo_avisado: Mapped[bool] = mapped_column(Boolean, default=False)  # lembrete de prazo já enviado (e-mail)
+    prazo_avisado_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
+    abertura_avisada: Mapped[bool] = mapped_column(Boolean, default=False)  # aviso de abertura próxima já enviado (e-mail)
+    abertura_avisada_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -224,7 +231,8 @@ class Documento(Base):
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
-    avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)
+    avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)             # e-mail
+    avisado_para_telegram: Mapped[date | None] = mapped_column(Date, nullable=True)    # menu do Telegram
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

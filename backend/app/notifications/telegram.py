@@ -54,3 +54,43 @@ def enviar_para_chat(chat_id: str, titulo: str, corpo: str,
     except Exception as e:
         log.warning("Falha ao enviar Telegram para %s: %s", chat_id, e)
         return False
+
+
+def enviar_menu(chat_id: str, titulo: str, corpo: str, botoes: list[tuple[str, str]]) -> bool:
+    """Mensagem com botões de CALLBACK (não de link) — ao tocar, o Telegram
+    manda um `callback_query` pro webhook em vez de só abrir uma URL.
+    `botoes`: lista de (texto_do_botão, callback_data). Cada botão numa
+    linha própria (menu vertical, mais fácil de ler que lado a lado)."""
+    if not (settings.TELEGRAM_BOT_TOKEN and chat_id):
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": f"{titulo}\n\n{corpo}" if titulo else corpo,
+            "parse_mode": "HTML",
+            "reply_markup": {
+                "inline_keyboard": [[{"text": texto, "callback_data": dado}] for texto, dado in botoes]
+            },
+        }
+        r = requests.post(url, json=payload, timeout=20)
+        return r.status_code == 200
+    except Exception as e:
+        log.warning("Falha ao enviar menu Telegram para %s: %s", chat_id, e)
+        return False
+
+
+def responder_callback(callback_query_id: str, texto: str | None = None) -> None:
+    """Confirma o toque no botão pro Telegram (senão o botão fica "carregando"
+    pro usuário até dar timeout). Não precisa de resposta bem-sucedida — é
+    só cosmético, uma falha aqui não deve derrubar o resto do fluxo."""
+    if not (settings.TELEGRAM_BOT_TOKEN and callback_query_id):
+        return
+    try:
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+        payload = {"callback_query_id": callback_query_id}
+        if texto:
+            payload["text"] = texto
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        log.warning("Falha ao responder callback Telegram: %s", e)

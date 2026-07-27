@@ -4,9 +4,14 @@ Lembretes automáticos, agrupados por usuário e por tipo:
 - Prazos: editais interessantes/compatíveis com proposta ENCERRANDO.
 - Documentos: certidões/documentos de habilitação prestes a vencer.
 
-Roda junto da coleta. Cada TIPO vira UM aviso agrupado (um e-mail com todos os
-editais daquele tipo; no Telegram, uma mensagem por edital com botão).
-Cada item é avisado só uma vez (flags no banco), para não virar spam.
+Roda junto da coleta. Cada TIPO vira UM e-mail agrupado (todos os editais
+daquele tipo, num cartão cada). Cada item é avisado só uma vez por e-mail
+(flags no banco), para não virar spam.
+
+O Telegram NÃO é mandado daqui — essas mesmas categorias (mais "alta
+compatibilidade") viram um menu interativo à parte (telegram_menu.py),
+com suas próprias flags de "já visto", pra o usuário escolher o que quer
+ver em vez de receber tudo de uma vez. Ver _rodar_coleta_bg em main.py.
 """
 import logging
 from datetime import date
@@ -50,7 +55,7 @@ def verificar_aberturas(db: Session) -> int:
         titulo = (f"📢 {len(itens)} edital(is) vão abrir em breve"
                   if len(itens) > 1 else "📢 Um edital vai abrir em breve")
         intro = "Editais compatíveis com seus produtos que vão abrir em breve — dá tempo de preparar a documentação."
-        if notificar_usuario_lote(usuario, titulo, intro, itens):
+        if notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",)):
             for m in marcados[uid]:
                 m.abertura_avisada = True
             enviados += 1
@@ -87,7 +92,7 @@ def verificar_prazos(db: Session) -> int:
         titulo = (f"⏰ {len(itens)} edital(is) com prazo encerrando"
                   if len(itens) > 1 else "⏰ Um edital com prazo encerrando")
         intro = "O prazo de envio de propostas está acabando nestes editais."
-        if notificar_usuario_lote(usuario, titulo, intro, itens):
+        if notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",)):
             for m in marcados[uid]:
                 m.prazo_avisado = True
             enviados += 1
@@ -134,7 +139,7 @@ def verificar_documentos(db: Session) -> int:
         titulo = (f"📄 {len(itens)} documento(s) a vencer"
                   if len(itens) > 1 else "📄 Um documento a vencer")
         intro = "Atenção aos seus documentos de habilitação com validade próxima."
-        if notificar_usuario_lote(usuario, titulo, intro, itens):
+        if notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",)):
             for doc, validade in marcados[uid]:
                 doc.avisado_para = validade
             enviados += 1

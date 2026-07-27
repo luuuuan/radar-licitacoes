@@ -78,16 +78,20 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("token_reset_expira", "TIMESTAMP"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
-if ("abertura_avisada", "BOOLEAN DEFAULT FALSE") not in _COLUNAS_NOVAS["matches"]:
-    _COLUNAS_NOVAS["matches"].append(("abertura_avisada", "BOOLEAN DEFAULT FALSE"))
+for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),
+          ("prazo_avisado_telegram", "BOOLEAN DEFAULT FALSE"),
+          ("abertura_avisada_telegram", "BOOLEAN DEFAULT FALSE")):
+    if _c not in _COLUNAS_NOVAS["matches"]:
+        _COLUNAS_NOVAS["matches"].append(_c)
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])
 if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("usuario_id", "INTEGER"))
 if ("origem", "VARCHAR(10)") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("origem", "VARCHAR(10)"))
 _COLUNAS_NOVAS.setdefault("documentos", [])
-if ("link", "VARCHAR(500)") not in _COLUNAS_NOVAS["documentos"]:
-    _COLUNAS_NOVAS["documentos"].append(("link", "VARCHAR(500)"))
+for _c in (("link", "VARCHAR(500)"), ("avisado_para_telegram", "DATE")):
+    if _c not in _COLUNAS_NOVAS["documentos"]:
+        _COLUNAS_NOVAS["documentos"].append(_c)
 _COLUNAS_NOVAS.setdefault("produtos", [])
 for _c in (("unidade_venda", "VARCHAR(20)"), ("itens_por_unidade", "FLOAT"),
            ("fornecedor_id", "INTEGER"), ("fabricante", "VARCHAR(160)"),

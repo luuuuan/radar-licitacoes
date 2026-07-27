@@ -481,14 +481,37 @@ def telegram_desvincular(user: Usuario = Depends(_auth.get_current_user),
 
 @app.post("/api/telegram/webhook/{secret}")
 async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_session)):
-    """Recebe as mensagens do Telegram. Quando alguém manda /start CÓDIGO,
-    vincula o chat_id daquele usuário. Protegido por um segredo na URL."""
+    """Recebe as mensagens/interações do Telegram. Quando alguém manda
+    /start CÓDIGO, vincula o chat_id daquele usuário. Quando toca num botão
+    do menu de avisos, manda os editais/documentos da categoria escolhida
+    (ver telegram_menu.py). Protegido por um segredo na URL."""
     if not settings.TELEGRAM_WEBHOOK_SECRET or secret != settings.TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(404, "not found")
     try:
         update = await req.json()
     except Exception:
         return {"ok": True}
+
+    callback = (update or {}).get("callback_query")
+    if callback:
+        from .notifications import telegram as _tg
+        from . import telegram_menu
+        callback_id = callback.get("id")
+        if callback_id:
+            _tg.responder_callback(callback_id)  # tira o "carregando" do botão
+        dado = callback.get("data") or ""
+        chat_cb = ((callback.get("message") or {}).get("chat") or {})
+        chat_id_cb = str(chat_cb.get("id") or "")
+        if dado.startswith("radar:") and chat_id_cb:
+            categoria = dado.split(":", 1)[1]
+            u = db.execute(
+                select(Usuario).where(Usuario.telegram_chat_id == chat_id_cb)
+            ).scalars().first()
+            if u and categoria in telegram_menu.CATEGORIAS:
+                telegram_menu.mostrar_categoria(db, u, categoria)
+                telegram_menu.enviar_resumo(db, u)  # menu de novo com o que restou
+        return {"ok": True}
+
     msg = (update or {}).get("message") or {}
     texto = (msg.get("text") or "").strip()
     chat = msg.get("chat") or {}
@@ -524,7 +547,7 @@ def telegram_registrar_webhook(user: Usuario = Depends(_auth.get_current_user)):
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setWebhook",
-            json={"url": url, "allowed_updates": ["message"]}, timeout=15)
+            json={"url": url, "allowed_updates": ["message", "callback_query"]}, timeout=15)
         return {"ok": r.status_code == 200, "resposta": r.json()}
     except Exception as e:
         raise HTTPException(502, f"Falha ao registrar webhook: {e}")
@@ -1172,8 +1195,26 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
     try:
         processar_coleta(db, usuario_id=usuario_id)
         # após coletar, verifica prazos encerrando e documentos vencendo
+        # (e-mail sai daqui; Telegram é só o resumo com botões, logo abaixo)
         from .lembretes import verificar_todos
         verificar_todos(db)
+
+        import logging as _logging
+        from . import telegram_menu
+        if usuario_id is not None:
+            alvos = [u for u in [db.get(Usuario, usuario_id)] if u]
+        else:
+            alvos = db.execute(
+                select(Usuario).where(Usuario.ativo == True,             # noqa: E712
+                                      Usuario.notif_telegram == True,     # noqa: E712
+                                      Usuario.telegram_chat_id.is_not(None))
+            ).scalars().all()
+        for u in alvos:
+            try:
+                telegram_menu.enviar_resumo(db, u)
+            except Exception:
+                _logging.getLogger("coleta").exception(
+                    "Falha ao enviar resumo do Telegram pro usuário %s", u.id)
     finally:
         db.close()
         _coleta_lock.release()

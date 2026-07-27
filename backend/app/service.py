@@ -230,20 +230,23 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     return resumo
 
 
-def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict]) -> bool:
+def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict],
+                           canais: tuple[str, ...] = ("email", "telegram")) -> bool:
     """Envia UM aviso agrupado com vários editais.
     - E-mail: um único e-mail com todos os editais em cartões (botão 'Abrir edital').
     - Telegram: uma mensagem por edital (com botão), pois fica mais legível no app.
-    """
+    `canais`: quais mandar — o Telegram tem um menu interativo próprio
+    (telegram_menu.py) que decide sozinho quando mandar cada categoria, então
+    quem já usa o menu passa canais=("email",) pra não duplicar o aviso lá."""
     if not itens:
         return False
     enviou = False
     try:
-        if usuario.notif_email and usuario.email:
+        if "email" in canais and usuario.notif_email and usuario.email:
             html = formato.email_html(titulo, intro, itens)
             texto = formato.email_texto(intro, itens)
             enviou = email_mod.enviar_para(usuario.email, titulo, texto, html=html) or enviou
-        if usuario.notif_telegram and usuario.telegram_chat_id:
+        if "telegram" in canais and usuario.notif_telegram and usuario.telegram_chat_id:
             for it in itens:
                 tit, corpo, link = formato.telegram_item(titulo, it)
                 telegram_mod.enviar_para_chat(usuario.telegram_chat_id, tit, corpo,
@@ -255,13 +258,17 @@ def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict]) 
 
 
 def _notificar_usuario(usuario, fortes: list[Edital]):
-    """Avisa o usuário sobre novas oportunidades de alta compatibilidade — agrupado."""
+    """Avisa o usuário por e-mail sobre novas oportunidades de alta
+    compatibilidade — agrupado. O Telegram NÃO manda nada aqui: o menu
+    interativo (telegram_menu.py) cuida disso sozinho, com base na flag
+    Match.notificado — inclusive pra matches que viraram fortes numa
+    recálculo, não só nos criados nesta coleta."""
     itens = [formato.item_edital(ed, nivel="forte") for ed in fortes]
     n = len(itens)
     titulo = (f"🎯 {n} novas oportunidades de alta compatibilidade"
               if n > 1 else "🎯 Nova oportunidade de alta compatibilidade")
     intro = "Encontramos no Radar editais que combinam bem com os seus produtos."
-    notificar_usuario_lote(usuario, titulo, intro, itens)
+    notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",))
 
 
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
