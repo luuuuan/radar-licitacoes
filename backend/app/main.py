@@ -1444,18 +1444,15 @@ _MODALIDADE_ABREV = {
 
 
 def _numero_processo_pncp(ed: Edital) -> str:
-    """Extrai ano/sequencial do PNCP (raw._ref_itens) pra montar "Nº seq/ano"
-    sem depender da IA — é dado estruturado, sempre confiável quando existe."""
-    raw = ed.raw or {}
-    ref = raw.get("_ref_itens")
-    if isinstance(ref, (list, tuple)) and len(ref) == 3 and ref[1] and ref[2]:
-        return f"{ref[2]}/{ref[1]}"
-    # fallback: o link do PNCP tem o mesmo ano/sequencial no formato
-    # .../editais/{cnpj}/{ano}/{sequencial}
-    if ed.link:
-        m = re.search(r"/editais/\d+/(\d{4})/(\d+)", ed.link)
-        if m:
-            return f"{m.group(2)}/{m.group(1)}"
+    """Monta "Nº sequencial/ano" a partir do numeroControlePNCP (via
+    _ref_pncp, já usado pra buscar documentos) — dado estruturado, sempre
+    confiável quando o edital veio do PNCP. `ed.raw` NÃO serve pra isso: o
+    coletor zera esse campo antes de salvar (evita inflar o banco), então
+    ficaria sempre vazio pra qualquer edital coletado normalmente."""
+    ref = _ref_pncp(ed)
+    if ref:
+        _, ano, seq = ref
+        return f"{seq}/{ano}"
     return ""
 
 
@@ -1556,18 +1553,15 @@ def cotacao_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         ws.cell(row=linha, column=2, value=nota)
         linha += 1
 
-    if notas:
+    # pontos de atenção: NÃO é texto fixo — vem da análise por IA, uma
+    # cláusula específica DESTE edital (ex.: exigência de catálogo/atestado
+    # anexado à proposta, declaração de Anexo VI, etc.). Sem análise, essa
+    # parte simplesmente não aparece (mesma regra de plataforma/data_sessao).
+    pontos_atencao = (analise or {}).get("pontos_atencao") or []
+    if notas or pontos_atencao:
         linha += 1
-    for texto_fixo in (
-        "Todas as especificações do objeto conterão na proposta, principalmente "
-        "VALORES E MARCA (quando for o caso), garantia, especificações adicionais "
-        "do produto. Ainda poderá complementar as informações anexando à proposta "
-        "CATÁLOGOS e ATESTADOS, bem como demais documentos que pormenorizem",
-        "Declaração Conjunta de Anexo VI, e, aos participantes que deem preferência "
-        "à ASSINATURA DIGITAL nos documentos que exijam a assinatura da empresa ou "
-        "dos sócios",
-    ):
-        cel = ws.cell(row=linha, column=2, value=texto_fixo)
+    for ponto in pontos_atencao:
+        cel = ws.cell(row=linha, column=2, value=ponto)
         cel.alignment = quebra
         linha += 2
 
