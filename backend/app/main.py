@@ -1080,12 +1080,16 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
 
-    # item (número) -> produto_id, a partir do detalhe do match
+    from .matching.validacao import validar, classificar
+
+    # item (número) -> produto_id / score_item, a partir do detalhe do match
     mapa: dict = {}
+    scores_item: dict = {}
     if match and match.detalhe:
         for d in (match.detalhe.get("itens") or []):
             if d.get("item") is not None:
                 mapa[d["item"]] = d.get("produto_id")
+                scores_item[d["item"]] = d.get("score_item")
     prod_ids = {v for v in mapa.values() if v}
     produtos = {}
     if prod_ids:
@@ -1109,6 +1113,20 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             # se a margem ainda é absurda, provavelmente as unidades não batem
             if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
                 alerta_unidade = True
+        validacao_tecnica = None
+        if prod:
+            score_item = scores_item.get(it.numero)
+            resultado = validar(it.descricao, prod.descricao)
+            # só reporta validação técnica quando havia algo de fato
+            # verificável (unidade/característica reconhecida) e um score
+            # por item disponível — senão fica sem opinião, em vez de
+            # inventar um "Atende" sem nenhuma checagem por trás.
+            if resultado.verificavel and score_item is not None:
+                validacao_tecnica = {
+                    "classificacao": classificar(score_item, resultado),
+                    "criticas": [p.descricao for p in resultado.criticas],
+                    "avisos": [p.descricao for p in resultado.avisos],
+                }
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
@@ -1116,6 +1134,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "margem": margem, "margem_pct": margem_pct,
             "custo_comparavel": custo_comparavel,
             "alerta_unidade": alerta_unidade,
+            "validacao_tecnica": validacao_tecnica,
             "produto": None if not prod else {
                 "id": prod.id, "descricao": prod.descricao,
                 "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,

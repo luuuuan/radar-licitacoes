@@ -2337,11 +2337,29 @@ function _corpoItensEdital(d){
       } else {
         bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
       }
+      bloco += _validacaoTecnicaHTML(it.validacao_tecnica);
     } else {
       bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
     }
+    // pendência crítica de especificação: mesmo com produto do catálogo
+    // batendo por texto, não é um match confiável — tira o ✓ do topo.
+    const naoAtende = it.validacao_tecnica && it.validacao_tecnica.classificacao === 'Não atende';
     return `<div class="item-row ${it.compativel?'match':''}">
-      <strong>${it.compativel?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
+      <strong>${(it.compativel && !naoAtende)?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
+  }
+  function _validacaoTecnicaHTML(vt){
+    if(!vt) return '';
+    const cores = {'Atende':'var(--forte)', 'Atende parcialmente':'var(--medio)', 'Não atende':'var(--destructive)'};
+    const cor = cores[vt.classificacao] || 'var(--muted-fg,#888)';
+    const pendencias = [...vt.criticas, ...vt.avisos];
+    if(!pendencias.length){
+      return `<div style="margin-top:6px;font-size:12px;color:${cor}">✓ Specs técnicas conferem com o exigido</div>`;
+    }
+    const icone = vt.classificacao==='Não atende' ? '✗' : '⚠';
+    return `<div style="margin-top:6px;font-size:12px">
+      <span style="color:${cor};font-weight:600">${icone} ${esc(vt.classificacao)}${vt.classificacao!=='Atende'?' — confirmar':''}:</span>
+      <ul style="margin:2px 0 0;padding-left:18px">${pendencias.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>
+    </div>`;
   }
   if(!d.itens.length) return '<p class="muted">Este edital não trouxe itens detalhados.</p>';
   const compativeis = d.itens.filter(it=>it.compativel);
