@@ -2465,7 +2465,8 @@ async function _corpoCotacaoEdital(id){
     return '<p class="muted" style="margin-top:0">Nenhum item deste edital bate com o seu catálogo — não há o que cotar.</p>';
   }
   const analisado = !!(d.edital && d.edital.analisado);
-  return `<p class="muted" style="margin-top:0">A planilha sai com os ${compativeis.length} item(ns) do edital que batem com o seu catálogo, no mesmo modelo que você já usa (fabricante/marca/modelo, valor mínimo a partir do seu custo cadastrado).</p>
+  const itemTxt = compativeis.length === 1 ? 'item compatível' : 'itens compatíveis';
+  return `<p class="muted" style="margin-top:0">Exportar planilha de cotação com ${compativeis.length} ${itemTxt} do seu catálogo — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos.</p>
     ${analisado ? `
       <button class="btn" onclick="window.open('${linkDownload}','_blank')">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
     ` : `
