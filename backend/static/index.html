@@ -802,33 +802,37 @@
       <button class="btn" onclick="abrirFormDocumento()">+ Cadastrar documento</button>
     </div>
 
-    <div id="modal-documento" class="modal hidden" onclick="if(event.target===this)fecharFormDocumento()">
-      <div class="modal-card">
-        <button class="close-x" onclick="fecharFormDocumento()" aria-label="Fechar">×</button>
-        <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
-        <div class="field"><label>Nome do documento</label>
-          <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
-        <div class="grid2">
-          <div class="field"><label>Órgão emissor</label>
-            <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
-          <div class="field"><label>Validade</label>
-            <input id="d-validade" type="date" style="width:100%"></div>
-        </div>
-        <div class="field"><label>Link do documento (opcional)
-          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
-          <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
-        <div class="field"><label>Observação (opcional)</label>
-          <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
-        <div class="toolbar" style="margin-top:8px">
-          <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
-          <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
-        </div>
-      </div>
-    </div>
-
     <table><thead><tr><th>Documento</th><th>Emissor</th><th>Validade</th><th>Situação</th><th></th></tr></thead>
       <tbody id="lista-documentos"></tbody></table>
   </section>
+
+  <!-- Fora de #t-documentos de propósito: o checklist de documentos na página
+       do edital (#t-edital) também abre este modal, e um modal dentro de uma
+       section escondida (class="hidden") nunca fica visível, mesmo removendo
+       o "hidden" do modal em si — o ancestral escondido ainda esconde tudo. -->
+  <div id="modal-documento" class="modal hidden" onclick="if(event.target===this)fecharFormDocumento()">
+    <div class="modal-card">
+      <button class="close-x" onclick="fecharFormDocumento()" aria-label="Fechar">×</button>
+      <h3 id="doc-form-titulo" style="margin-top:0">Cadastrar documento / certidão</h3>
+      <div class="field"><label>Nome do documento</label>
+        <input id="d-nome" style="width:100%" placeholder="ex: Certidão Negativa de Débitos (FGTS)"></div>
+      <div class="grid2">
+        <div class="field"><label>Órgão emissor</label>
+          <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
+        <div class="field"><label>Validade</label>
+          <input id="d-validade" type="date" style="width:100%"></div>
+      </div>
+      <div class="field"><label>Link do documento (opcional)
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
+        <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
+      <div class="field"><label>Observação (opcional)</label>
+        <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
+        <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
+      </div>
+    </div>
+  </div>
 
   <!-- INTELIGÊNCIA DE PREÇO -->
   <section id="t-precos" class="hidden">
@@ -2088,6 +2092,42 @@ function _paresHTML(titulo, pares){
     </div></div>`;
 }
 
+// checklist de documentos: cruza o que o edital exige com o que o usuário já
+// tem cadastrado (aba Documentos) — guarda a lista num global só pra o botão
+// "+ cadastrar" achar o item pelo índice sem embutir texto livre no onclick.
+let _checklistDocsAtual = [];
+function _statusDocInfo(item){
+  if(item.status==='valido') return ['var(--forte)', 'válido'];
+  if(item.status==='vence_em_breve') return ['var(--medio)', `vence em ${item.dias_para_vencer} d`];
+  if(item.status==='vencido') return ['var(--destructive)', `vencido há ${Math.abs(item.dias_para_vencer)} d`];
+  return ['var(--muted-fg,#888)', 'não cadastrado'];
+}
+function _checklistDocsHTML(checklist){
+  _checklistDocsAtual = checklist || [];
+  if(!_checklistDocsAtual.length) return '';
+  const porCategoria = [];
+  _checklistDocsAtual.forEach((item,idx)=>{
+    let grupo = porCategoria.find(g=>g.categoria===item.categoria);
+    if(!grupo){ grupo={categoria:item.categoria, itens:[]}; porCategoria.push(grupo); }
+    grupo.itens.push({...item, idx});
+  });
+  return porCategoria.map(g=>`<div style="margin-top:10px"><strong>${esc(g.categoria)}</strong>
+    <ul style="margin:4px 0 0;padding-left:18px">${g.itens.map(item=>{
+      const [cor,txt] = _statusDocInfo(item);
+      const detalhe = item.nome_cadastrado ? ` <span class="muted" style="font-size:11px">(${esc(item.nome_cadastrado)})</span>` : '';
+      const acao = item.status==='nao_cadastrado'
+        ? ` <button class="btn ghost" style="font-size:11px;padding:1px 6px;margin-left:4px" onclick="cadastrarDocumentoChecklist(${item.idx})">+ cadastrar</button>` : '';
+      return `<li style="margin:2px 0">${esc(item.exigido)}${detalhe}
+        <span style="color:${cor};font-weight:600;font-size:11px;margin-left:6px">${txt}</span>${acao}</li>`;
+    }).join('')}</ul></div>`).join('');
+}
+function cadastrarDocumentoChecklist(idx){
+  const item = _checklistDocsAtual[idx];
+  if(!item) return;
+  abrirFormDocumento();
+  $('#d-nome').value = item.exigido;
+}
+
 // mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
 // um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
 // pro usuário como se fosse limite diário do plano gratuito, o que confunde.
@@ -2338,9 +2378,9 @@ async function _corpoAnaliseEdital(id, forcar){
     if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
     if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
     else if(r.julgamento==='item') flags.push('Julgamento por item');
-    const dh = r.documentos_habilitacao || {};
-    const totalDocs = ['juridica','fiscal_trabalhista','tecnica','economico_financeira','declaracoes']
-      .reduce((n,k)=>n+((dh[k]||[]).length),0);
+    const totalDocs = (r.checklist_documentos||[]).length;
+    const naoCadastrados = (r.checklist_documentos||[]).filter(i=>i.status==='nao_cadastrado').length;
+    const vencidosOuPerto = (r.checklist_documentos||[]).filter(i=>i.status==='vencido'||i.status==='vence_em_breve').length;
     const orgao = r.dados_orgao || {};
     const proposta = r.dados_proposta || {};
     return `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
@@ -2352,21 +2392,30 @@ async function _corpoAnaliseEdital(id, forcar){
         ['Critério de julgamento', orgao.criterio_julgamento], ['Plataforma', orgao.plataforma],
         ['Data da sessão', orgao.data_sessao], ['Pregoeiro/responsável', orgao.pregoeiro_responsavel],
         ['Contato do órgão', orgao.contato_orgao],
+        ['Exclusivo regional', orgao.exclusivo_regional ? (orgao.regiao_exclusiva || 'Sim') : ''],
       ])}
 
       ${_paresHTML('Dados da proposta', [
         ['Validade da proposta', proposta.validade_dias], ['Prazo de entrega', proposta.prazo_entrega],
         ['Local de entrega', proposta.local_entrega], ['Condições de pagamento', proposta.condicoes_pagamento],
         ['Aceita marca/modelo similar', proposta.aceita_similar ? 'Sim' : ''],
+        ['Identifica marca/modelo na proposta', proposta.identificacao_marca_modelo ? 'Sim' : ''],
+        ['Prospecto/catálogo do produto', proposta.prospecto_catalogo],
+        ['Entrega técnica/instalação', proposta.entrega_tecnica ? 'Sim' : ''],
+        ['Assistência técnica pós-venda', proposta.assistencia_tecnica ? 'Sim' : ''],
+        ['Garantia do produto', proposta.garantia_produto],
         ['Forma de apresentação', proposta.forma_apresentacao], ['Garantia de proposta', proposta.garantia_proposta],
       ])}
 
-      ${totalDocs?`<div style="margin-top:14px"><strong>Documentos exigidos para habilitação (${totalDocs})</strong>
-        ${_listaHTML('Habilitação jurídica', dh.juridica)}
-        ${_listaHTML('Regularidade fiscal e trabalhista', dh.fiscal_trabalhista)}
-        ${_listaHTML('Qualificação técnica', dh.tecnica)}
-        ${_listaHTML('Qualificação econômico-financeira', dh.economico_financeira)}
-        ${_listaHTML('Declarações', dh.declaracoes)}
+      ${totalDocs?`<div style="margin-top:14px">
+        <strong>Documentos exigidos para habilitação (${totalDocs})</strong>
+        ${naoCadastrados||vencidosOuPerto?`<div style="margin:4px 0;font-size:12px">
+          ${naoCadastrados?`<span style="color:var(--muted-fg,#888)">${naoCadastrados} não cadastrado(s)</span>`:''}
+          ${naoCadastrados&&vencidosOuPerto?' · ':''}
+          ${vencidosOuPerto?`<span style="color:var(--destructive)">${vencidosOuPerto} vencido(s)/vencendo</span>`:''}
+        </div>`:''}
+        ${r.validade_documentos_habilitacao?`<div class="muted" style="font-size:12px;margin-top:2px">Prazo de emissão exigido: ${esc(r.validade_documentos_habilitacao)}</div>`:''}
+        ${_checklistDocsHTML(r.checklist_documentos)}
       </div>`:''}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}

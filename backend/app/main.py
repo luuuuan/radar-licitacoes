@@ -1365,6 +1365,26 @@ def baixar_documento_pncp(url: str, nome: str = Query("documento"),
         headers={"Content-Disposition": f'attachment; filename="{nome_seguro}"'})
 
 
+def _anexar_checklist_documentos(resultado: dict, user: Usuario, db: Session) -> dict:
+    """Cruza os documentos de habilitação exigidos (já na análise) com os
+    documentos que o usuário tem cadastrados. Roda em toda leitura (nunca faz
+    parte do cache da análise) porque validade de documento muda todo dia —
+    uma análise de 3 dias atrás não pode continuar dizendo "válido" pra um
+    documento que venceu ontem."""
+    if resultado.get("status") != "ok":
+        return resultado
+    docs_usuario = db.execute(
+        select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True)  # noqa: E712
+    ).scalars().all()
+    from . import checklist_habilitacao
+    resultado["checklist_documentos"] = checklist_habilitacao.montar(
+        resultado.get("documentos_habilitacao") or {},
+        [{"id": d.id, "nome": d.nome, "data_validade": d.data_validade, "ativo": d.ativo}
+         for d in docs_usuario],
+    )
+    return resultado
+
+
 @app.get("/api/editais/{edital_id}/analise")
 def analise_edital(edital_id: int, forcar: bool = Query(False),
                    user: Usuario = Depends(_auth.get_current_user),
@@ -1383,7 +1403,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             cache = _json.loads(ed.analise_ia)
             if cache.get("versao") == ia.VERSAO_PROMPT:
                 cache["cache"] = True
-                return cache
+                return _anexar_checklist_documentos(cache, user, db)
             # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
             pass
@@ -1397,7 +1417,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
-    return resultado
+    return _anexar_checklist_documentos(resultado, user, db)
 
 
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])

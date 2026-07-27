@@ -29,7 +29,7 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 4
+VERSAO_PROMPT = 5
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -53,6 +53,8 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "data_sessao": data e horário da sessão pública de abertura/disputa, como aparece no edital.
   - "pregoeiro_responsavel": nome do pregoeiro/agente de contratação responsável.
   - "contato_orgao": telefone/e-mail de contato do órgão para dúvidas sobre o edital.
+  - "exclusivo_regional": boolean. true se a participação for restrita a empresas de uma região/estado/município específico.
+  - "regiao_exclusiva": string. Qual região/UF/município, se exclusivo_regional for true. "" caso contrário.
 
 - "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
   - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
@@ -62,13 +64,20 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
   - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços e catálogo do produto no sistema").
   - "garantia_proposta": se exige caução/garantia de manutenção da proposta, e o valor/percentual. "" se não exigir.
+  - "identificacao_marca_modelo": boolean. true se a proposta precisa identificar marca/modelo/fabricante do produto ofertado.
+  - "prospecto_catalogo": string. Se exige anexar prospecto/catálogo/folder técnico do produto junto com a proposta, e em que condição (ex.: "obrigatório", "se solicitado pelo pregoeiro"). "" se não exigir.
+  - "entrega_tecnica": boolean. true se exigir instalação/entrega técnica especializada do produto (não é só deixar na doca).
+  - "assistencia_tecnica": boolean. true se exigir assistência técnica pós-venda (rede autorizada, SLA de atendimento, etc.).
+  - "garantia_produto": string. Prazo/tipo de garantia do PRODUTO em si (ex.: "garantia de fábrica, mínimo 12 meses") — diferente de garantia_contratual (caução) e garantia_proposta (caução da proposta). "" se não constar.
+
+- "validade_documentos_habilitacao": string. Prazo máximo de emissão aceito para as certidões/documentos de habilitação, como aparece no edital (ex.: "documentos emitidos há no máximo 60 dias da data da sessão"). "" se não constar.
 
 - "prazos": array de strings. Datas/prazos relevantes como aparecem (abertura, envio de propostas, sessão, entrega) — pode repetir o que já está em dados_orgao/dados_proposta, é só uma lista cronológica resumida.
 - "exige_amostra": boolean. true se exigir amostra ou prova de conceito.
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
 - "exclusivo_me_epp": boolean. true se o edital (ou algum lote/item) for exclusivo ou tiver cota reservada para microempresa/EPP (LC 123/2006, art. 47/48).
 - "julgamento": string. "lote" se a disputa/adjudicação é por lote fechado (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
-- "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta). Vazio se não exigir.
+- "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
 - "pontos_atencao": array de strings (máx. 6). Cláusulas que merecem atenção: garantia exigida, prazo de entrega curto, exigências específicas, penalidades relevantes.
 
 Regras: não invente nada que não esteja no texto. Se algo não constar, use lista vazia, string vazia ou false — nunca omita uma chave. Responda em português. Seja específico e completo em "documentos_habilitacao": o usuário vai separar cada certidão a partir dessa lista antes de enviar a proposta, então esquecer um documento é pior do que listar um a mais.
@@ -279,7 +288,9 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     def lista(x):
         return [str(i) for i in x] if isinstance(x, list) else ([str(x)] if x else [])
 
-    def txt(x):
+    # nome curto pra não sombrear a variável `txt` (resposta crua do Gemini) do
+    # escopo de fora — ela já foi consumida acima, mas mantém o código claro.
+    def s(x):
         return str(x or "")
 
     def documentos_habilitacao(x):
@@ -295,33 +306,41 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     def dados_orgao(x):
         x = x if isinstance(x, dict) else {}
         return {
-            "numero_processo": txt(x.get("numero_processo")),
-            "modo_disputa": txt(x.get("modo_disputa")),
-            "criterio_julgamento": txt(x.get("criterio_julgamento")),
-            "plataforma": txt(x.get("plataforma")),
-            "data_sessao": txt(x.get("data_sessao")),
-            "pregoeiro_responsavel": txt(x.get("pregoeiro_responsavel")),
-            "contato_orgao": txt(x.get("contato_orgao")),
+            "numero_processo": s(x.get("numero_processo")),
+            "modo_disputa": s(x.get("modo_disputa")),
+            "criterio_julgamento": s(x.get("criterio_julgamento")),
+            "plataforma": s(x.get("plataforma")),
+            "data_sessao": s(x.get("data_sessao")),
+            "pregoeiro_responsavel": s(x.get("pregoeiro_responsavel")),
+            "contato_orgao": s(x.get("contato_orgao")),
+            "exclusivo_regional": bool(x.get("exclusivo_regional")),
+            "regiao_exclusiva": s(x.get("regiao_exclusiva")),
         }
 
     def dados_proposta(x):
         x = x if isinstance(x, dict) else {}
         return {
-            "validade_dias": txt(x.get("validade_dias")),
-            "prazo_entrega": txt(x.get("prazo_entrega")),
-            "local_entrega": txt(x.get("local_entrega")),
-            "condicoes_pagamento": txt(x.get("condicoes_pagamento")),
+            "validade_dias": s(x.get("validade_dias")),
+            "prazo_entrega": s(x.get("prazo_entrega")),
+            "local_entrega": s(x.get("local_entrega")),
+            "condicoes_pagamento": s(x.get("condicoes_pagamento")),
             "aceita_similar": bool(x.get("aceita_similar")),
-            "forma_apresentacao": txt(x.get("forma_apresentacao")),
-            "garantia_proposta": txt(x.get("garantia_proposta")),
+            "forma_apresentacao": s(x.get("forma_apresentacao")),
+            "garantia_proposta": s(x.get("garantia_proposta")),
+            "identificacao_marca_modelo": bool(x.get("identificacao_marca_modelo")),
+            "prospecto_catalogo": s(x.get("prospecto_catalogo")),
+            "entrega_tecnica": bool(x.get("entrega_tecnica")),
+            "assistencia_tecnica": bool(x.get("assistencia_tecnica")),
+            "garantia_produto": s(x.get("garantia_produto")),
         }
 
     return {
         "status": "ok",
         "versao": VERSAO_PROMPT,
         "fonte": fonte,
-        "objeto": txt(data.get("objeto")),
+        "objeto": s(data.get("objeto")),
         "documentos_habilitacao": documentos_habilitacao(data.get("documentos_habilitacao")),
+        "validade_documentos_habilitacao": s(data.get("validade_documentos_habilitacao")),
         "requisitos_tecnicos": lista(data.get("requisitos_tecnicos")),
         "dados_orgao": dados_orgao(data.get("dados_orgao")),
         "dados_proposta": dados_proposta(data.get("dados_proposta")),
@@ -329,7 +348,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "exige_amostra": bool(data.get("exige_amostra")),
         "exige_visita": bool(data.get("exige_visita")),
         "exclusivo_me_epp": bool(data.get("exclusivo_me_epp")),
-        "julgamento": txt(data.get("julgamento")),
-        "garantia_contratual": txt(data.get("garantia_contratual")),
+        "julgamento": s(data.get("julgamento")),
+        "garantia_contratual": s(data.get("garantia_contratual")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
     }
