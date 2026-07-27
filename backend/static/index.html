@@ -2077,6 +2077,16 @@ function _listaHTML(titulo, itens){
   if(!itens||!itens.length) return '';
   return `<div style="margin-top:10px"><strong>${esc(titulo)}</strong><ul style="margin:4px 0 0;padding-left:18px">${itens.map(i=>`<li style="margin:2px 0">${esc(i)}</li>`).join('')}</ul></div>`;
 }
+// grade de "rótulo: valor" pra dados_orgao/dados_proposta — só mostra os
+// campos que a IA realmente preencheu (edital não traz tudo sempre).
+function _paresHTML(titulo, pares){
+  const preenchidos = pares.filter(([,v])=>v);
+  if(!preenchidos.length) return '';
+  return `<div style="margin-top:10px"><strong>${esc(titulo)}</strong>
+    <div style="margin:4px 0 0;font-size:13px;line-height:1.6">
+      ${preenchidos.map(([label,v])=>`<div>${esc(label)}: ${esc(v)}</div>`).join('')}
+    </div></div>`;
+}
 
 // mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
 // um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
@@ -2328,10 +2338,36 @@ async function _corpoAnaliseEdital(id, forcar){
     if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
     if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
     else if(r.julgamento==='item') flags.push('Julgamento por item');
+    const dh = r.documentos_habilitacao || {};
+    const totalDocs = ['juridica','fiscal_trabalhista','tecnica','economico_financeira','declaracoes']
+      .reduce((n,k)=>n+((dh[k]||[]).length),0);
+    const orgao = r.dados_orgao || {};
+    const proposta = r.dados_proposta || {};
     return `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
       ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
       ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
-      ${_listaHTML('Documentos exigidos (habilitação)', r.exigencias)}
+
+      ${_paresHTML('Dados do órgão / pregão', [
+        ['Nº do processo', orgao.numero_processo], ['Modo de disputa', orgao.modo_disputa],
+        ['Critério de julgamento', orgao.criterio_julgamento], ['Plataforma', orgao.plataforma],
+        ['Data da sessão', orgao.data_sessao], ['Pregoeiro/responsável', orgao.pregoeiro_responsavel],
+        ['Contato do órgão', orgao.contato_orgao],
+      ])}
+
+      ${_paresHTML('Dados da proposta', [
+        ['Validade da proposta', proposta.validade_dias], ['Prazo de entrega', proposta.prazo_entrega],
+        ['Local de entrega', proposta.local_entrega], ['Condições de pagamento', proposta.condicoes_pagamento],
+        ['Aceita marca/modelo similar', proposta.aceita_similar ? 'Sim' : ''],
+        ['Forma de apresentação', proposta.forma_apresentacao], ['Garantia de proposta', proposta.garantia_proposta],
+      ])}
+
+      ${totalDocs?`<div style="margin-top:14px"><strong>Documentos exigidos para habilitação (${totalDocs})</strong>
+        ${_listaHTML('Habilitação jurídica', dh.juridica)}
+        ${_listaHTML('Regularidade fiscal e trabalhista', dh.fiscal_trabalhista)}
+        ${_listaHTML('Qualificação técnica', dh.tecnica)}
+        ${_listaHTML('Qualificação econômico-financeira', dh.economico_financeira)}
+        ${_listaHTML('Declarações', dh.declaracoes)}
+      </div>`:''}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}

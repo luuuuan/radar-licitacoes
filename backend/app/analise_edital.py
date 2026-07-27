@@ -29,22 +29,49 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 3
+VERSAO_PROMPT = 4
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
-Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente estas chaves:
+Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
+
 - "objeto": string. Resumo claro do que está sendo contratado, em 1 a 2 frases.
-- "exigencias": array de strings. Documentos/certidões de HABILITAÇÃO exigidos do licitante (empresa) para poder participar (ex.: regularidade fiscal federal, FGTS, trabalhista/CNDT, balanço patrimonial, atestado de capacidade técnica, etc.). Vazio se não encontrar.
-- "requisitos_tecnicos": array de strings. Especificações TÉCNICAS que o produto/serviço contratado (o objeto em si) precisa atender: normas/certificações do produto, prazo e local de entrega ou execução, garantia mínima do produto, assistência técnica, nível de serviço (SLA), embalagem, ou qualquer especificação técnica do item. Não repita aqui os documentos de habilitação da empresa (isso vai em "exigencias"). Vazio se não encontrar.
-- "prazos": array de strings. Datas/prazos relevantes como aparecem (abertura, envio de propostas, sessão, entrega).
+
+- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array de strings. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Vazio (não a chave, a lista) se essa categoria não constar:
+  - "juridica": habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
+  - "fiscal_trabalhista": regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
+  - "tecnica": qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
+  - "economico_financeira": qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
+  - "declaracoes": declarações exigidas (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta).
+
+- "requisitos_tecnicos": array de strings. Especificações TÉCNICAS que o produto/serviço contratado (o objeto em si) precisa atender: normas/certificações do produto, garantia mínima do produto, assistência técnica, nível de serviço (SLA), embalagem. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
+
+- "dados_orgao": objeto com (string vazia "" em qualquer chave que não constar):
+  - "numero_processo": número do processo administrativo/edital.
+  - "modo_disputa": "aberto", "fechado", "aberto e fechado" ou "".
+  - "criterio_julgamento": ex.: "menor preço", "maior desconto", "técnica e preço".
+  - "plataforma": sistema/portal onde ocorre a sessão/disputa (ex.: Compras.gov.br, BLL, Portal de Compras Públicas).
+  - "data_sessao": data e horário da sessão pública de abertura/disputa, como aparece no edital.
+  - "pregoeiro_responsavel": nome do pregoeiro/agente de contratação responsável.
+  - "contato_orgao": telefone/e-mail de contato do órgão para dúvidas sobre o edital.
+
+- "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
+  - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
+  - "prazo_entrega": prazo de entrega/execução do objeto, como aparece no edital.
+  - "local_entrega": local de entrega ou execução, se especificado.
+  - "condicoes_pagamento": forma e prazo de pagamento (ex.: "30 dias após atesto da nota fiscal").
+  - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
+  - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços e catálogo do produto no sistema").
+  - "garantia_proposta": se exige caução/garantia de manutenção da proposta, e o valor/percentual. "" se não exigir.
+
+- "prazos": array de strings. Datas/prazos relevantes como aparecem (abertura, envio de propostas, sessão, entrega) — pode repetir o que já está em dados_orgao/dados_proposta, é só uma lista cronológica resumida.
 - "exige_amostra": boolean. true se exigir amostra ou prova de conceito.
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
 - "exclusivo_me_epp": boolean. true se o edital (ou algum lote/item) for exclusivo ou tiver cota reservada para microempresa/EPP (LC 123/2006, art. 47/48).
 - "julgamento": string. "lote" se a disputa/adjudicação é por lote fechado (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
-- "garantia_contratual": string. Percentual/forma de garantia contratual exigida, se houver (ex.: "5% do valor do contrato"). Vazio se não exigir.
+- "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta). Vazio se não exigir.
 - "pontos_atencao": array de strings (máx. 6). Cláusulas que merecem atenção: garantia exigida, prazo de entrega curto, exigências específicas, penalidades relevantes.
 
-Regras: não invente nada que não esteja no texto. Se algo não constar, use lista vazia, string vazia ou false. Responda em português.
+Regras: não invente nada que não esteja no texto. Se algo não constar, use lista vazia, string vazia ou false — nunca omita uma chave. Responda em português. Seja específico e completo em "documentos_habilitacao": o usuário vai separar cada certidão a partir dessa lista antes de enviar a proposta, então esquecer um documento é pior do que listar um a mais.
 
 OBJETO (resumo do PNCP): {objeto}
 
@@ -251,18 +278,58 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     # normaliza saída
     def lista(x):
         return [str(i) for i in x] if isinstance(x, list) else ([str(x)] if x else [])
+
+    def txt(x):
+        return str(x or "")
+
+    def documentos_habilitacao(x):
+        x = x if isinstance(x, dict) else {}
+        return {
+            "juridica": lista(x.get("juridica")),
+            "fiscal_trabalhista": lista(x.get("fiscal_trabalhista")),
+            "tecnica": lista(x.get("tecnica")),
+            "economico_financeira": lista(x.get("economico_financeira")),
+            "declaracoes": lista(x.get("declaracoes")),
+        }
+
+    def dados_orgao(x):
+        x = x if isinstance(x, dict) else {}
+        return {
+            "numero_processo": txt(x.get("numero_processo")),
+            "modo_disputa": txt(x.get("modo_disputa")),
+            "criterio_julgamento": txt(x.get("criterio_julgamento")),
+            "plataforma": txt(x.get("plataforma")),
+            "data_sessao": txt(x.get("data_sessao")),
+            "pregoeiro_responsavel": txt(x.get("pregoeiro_responsavel")),
+            "contato_orgao": txt(x.get("contato_orgao")),
+        }
+
+    def dados_proposta(x):
+        x = x if isinstance(x, dict) else {}
+        return {
+            "validade_dias": txt(x.get("validade_dias")),
+            "prazo_entrega": txt(x.get("prazo_entrega")),
+            "local_entrega": txt(x.get("local_entrega")),
+            "condicoes_pagamento": txt(x.get("condicoes_pagamento")),
+            "aceita_similar": bool(x.get("aceita_similar")),
+            "forma_apresentacao": txt(x.get("forma_apresentacao")),
+            "garantia_proposta": txt(x.get("garantia_proposta")),
+        }
+
     return {
         "status": "ok",
         "versao": VERSAO_PROMPT,
         "fonte": fonte,
-        "objeto": str(data.get("objeto") or ""),
-        "exigencias": lista(data.get("exigencias")),
+        "objeto": txt(data.get("objeto")),
+        "documentos_habilitacao": documentos_habilitacao(data.get("documentos_habilitacao")),
         "requisitos_tecnicos": lista(data.get("requisitos_tecnicos")),
+        "dados_orgao": dados_orgao(data.get("dados_orgao")),
+        "dados_proposta": dados_proposta(data.get("dados_proposta")),
         "prazos": lista(data.get("prazos")),
         "exige_amostra": bool(data.get("exige_amostra")),
         "exige_visita": bool(data.get("exige_visita")),
         "exclusivo_me_epp": bool(data.get("exclusivo_me_epp")),
-        "julgamento": str(data.get("julgamento") or ""),
-        "garantia_contratual": str(data.get("garantia_contratual") or ""),
+        "julgamento": txt(data.get("julgamento")),
+        "garantia_contratual": txt(data.get("garantia_contratual")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
     }
