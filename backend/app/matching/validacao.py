@@ -17,7 +17,7 @@ aquele atributo, só que o catálogo não descreve.
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .atributos import AtributosTecnicos, estado_caracteristica, extrair_atributos
+from .atributos import AtributosTecnicos, estado_caracteristica, extrair_atributos, familia_unidade
 
 
 @dataclass
@@ -72,7 +72,8 @@ def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str) -> Result
 
     # 1) atributos numéricos (capacidade, velocidade, dimensão...)
     for exigido in req.numericos:
-        candidatos = [o for o in of.numericos if o.unidade == exigido.unidade]
+        familia_exigida, valor_exigido_canon = familia_unidade(exigido.unidade, exigido.valor)
+        candidatos = [o for o in of.numericos if familia_unidade(o.unidade, o.valor)[0] == familia_exigida]
         if not candidatos:
             pendencias.append(Pendencia(
                 "numerico",
@@ -80,20 +81,23 @@ def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str) -> Result
                 critico=False,
             ))
             continue
-        valores_distintos = {c.valor for c in candidatos}
-        if len(valores_distintos) > 1:
-            # o produto menciona a mesma unidade mais de uma vez com valores
-            # diferentes (podem ser o mesmo atributo redito, ou dois
-            # atributos distintos que só coincidem na unidade) — regex não
-            # consegue desambiguar isso com segurança, então só sinaliza.
-            lista = ", ".join(str(v) for v in sorted(valores_distintos))
+        # compara pelo valor já convertido pra mesma escala (família) — "2
+        # litros" e "2000 ml" são o MESMO valor, não uma ambiguidade.
+        valores_canon = {familia_unidade(c.unidade, c.valor)[1] for c in candidatos}
+        if len(valores_canon) > 1:
+            # candidatos com valor efetivamente diferente (mesmo já convertidos
+            # pra mesma escala) — podem ser o mesmo atributo redito com um
+            # valor diferente, ou dois atributos distintos que só coincidem em
+            # unidade/família — regex não consegue desambiguar com segurança.
+            lista = ", ".join(c.bruto for c in candidatos)
             pendencias.append(Pendencia(
                 "numerico",
                 f"produto menciona múltiplos valores de '{exigido.unidade}' ({lista}) — confirmar manualmente qual se refere ao item",
                 critico=False,
             ))
-        melhor = max(candidatos, key=lambda o: o.valor)
-        if not _compara(melhor.valor, exigido.operador, exigido.valor):
+        melhor = max(candidatos, key=lambda o: familia_unidade(o.unidade, o.valor)[1])
+        _, melhor_canon = familia_unidade(melhor.unidade, melhor.valor)
+        if not _compara(melhor_canon, exigido.operador, valor_exigido_canon):
             pendencias.append(Pendencia(
                 "numerico",
                 f"item exige {exigido.bruto} — produto oferece {melhor.bruto}",

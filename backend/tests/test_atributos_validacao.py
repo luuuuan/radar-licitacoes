@@ -33,11 +33,67 @@ def test_operador_maximo_nao_casa_dentro_de_outra_palavra():
     assert any(n.unidade == "ppm" and n.valor == 30 and n.operador == "==" for n in a.numericos)
 
 
+def test_operador_minimo_reconhece_concordancia_feminina():
+    """'capacidade MÍNIMA' (concordando com 'capacidade') é tão '>=' quanto
+    'no MÍNIMO' — só a forma adverbial invariável era reconhecida antes."""
+    a = extrair_atributos("grampeador de mesa, capacidade mínima 20 folhas, grampos 26/6")
+    achado = next(n for n in a.numericos if n.unidade == "folhas")
+    assert achado.valor == 20
+    assert achado.operador == ">="
+
+
+def test_validacao_nao_reprova_quando_produto_supera_minimo_feminino():
+    item = "grampeador de mesa, capacidade mínima 20 folhas"
+    produto = "grampeador de mesa, capacidade 100 folhas"
+    r = validar(item, produto)
+    assert not any(p.tipo == "numerico" and p.critico for p in r.pendencias)
+
+
 def test_operador_nao_vaza_de_uma_clausula_para_a_proxima():
     a = extrair_atributos("no mínimo 30 ppm, 250 folhas")
     achado_folhas = next(n for n in a.numericos if n.unidade == "folhas")
     assert achado_folhas.valor == 250
     assert achado_folhas.operador == "=="
+
+
+def test_operador_nao_vaza_de_uma_clausula_para_a_proxima_sem_pontuacao():
+    """Mesmo bug do teste acima, mas separado por conjunção ('e') em vez de
+    vírgula — edital real raramente usa vírgula entre cada especificação."""
+    a = extrair_atributos("no mínimo 30 ppm e bandeja para 250 folhas")
+    achado_folhas = next(n for n in a.numericos if n.unidade == "folhas")
+    assert achado_folhas.valor == 250
+    assert achado_folhas.operador == "=="
+
+
+def test_extrai_ppm_abreviado_pag_min():
+    a = extrair_atributos("impressora 30 pag/min")
+    assert any(n.unidade == "ppm" and n.valor == 30 for n in a.numericos)
+
+
+def test_extrai_numerico_decimal_com_ponto_fora_do_padrao_br():
+    """'1.0mm' (ponto como decimal, comum em ficha técnica copiada de fora)
+    tem que virar 1.0, não 0 (o fragmento depois do ponto sozinho)."""
+    a = extrair_atributos("Caneta Esferográfica Economic 1.0mm Azul 1001 Compactor")
+    achado = next(n for n in a.numericos if n.unidade == "mm")
+    assert achado.valor == 1.0
+
+
+def test_extrai_numerico_milhar_com_decimal_junto():
+    a = extrair_atributos("capacidade de 2.500,50 litros")
+    achado = next(n for n in a.numericos if n.unidade == "litros")
+    assert achado.valor == 2500.5
+
+
+def test_extrai_numerico_deduplica_especificacao_repetida_no_texto():
+    """Edital real costuma repetir a mesma especificação em mais de uma
+    frase da descrição do item — não pode virar pendência duplicada."""
+    a = extrair_atributos(
+        "Lapiseira mecânica 0.7 mm, corpo hexagonal. "
+        "Lapiseira mecânica com ponta de 0.7 mm, formato ergonômico."
+    )
+    achados_mm = [n for n in a.numericos if n.unidade == "mm"]
+    assert len(achados_mm) == 1
+    assert achados_mm[0].valor == 0.7
 
 
 def test_extrai_categorico_grampo():
@@ -86,6 +142,23 @@ def test_validacao_passa_quando_specs_batem():
     r = validar(item, produto)
     assert r.atende
     assert not r.criticas
+
+
+def test_validacao_reconhece_mesma_familia_de_unidade_com_escala_diferente():
+    """'2 litros' (item) e '2000 ml' (produto) são o MESMO valor — não pode
+    virar aviso de 'produto não informa' só por rótulos de unidade diferentes."""
+    r = validar("galão com capacidade mínima de 2 litros", "galão com capacidade para 2000 ml")
+    assert r.atende
+    assert not r.pendencias
+    assert r.verificavel
+
+
+def test_validacao_reprova_por_familia_mesmo_com_unidades_diferentes():
+    item = "HD externo com no mínimo 1 tb"
+    produto = "HD externo com 500 gb"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.tipo == "numerico" and p.critico for p in r.criticas)
 
 
 def test_validacao_avisa_quando_ha_multiplos_valores_para_a_mesma_unidade():

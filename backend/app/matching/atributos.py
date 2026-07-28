@@ -43,7 +43,7 @@ def _normalizar_leve(texto: str) -> str:
 # (o número vem sempre imediatamente antes, capturado à parte)
 # ---------------------------------------------------------------------------
 _UNIDADES: dict[str, str] = {
-    "ppm": r"ppm|paginas?\s*/?\s*min(?:uto)?|pag(?:inas)?\s+por\s+minuto",
+    "ppm": r"ppm|pag(?:inas)?\s*/?\s*min(?:uto)?|pag(?:inas)?\s+por\s+minuto",
     "folhas": r"folhas?|fls\.?",
     "polegadas": r"polegadas?|pol\.?|\"",
     "watts": r"(?:watts?|w)",
@@ -63,13 +63,53 @@ _UNIDADES: dict[str, str] = {
     "dpi": r"dpi",
 }
 
-# grupos de milhar (".") são opcionais e vêm antes da vírgula decimal — nessa
-# ordem, senão "2.500" (duas mil e quinhentas) seria lido como 2,5.
-_NUM = r"(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)"
+# unidades da MESMA família (só escala métrica, conversão exata e sem
+# ambiguidade — nada de polegada<->cm, que exige arredondamento) -> (nome da
+# família, fator pra a menor unidade dela). Permite comparar "2 litros" do
+# item com "2000 ml" do produto mesmo com rótulos diferentes.
+_FAMILIA_UNIDADE: dict[str, tuple[str, float]] = {
+    "litros": ("volume", 1000.0), "ml": ("volume", 1.0),
+    "kg": ("massa", 1000.0), "gramas": ("massa", 1.0),
+    "tb": ("armazenamento", 1_000_000.0), "gb": ("armazenamento", 1_000.0), "mb": ("armazenamento", 1.0),
+    "cm": ("comprimento", 10.0), "mm": ("comprimento", 1.0),
+}
+
+
+def familia_unidade(unidade: str, valor: float) -> tuple[str, float]:
+    """(família, valor convertido pra menor unidade da família) — unidade sem
+    família conhecida vira (a própria unidade, valor inalterado), então a
+    comparação cai de volta em exigir o mesmo rótulo, como antes."""
+    familia, fator = _FAMILIA_UNIDADE.get(unidade, (unidade, 1.0))
+    return familia, valor * fator
+
+
+# 3 alternativas, nessa ordem (a 1ª que casar vence): grupo(s) de milhar
+# ("2.500", opcionalmente com vírgula decimal depois: "2.500,50") -> decimal
+# com PONTO fora do padrão BR mas comum em ficha técnica copiada de fora
+# ("1.0mm", só 1-2 dígitos depois do ponto — 3 dígitos é sempre milhar, nunca
+# decimal) -> dígitos simples com vírgula decimal opcional ("2,5" ou "250").
+_NUM = r"(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+\.\d{1,2}(?!\d)|\d+(?:,\d+)?)"
+
+
+def _parse_numero(bruto: str) -> float:
+    """Interpreta o número já na convenção certa: ',' é sempre decimal; '.'
+    é separador de milhar SE seguido de grupo(s) de exatamente 3 dígitos,
+    senão (1-2 dígitos após o único '.', sem vírgula) é decimal mesmo —
+    replace(".", "") ingênuo lia "1.0" como 10 em vez de 1.0."""
+    if "," in bruto:
+        inteiro, _, frac = bruto.partition(",")
+        return float(inteiro.replace(".", "") + "." + frac)
+    if "." in bruto and len(bruto.rsplit(".", 1)[1]) in (1, 2):
+        return float(bruto)
+    return float(bruto.replace(".", ""))
+
+
 # \b nas duas pontas evita casar dentro de outra palavra (ex.: "ate" dentro
-# de "bateria"/"material" sem isso).
-_OPERADOR_MIN = r"\b(?:no minimo|minimo de|minimo|pelo menos|superior a|acima de|a partir de)\b"
-_OPERADOR_MAX = r"\b(?:no maximo|maximo de|maximo|nao superior a|inferior a|abaixo de|ate)\b"
+# de "bateria"/"material" sem isso). minim[oa]s?/maxim[oa]s? cobre a
+# concordância de gênero/número do adjetivo ("capacidade MÍNIMA",
+# "quantidades MÁXIMAS") — só "no mínimo"/"no máximo" (advérbio) é invariável.
+_OPERADOR_MIN = r"\b(?:no minimo|minim[oa]s?|pelo menos|superior a|acima de|a partir de)\b"
+_OPERADOR_MAX = r"\b(?:no maximo|maxim[oa]s?|nao superior a|inferior a|abaixo de|ate)\b"
 _JANELA_CONTEXTO = 30  # chars antes do número, onde procuramos "no mínimo"/"no máximo"
 
 
@@ -82,26 +122,51 @@ class AtributoNumerico:
 
 
 def _extrair_numericos(texto_norm: str) -> list[AtributoNumerico]:
-    achados: list[AtributoNumerico] = []
+    # 1ª passada: acha as ocorrências número+unidade de TODAS as unidades e
+    # ordena por posição no texto — precisamos disso pra nunca deixar a
+    # janela de contexto de uma ocorrência olhar pra trás do FIM da
+    # ocorrência anterior (ela pertence à cláusula anterior, mesmo sem
+    # pontuação separando as duas: "no mínimo 30 ppm e bandeja para 250
+    # folhas" não tem vírgula, mas "no mínimo" não deveria valer pra folhas).
+    brutos = []
     for unidade, padrao in _UNIDADES.items():
         # (?!\w) em vez de \b: o rótulo pode terminar em aspas (polegadas),
         # que não é caractere de palavra — \b nunca fecha ali quando a aspas
         # é seguida de espaço/pontuação, que é o caso normal.
         for m in re.finditer(rf"{_NUM}\s*(?:{padrao})(?!\w)", texto_norm):
-            valor = float(m.group(1).replace(".", "").replace(",", "."))
-            janela = texto_norm[max(0, m.start() - _JANELA_CONTEXTO):m.start()]
-            # não deixa o operador de uma cláusula anterior vazar para esta:
-            # corta a janela na última pontuação de separação de cláusula.
-            pos_sep = max(janela.rfind(","), janela.rfind(";"), janela.rfind("."))
-            contexto = janela[pos_sep + 1:] if pos_sep != -1 else janela
-            if re.search(_OPERADOR_MIN, contexto):
-                operador = ">="
-            elif re.search(_OPERADOR_MAX, contexto):
-                operador = "<="
-            else:
-                operador = "=="
-            achados.append(AtributoNumerico(unidade, valor, operador, m.group(0).strip()))
-    return achados
+            valor = _parse_numero(m.group(1))
+            brutos.append((m.start(), m.end(), unidade, valor, m.group(0).strip()))
+    brutos.sort(key=lambda b: b[0])
+
+    achados: list[AtributoNumerico] = []
+    fim_anterior = 0
+    for inicio, fim, unidade, valor, bruto in brutos:
+        janela = texto_norm[max(0, inicio - _JANELA_CONTEXTO, fim_anterior):inicio]
+        # também corta na última pontuação de separação de cláusula dentro
+        # da janela (reforça o corte acima quando há vírgula/ponto no meio).
+        pos_sep = max(janela.rfind(","), janela.rfind(";"), janela.rfind("."))
+        contexto = janela[pos_sep + 1:] if pos_sep != -1 else janela
+        if re.search(_OPERADOR_MIN, contexto):
+            operador = ">="
+        elif re.search(_OPERADOR_MAX, contexto):
+            operador = "<="
+        else:
+            operador = "=="
+        achados.append(AtributoNumerico(unidade, valor, operador, bruto))
+        fim_anterior = fim
+
+    # dedup por (unidade, valor, operador): texto de edital real costuma
+    # repetir a mesma especificação em mais de uma frase — sem isso, cada
+    # menção virava uma pendência duplicada na validação.
+    vistos = set()
+    dedup: list[AtributoNumerico] = []
+    for a in achados:
+        chave = (a.unidade, a.valor, a.operador)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        dedup.append(a)
+    return dedup
 
 
 # ---------------------------------------------------------------------------
