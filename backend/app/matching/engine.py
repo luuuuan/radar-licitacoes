@@ -317,6 +317,24 @@ class MatchingEngine:
                 else:
                     especificas.append(kw)
 
+            # catálogo "enriquecido" (por IA ou manual) tende a cadastrar o
+            # MESMO conceito em várias granularidades sobrepostas — ex.:
+            # "papel sulfite a4", "papel sulfite", "sulfite" e "papel" como
+            # entradas separadas de palavras_chave do mesmo produto. Sem
+            # isso, um item que menciona "papel sulfite" bate nas 4 e conta
+            # como 4 termos específicos (infla pro tier "3+ = forte"), quando
+            # é o MESMO sinal contado repetidas vezes. Mantém só a mais
+            # específica (a que não é substring de nenhuma outra que bateu).
+            #
+            # Primeiro remove duplicata EXATA pós-stem: "grampo" e "grampos"
+            # (singular/plural, entradas diferentes nas palavras_chave) viram
+            # o mesmo radical "gramp" — sem isso um item que só menciona
+            # "grampo" de passagem (ex.: "caderno... ACABAMENTO GRAMPO") bate
+            # nas duas e conta como 2 termos em vez de 1.
+            especificas = list(dict.fromkeys(especificas))
+            especificas = [kw for kw in especificas
+                          if not any(kw != outra and kw in outra for outra in especificas)]
+
             n = len(especificas)
             if n == 0 and genericas == 0:
                 continue

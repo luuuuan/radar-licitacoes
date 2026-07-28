@@ -1149,6 +1149,8 @@ const ICN = {
   relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
 };
+// usado tanto na aba Itens/margem quanto no card da lista de editais
+const CORES_VALIDACAO = {'Atende':'var(--forte)', 'Atende parcialmente':'var(--medio)', 'Não atende':'var(--destructive)'};
 
 function toggleMenu(){
   const open = $('#nav').classList.toggle('open');
@@ -1280,9 +1282,15 @@ function cardEdital(e){
   const urg = e.dias_restantes!=null && e.dias_restantes<=5;
   const prazo = e.dias_restantes==null?'prazo n/d':
     (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
-  const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>
-    `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
-    + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'')).join('<br>');
+  const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>{
+    const vt = d.validacao_tecnica;
+    // selo compacto (sem lista de pendências, isso já tem espaço só na
+    // aba Itens/margem) — silencioso quando não verificável, mesma lógica
+    // de "sem opinião != atende" da aba de detalhe.
+    const selo = vt ? ` <span style="color:${CORES_VALIDACAO[vt.classificacao]||''};font-weight:600;font-size:11px">· ${vt.classificacao==='Não atende'?'✗':(vt.classificacao==='Atende'?'✓':'⚠')} ${esc(vt.classificacao)}</span>` : '';
+    return `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
+      + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'') + selo;
+  }).join('<br>');
   const linkEdital = linkSeguro(e.link);
   return `<div class="card">
     <div class="ed-top">
@@ -2349,8 +2357,7 @@ function _corpoItensEdital(d){
   }
   function _validacaoTecnicaHTML(vt){
     if(!vt) return '';
-    const cores = {'Atende':'var(--forte)', 'Atende parcialmente':'var(--medio)', 'Não atende':'var(--destructive)'};
-    const cor = cores[vt.classificacao] || 'var(--muted-fg,#888)';
+    const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
     const pendencias = [...vt.criticas, ...vt.avisos];
     if(!pendencias.length){
       return `<div style="margin-top:6px;font-size:12px;color:${cor}">✓ Specs técnicas conferem com o exigido</div>`;

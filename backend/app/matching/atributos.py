@@ -104,6 +104,29 @@ def _parse_numero(bruto: str) -> float:
     return float(bruto.replace(".", ""))
 
 
+# O PNCP costuma descrever especificação de item em campos estruturados SEM
+# unidade colada no número ("comprimento: 145", não "145mm") — a unidade
+# fica implícita no schema do catálogo (CATMAT), não no texto. Sem isso,
+# esses campos (super comuns em item real do PNCP) não batiam em nenhuma
+# unidade e o item inteiro ficava "não verificável" à toa. Convenção do
+# catálogo pra esses campos de dimensão física é sempre milímetro.
+_CAMPOS_DIMENSAO_MM = re.compile(
+    r"\b(?:comprimento|largura|altura|diametro|espessura)\s*:\s*" + _NUM + r"(?!\d*[a-z])"
+)
+
+
+def _expandir_campos_estruturados(texto_norm: str) -> str:
+    """Reescreve 'comprimento: 145' -> '145 mm' ANTES da extração normal, pra
+    reaproveitar toda a lógica de operador/contexto/dedup/família que já
+    existe pra número com unidade no texto (não duplica nada disso aqui).
+    Só dispara quando NÃO há unidade já colada no número — precisa ser
+    `(?!\d*[a-z])`, não só `(?![a-z])`: como o \\d+ da NUM pode dar
+    backtrack pra um prefixo mais curto ("14" em vez de "145"), um
+    `(?![a-z])` ingênuo passava no dígito seguinte ("5") e casava só o
+    resto ("5mm"). Olhar além de dígitos restantes fecha essa brecha."""
+    return _CAMPOS_DIMENSAO_MM.sub(lambda m: f"{m.group(1)} mm", texto_norm)
+
+
 # \b nas duas pontas evita casar dentro de outra palavra (ex.: "ate" dentro
 # de "bateria"/"material" sem isso). minim[oa]s?/maxim[oa]s? cobre a
 # concordância de gênero/número do adjetivo ("capacidade MÍNIMA",
@@ -240,6 +263,7 @@ class AtributosTecnicos:
 
 def extrair_atributos(texto: str) -> AtributosTecnicos:
     t = _normalizar_leve(texto or "")
+    t = _expandir_campos_estruturados(t)
     caracteristicas = {nome for nome in _CARACTERISTICAS if estado_caracteristica(nome, t) == "presente"}
     return AtributosTecnicos(
         texto_normalizado=t,

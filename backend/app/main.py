@@ -1007,9 +1007,31 @@ def listar_editais(
     q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
+    from .matching.validacao import validar, classificar
+
     out = []
     for match, ed in db.execute(q).all():
         dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+        detalhe = match.detalhe
+        if detalhe and detalhe.get("itens"):
+            # cópia (não mutar o dict rastreado pelo ORM) — só os 4 primeiros
+            # itens porque é só isso que o card da lista mostra (_corpoItensEdital
+            # já não usa esse "detalhe" resumido, usa /detalhe com o catálogo
+            # ao vivo). produto/descricao_item já vêm "congelados" no
+            # detalhe salvo pelo engine.py, então não precisa buscar Produto
+            # no banco aqui — só reaplica a validação em cima do texto já ali.
+            itens_copia = [dict(it) for it in detalhe["itens"]]
+            for it in itens_copia[:4]:
+                if not it.get("produto") or it.get("score_item") is None:
+                    continue
+                resultado = validar(it.get("descricao_item") or "", it["produto"])
+                if resultado.verificavel:
+                    it["validacao_tecnica"] = {
+                        "classificacao": classificar(it["score_item"], resultado),
+                        "criticas": [p.descricao for p in resultado.criticas],
+                        "avisos": [p.descricao for p in resultado.avisos],
+                    }
+            detalhe = {**detalhe, "itens": itens_copia}
         out.append({
             "match_id": match.id, "edital_id": ed.id,
             "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
@@ -1021,7 +1043,7 @@ def listar_editais(
             "itens_compativeis": match.itens_compativeis,
             "lido": match.lido, "interessante": match.interessante,
             "status": match.status,
-            "detalhe": match.detalhe,
+            "detalhe": detalhe,
         })
     return {
         "total": total, "pagina": pagina, "por_pagina": por_pagina,

@@ -96,6 +96,26 @@ def test_extrai_numerico_deduplica_especificacao_repetida_no_texto():
     assert achados_mm[0].valor == 0.7
 
 
+def test_extrai_campo_estruturado_do_pncp_sem_unidade_colada():
+    """PNCP manda especificação em campos tipo 'comprimento: 145' (sem
+    unidade no texto, unidade é implícita no schema do catálogo = mm)."""
+    a = extrair_atributos(
+        "Extrator Grampo material: metal, tipo: espátula, "
+        "tratamento superficial: zincado, comprimento: 145, largura: 15"
+    )
+    unidades_valores = {(n.unidade, n.valor) for n in a.numericos}
+    assert ("mm", 145.0) in unidades_valores
+    assert ("mm", 15.0) in unidades_valores
+
+
+def test_campo_estruturado_nao_duplica_quando_ja_tem_unidade():
+    """'comprimento: 145mm' (já com unidade colada) não pode virar '145mmmm'
+    nem extrair só o último dígito antes do 'mm'."""
+    a = extrair_atributos("comprimento: 145mm, largura: 15")
+    achado_145 = next(n for n in a.numericos if n.bruto.startswith("145"))
+    assert achado_145.valor == 145.0
+
+
 def test_extrai_categorico_grampo():
     a = extrair_atributos("grampeador de mesa para grampos 26/6")
     assert a.categoricos.get("grampo") == "26/6"
