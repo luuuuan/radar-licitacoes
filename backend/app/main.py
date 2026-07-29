@@ -958,6 +958,7 @@ def listar_editais(
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
+    apenas_interessantes: bool = Query(False),
     hoje: bool = Query(False),
     tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     pagina: int = Query(1, ge=1),
@@ -976,6 +977,8 @@ def listar_editais(
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
         filtro.append(Match.lido == False)  # noqa: E712
+    if apenas_interessantes:
+        filtro.append(Match.interessante == True)  # noqa: E712
     if hoje:
         filtro.append(Edital.data_abertura == date.today())
     # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)

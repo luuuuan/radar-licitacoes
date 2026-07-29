@@ -460,6 +460,7 @@
   <nav class="nav-compacta" id="nav-compacta">
     <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+    <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
     <div class="nav-grupo-wrap">
       <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
         <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -498,6 +499,7 @@
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+    <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
     <div class="nav-grupo-wrap">
       <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
         <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -628,6 +630,15 @@
       <p class="muted" style="font-size:12px;margin-top:0">Editais com o prazo já vencido e marcados como “proposta enviada”, “ganho” ou “perdido”. Atualize a situação de um edital na aba Editais para ele aparecer aqui.</p>
     </div>
     <div id="lista-encerrados"></div>
+  </section>
+
+  <!-- FAVORITOS (marcados como "interessante") -->
+  <section id="t-favoritos" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Editais favoritados</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">Editais marcados como "interessante" — inclui ativos e encerrados, independente do prazo.</p>
+    </div>
+    <div id="lista-favoritos"></div>
   </section>
 
   <!-- PÁGINA DO EDITAL (itens, documentos, análise IA, proposta num só lugar) -->
@@ -1188,7 +1199,7 @@ function tab(name){
     const grupo = ativo.closest('.nav-grupo-wrap');
     if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   });
-  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // a página de um edital (#t-edital) não faz parte da lista acima — sem
   // isso, ir para qualquer aba normal a partir dela (inclusive pelos cards
   // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
@@ -1209,6 +1220,7 @@ function tab(name){
   $('#nav-overlay').classList.remove('open');
   document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
   if(name==='encerrados') loadEncerrados();
+  if(name==='favoritos') loadFavoritos();
   if(name==='catalogo') loadProdutos();
   if(name==='fornecedores') loadFornecedores();
   if(name==='precos') loadPrecos();
@@ -1394,6 +1406,24 @@ function mudarPaginaEnc(delta){
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
+let paginaFavoritos = 1;
+
+async function loadFavoritos(resetPagina=true){
+  if(resetPagina) paginaFavoritos = 1;
+  // vista=todos: favoritado é favoritado independente do prazo já ter passado
+  const qs=new URLSearchParams({pagina:paginaFavoritos, por_pagina:20, vista:'todos', apenas_interessantes:'true'});
+  const r = await api('/api/editais?'+qs);
+  const eds = r.resultados||[];
+  if(!eds.length){ $('#lista-favoritos').innerHTML='<p class="muted">Nenhum edital favoritado ainda. Clique em "interessante" no card de um edital pra ele aparecer aqui.</p>'; return; }
+  $('#lista-favoritos').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaFav',paginaFavoritos);
+}
+
+function mudarPaginaFav(delta){
+  paginaFavoritos = Math.max(1, paginaFavoritos + delta);
+  loadFavoritos(false);
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
 function mudarPagina(delta){
   paginaEditais = Math.max(1, paginaEditais + delta);
   loadEditais(false);
@@ -1403,7 +1433,14 @@ function mudarPagina(delta){
 async function marcar(id,campo,val){
   await api(`/api/editais/${id}/marcar`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({[campo]:val})});
-  loadEditais(); loadResumo();
+  // atualiza a lista da aba que estiver aberta agora (não sempre "editais")
+  // — sem isso, desmarcar "interessante" na aba Favoritos não tirava o
+  // card de lá, só recarregava a aba de Editais ativos escondida atrás.
+  const abaAtiva = document.querySelector('nav button[data-tab].active')?.dataset.tab;
+  if(abaAtiva==='favoritos') loadFavoritos(false);
+  else if(abaAtiva==='encerrados') loadEncerrados(false);
+  else loadEditais(false);
+  loadResumo();
 }
 
 async function importarPlanilha(input){
