@@ -1019,7 +1019,7 @@ function _apiInicio(){
     _apiBarraTO=setTimeout(()=>{ const b=$('#loadingbar'); if(b) b.classList.add('ativa'); }, 200);
     _apiLentoTO=setTimeout(()=>{
       toast('Isso está demorando um pouco mais que o normal — só um instante...', 'aviso', 8000);
-    }, 6000);
+    }, 15000);
   }
 }
 function _apiFim(){
@@ -2210,6 +2210,11 @@ let _abaEditalAtual = 'itens';
 // está sendo mostrado agora.
 let _abaEditalToken = 0;
 let _analiseCache = null;
+// true enquanto uma análise por IA está rodando em segundo plano (a análise
+// continua mesmo se o usuário trocar de aba — não é abortável). A aba
+// Cotação usa isso pra saber "já pedi, só falta esperar" em vez de mostrar
+// o botão de novo (que disparava outra análise em paralelo).
+let _analiseEmAndamento = false;
 
 function _spinnerHTML(texto){
   return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0"><span class="spinner-inline"></span>${esc(texto)}</p>`;
@@ -2343,13 +2348,20 @@ async function _rodarAnaliseEdital(forcar){
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba==='analise'));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
+  // troca pra aba Análise por IA de verdade (inclusive quando chamada a
+  // partir da Cotação) — o progresso e o resultado sempre aparecem aqui,
+  // nunca na aba de onde a análise foi disparada.
   cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+  _analiseEmAndamento = true;
   try{
     const html = await _corpoAnaliseEdital(id, forcar);
     _analiseCache = html;
+    if(_paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
     if(meuToken === _abaEditalToken) cont.innerHTML = html;
   }catch(e){
     if(meuToken === _abaEditalToken) cont.innerHTML = '<p>Erro ao analisar o edital.</p>';
+  }finally{
+    _analiseEmAndamento = false;
   }
 }
 
@@ -2563,12 +2575,19 @@ async function _corpoCotacaoEdital(id){
     <div style="margin-top:12px">
     ${analisado ? `
       <button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
+    ` : _analiseEmAndamento ? `
+      <div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente).</p>
+      <div class="toolbar">
+        <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
+        <button class="btn ghost" onclick="_verificarAnaliseEAtualizarCotacao()">${ICN.ia||''} Verificar análise</button>
+      </div>
     ` : `
       <div class="pill medio" style="display:inline-block;margin-bottom:6px">A análise por IA ainda não foi feita para este edital</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
       <div class="toolbar">
         <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
-        <button class="btn" onclick="_analisarEAtualizarCotacao()">${ICN.ia||''} Realizar análise com IA</button>
+        <button class="btn" onclick="abaEdital('analise', true)">${ICN.ia||''} Realizar análise com IA</button>
       </div>
     `}
     </div>`;
@@ -2602,17 +2621,16 @@ function baixarCotacao(){
   window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?${params.toString()}`, '_blank');
 }
 
-async function _analisarEAtualizarCotacao(){
+async function _verificarAnaliseEAtualizarCotacao(){
+  // só reconsulta se a análise (disparada pela aba Análise por IA) já
+  // terminou — não dispara uma nova análise em paralelo daqui.
   const id = _paginaEditalId;
   const cont = $('#edital-conteudo');
   const meuToken = ++_abaEditalToken;
   const ativo = () => meuToken === _abaEditalToken;
-  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+  cont.innerHTML = _spinnerHTML('Verificando...');
   try{
-    const r = await api(`/api/editais/${id}/analise`);
-    if(r && r.status==='ok' && _paginaEditalDetalhe && _paginaEditalDetalhe.edital){
-      _paginaEditalDetalhe.edital.analisado = true;
-    }
+    _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
   }catch(e){}
   if(ativo()) cont.innerHTML = await _corpoCotacaoEdital(id);
 }
