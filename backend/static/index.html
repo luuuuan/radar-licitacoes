@@ -679,6 +679,7 @@
         <select id="filtro-fornecedor" onchange="filtrarProdutos()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
           <option value="">Todos os fornecedores</option>
         </select>
+        <button class="btn ghost" onclick="window.open('/api/produtos/exportar.xlsx','_blank')">Exportar catálogo (.xlsx)</button>
         <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
       </div>
     </div>

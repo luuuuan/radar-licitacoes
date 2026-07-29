@@ -728,6 +728,54 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
         headers={"Content-Disposition": "attachment; filename=modelo_produtos.xlsx"})
 
 
+@app.get("/api/produtos/exportar.xlsx")
+def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
+                      db: Session = Depends(get_session)):
+    """Catálogo do usuário em .xlsx, nas MESMAS colunas do modelo de
+    importação — reimportar o arquivo exportado (mesmo editado) funciona
+    de volta sem ajuste manual."""
+    import openpyxl
+    produtos = db.execute(
+        select(Produto).where(Produto.usuario_id == user.id).order_by(Produto.descricao)
+    ).scalars().all()
+
+    # telefone do fornecedor vinculado (se houver) — é o que a importação usa
+    # pra religar automaticamente ao mesmo Fornecedor (por isso fica só nessa
+    # coluna, não persistido direto no Produto: ver comentário no modelo.xlsx).
+    fornecedor_ids = {p.fornecedor_id for p in produtos if p.fornecedor_id}
+    telefones = {}
+    if fornecedor_ids:
+        for f in db.execute(select(Fornecedor).where(Fornecedor.id.in_(fornecedor_ids))).scalars():
+            telefones[f.id] = f.telefone or ""
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Produtos"
+    cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
+             "fabricante", "marca", "modelo",
+             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
+             "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
+    ws.append(cabec)
+    for p in produtos:
+        ws.append([
+            p.descricao, p.palavras_chave, p.ncm, p.ean, p.catmat, p.catser,
+            p.fabricante, p.marca, p.modelo,
+            p.preco_custo, p.preco_venda, p.unidade_venda, p.itens_por_unidade,
+            telefones.get(p.fornecedor_id, ""), p.fornecedor_nome, p.fornecedor_contato, p.fornecedor_site,
+        ])
+    for col in ws.columns:
+        larg = max(len(str(c.value or "")) for c in col) + 2
+        ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nome_arquivo = f"catalogo_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={nome_arquivo}"})
+
+
 def _produto_do_usuario(db, produto_id, user) -> Produto:
     p = db.get(Produto, produto_id)
     if not p or p.usuario_id != user.id:
