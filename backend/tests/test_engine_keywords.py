@@ -45,6 +45,33 @@ def test_palavras_chave_singular_plural_nao_conta_duas_vezes():
     assert score == 0.35, motivo  # 1 termo específico ("fraco"), não 2 ("médio")
 
 
+def test_item_kit_gigante_nao_bate_por_coincidencia_de_2_termos():
+    """Item 'kit'/'conjunto' que enumera dezenas de peças pode compartilhar
+    2-3 termos com um produto completamente não relacionado, por pura
+    coincidência (ex.: 'Fita Isolante' e 'Trena 3m' entre as peças de um kit
+    de ferramentas batendo com uma fita adesiva de papelaria). 2 termos em
+    mais de 100 não é sinal de match — a trava de anti-coincidência (que já
+    existia pra 1 termo) precisa também considerar a proporção."""
+    item_texto = (
+        "KIT DE FERRAMENTAS COM MALETA 108 PECAS. Conteudo: 1 Chave Inglesa 6, "
+        "1 Alicate Bomba Dagua 8, 1 Alicate Universal 6.1/2, 1 Chave Phillips PH2, "
+        "1 Chave de Fenda SL5, 1 Punho Catraca, 1 Nivel Aluminio 300mm, "
+        "1 Martelo 25mm 300g, 1 Arco de Serra 6, 1 Fita Isolante 5m, "
+        "1 Estilete 18mm, 1 Chave Teste 100-250V, 1 Trena 3m, 2 Grampos Multiuso, "
+        "6 Chaves Combinadas, 1 Adaptador de Soquete 1/4, 11 Soquetes 1/4, "
+        "9 Soquetes 3/8, 1 Jogo com 10 Bits, 1 Jogo com 11 Chaves Allen. "
+        "Garantia 120 meses."
+    )
+    produtos = [ProdutoCat(
+        id=1, descricao="Fita Adesiva 12x50 Transparente PP Durex 9388 3m - 6RL",
+        palavras_chave="fita adesiva, fita transparente, durex, 3m, fita",
+    )]
+    engine = MatchingEngine(produtos, usar_ia=False)
+    item = ItemEdt(numero=1, descricao=item_texto)
+    score, _, motivo = engine._score_item(item)
+    assert score <= 0.34, motivo  # abaixo de LIMIAR_ITEM (0.35) -> nem vira candidato
+
+
 def test_palavras_chave_genuinamente_distintas_ainda_somam():
     """Termos específicos que NÃO se sobrepõem (não são substring um do
     outro) continuam contando cada um — a dedup só remove redundância real."""

@@ -248,10 +248,20 @@ class MatchingEngine:
             texto_prod = self._textos_prod[self._prod_indice[id(melhor_prod)]]
             toks_prod = {t for t in texto_prod.split() if self._distintivo(t)}
             comuns = toks_item & toks_prod
-            if len(comuns) <= 1 and melhor > 0.34:
+            # item "kit"/"conjunto" com dezenas de peças enumeradas (ex.: kit de
+            # ferramentas com 30+ itens na descrição) pode ter 2-3 termos batendo
+            # por PURA COINCIDÊNCIA (ex.: menciona "fita isolante" e "trena 3m"
+            # entre as peças, casando com um produto de fita adesiva) — o corte
+            # absoluto de "≤1 termo" não pega isso porque são 2 termos, só que
+            # 2 em mais de 100 é proporcionalmente nada. Some um corte por
+            # PROPORÇÃO (relativo ao lado com mais termos distintivos) além do
+            # absoluto, pra cobrir os dois casos.
+            maior_lado = max(len(toks_item), len(toks_prod), 1)
+            fraco = len(comuns) <= 1 or (len(comuns) / maior_lado) < 0.10
+            if fraco and melhor > 0.34:
                 termo = next(iter(comuns), "")
                 melhor = 0.34          # < LIMIAR_ITEM -> não conta como compatível
-                motivo = f"só 1 termo em comum ('{termo}') — fraco"
+                motivo = f"só {len(comuns)} termo(s) em comum de {maior_lado} — fraco"
 
         return melhor, melhor_prod, motivo
 
