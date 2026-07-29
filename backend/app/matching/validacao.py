@@ -98,11 +98,25 @@ def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str) -> Result
         melhor = max(candidatos, key=lambda o: familia_unidade(o.unidade, o.valor)[1])
         _, melhor_canon = familia_unidade(melhor.unidade, melhor.valor)
         if not _compara(melhor_canon, exigido.operador, valor_exigido_canon):
-            pendencias.append(Pendencia(
-                "numerico",
-                f"item exige {exigido.bruto} — produto oferece {melhor.bruto}",
-                critico=True,
-            ))
+            if exigido.inferido:
+                # a unidade do lado do ITEM foi uma suposição (campo
+                # estruturado do PNCP tipo "comprimento: 21" sem unidade no
+                # texto, assumida como mm) — não é fato lido do texto, então
+                # não pode reprovar sozinha. Ex.: "21" pode muito bem ser
+                # 21cm (uma tesoura), não 21mm; a suposição errada não pode
+                # virar uma crítica que derruba um produto bom.
+                pendencias.append(Pendencia(
+                    "numerico",
+                    f"item exige {exigido.bruto} (unidade assumida, não informada no texto) "
+                    f"— produto oferece {melhor.bruto} — confirmar unidade manualmente",
+                    critico=False,
+                ))
+            else:
+                pendencias.append(Pendencia(
+                    "numerico",
+                    f"item exige {exigido.bruto} — produto oferece {melhor.bruto}",
+                    critico=True,
+                ))
 
     # 2) atributos categóricos (formato/modelo — igualdade exata, ex.: grampo 26/6)
     for chave, valor_exigido in req.categoricos.items():

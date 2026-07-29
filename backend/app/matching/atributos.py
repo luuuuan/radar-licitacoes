@@ -115,7 +115,7 @@ _CAMPOS_DIMENSAO_MM = re.compile(
 )
 
 
-def _expandir_campos_estruturados(texto_norm: str) -> str:
+def _expandir_campos_estruturados(texto_norm: str) -> tuple[str, list[tuple[int, int]]]:
     """Reescreve 'comprimento: 145' -> '145 mm' ANTES da extração normal, pra
     reaproveitar toda a lógica de operador/contexto/dedup/família que já
     existe pra número com unidade no texto (não duplica nada disso aqui).
@@ -123,8 +123,29 @@ def _expandir_campos_estruturados(texto_norm: str) -> str:
     `(?!\d*[a-z])`, não só `(?![a-z])`: como o \\d+ da NUM pode dar
     backtrack pra um prefixo mais curto ("14" em vez de "145"), um
     `(?![a-z])` ingênuo passava no dígito seguinte ("5") e casava só o
-    resto ("5mm"). Olhar além de dígitos restantes fecha essa brecha."""
-    return _CAMPOS_DIMENSAO_MM.sub(lambda m: f"{m.group(1)} mm", texto_norm)
+    resto ("5mm"). Olhar além de dígitos restantes fecha essa brecha.
+
+    Retorna também os SPANS (posição no texto de saída) de cada "145 mm"
+    inserido — mm aqui é uma SUPOSIÇÃO (o campo do PNCP não diz a unidade),
+    não um fato lido do texto. _extrair_numericos() usa esses spans pra
+    marcar o AtributoNumerico como `inferido=True`, e validacao.py rebaixa
+    pendência baseada nisso de crítica pra aviso — "no mínimo 21" pode
+    muito bem ser 21cm (ex.: tesoura), não 21mm, então não é fato firme o
+    bastante pra reprovar um produto sozinho."""
+    partes = []
+    spans_inferidos: list[tuple[int, int]] = []
+    pos = 0
+    pos_saida = 0
+    for m in _CAMPOS_DIMENSAO_MM.finditer(texto_norm):
+        partes.append(texto_norm[pos:m.start()])
+        pos_saida += m.start() - pos
+        substituto = f"{m.group(1)} mm"
+        partes.append(substituto)
+        spans_inferidos.append((pos_saida, pos_saida + len(substituto)))
+        pos_saida += len(substituto)
+        pos = m.end()
+    partes.append(texto_norm[pos:])
+    return "".join(partes), spans_inferidos
 
 
 # \b nas duas pontas evita casar dentro de outra palavra (ex.: "ate" dentro
@@ -142,9 +163,14 @@ class AtributoNumerico:
     valor: float
     operador: str   # ">=" | "<=" | "=="
     bruto: str       # trecho reconhecido no texto original, para mensagens legíveis
+    # True quando a unidade veio de suposição (campo estruturado do PNCP tipo
+    # "comprimento: 21" sem unidade no texto, convertido assumindo mm) — não
+    # de texto explícito. validacao.py usa isso pra nunca deixar essa
+    # suposição sozinha reprovar um produto (vira aviso, não crítica).
+    inferido: bool = False
 
 
-def _extrair_numericos(texto_norm: str) -> list[AtributoNumerico]:
+def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] = ()) -> list[AtributoNumerico]:
     # 1ª passada: acha as ocorrências número+unidade de TODAS as unidades e
     # ordena por posição no texto — precisamos disso pra nunca deixar a
     # janela de contexto de uma ocorrência olhar pra trás do FIM da
@@ -175,7 +201,8 @@ def _extrair_numericos(texto_norm: str) -> list[AtributoNumerico]:
             operador = "<="
         else:
             operador = "=="
-        achados.append(AtributoNumerico(unidade, valor, operador, bruto))
+        inferido = any(inicio < s_fim and fim > s_inicio for s_inicio, s_fim in spans_inferidos)
+        achados.append(AtributoNumerico(unidade, valor, operador, bruto, inferido))
         fim_anterior = fim
 
     # dedup por (unidade, valor, operador): texto de edital real costuma
@@ -263,11 +290,11 @@ class AtributosTecnicos:
 
 def extrair_atributos(texto: str) -> AtributosTecnicos:
     t = _normalizar_leve(texto or "")
-    t = _expandir_campos_estruturados(t)
+    t, spans_inferidos = _expandir_campos_estruturados(t)
     caracteristicas = {nome for nome in _CARACTERISTICAS if estado_caracteristica(nome, t) == "presente"}
     return AtributosTecnicos(
         texto_normalizado=t,
-        numericos=_extrair_numericos(t),
+        numericos=_extrair_numericos(t, spans_inferidos),
         categoricos=_extrair_categoricos(t),
         caracteristicas=caracteristicas,
     )

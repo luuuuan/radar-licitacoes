@@ -116,6 +116,27 @@ def test_campo_estruturado_nao_duplica_quando_ja_tem_unidade():
     assert achado_145.valor == 145.0
 
 
+def test_campo_estruturado_sem_unidade_fica_marcado_como_inferido():
+    """A suposição de mm pra 'comprimento: 21' (sem unidade no texto) é
+    exatamente isso — uma suposição, não um fato lido do texto. Precisa
+    ficar marcada como tal pra validacao.py saber que não pode reprovar
+    um produto sozinha (ex.: '21' pode ser 21cm de uma tesoura, não 21mm)."""
+    a = extrair_atributos("Tesoura material: aço inoxidável, comprimento: 21, cabo plástico")
+    achado = next(n for n in a.numericos if n.unidade == "mm")
+    assert achado.valor == 21.0
+    assert achado.inferido is True
+
+
+def test_unidade_explicita_no_texto_nao_fica_marcada_como_inferida():
+    """Quando a unidade está escrita no texto (não veio de suposição de
+    campo estruturado), é fato — não pode ficar marcada como inferida,
+    mesmo sendo uma das unidades cobertas por _CAMPOS_DIMENSAO_MM."""
+    a = extrair_atributos("Papel especial com espessura de 0,10mm, alta gramatura")
+    achado = next(n for n in a.numericos if n.unidade == "mm")
+    assert achado.valor == 0.10
+    assert achado.inferido is False
+
+
 def test_extrai_categorico_grampo():
     a = extrair_atributos("grampeador de mesa para grampos 26/6")
     assert a.categoricos.get("grampo") == "26/6"
@@ -162,6 +183,35 @@ def test_validacao_passa_quando_specs_batem():
     r = validar(item, produto)
     assert r.atende
     assert not r.criticas
+
+
+def test_validacao_rebaixa_para_aviso_quando_unidade_do_item_e_inferida():
+    """Caso real achado analisando editais do PNCP: item 'comprimento: 21'
+    (sem unidade — o código assume mm) contra um produto real de 21cm.
+    Antes desse fix, virava CRÍTICA ('exige 21mm, produto oferece 21cm') e
+    reprovava um produto que na verdade bate (os dois são 21cm — a
+    suposição de mm que estava errada, não o produto). Uma suposição não
+    pode reprovar sozinha; agora vira aviso pra confirmar manualmente."""
+    item = "Tesoura material: aço inoxidável, material cabo: plástico, comprimento: 21"
+    produto = "Tesoura Inox com Plástico 21cm 61 Nox - UN"
+    r = validar(item, produto)
+    assert r.atende  # não reprova mais
+    assert not r.criticas
+    assert any(p.tipo == "numerico" and "unidade assumida" in p.descricao for p in r.avisos)
+    assert classificar(0.6, r) == "Atende parcialmente"  # ainda pede conferência, não vira "Atende" pleno
+
+
+def test_validacao_mantem_critica_quando_unidade_e_explicita_dos_dois_lados():
+    """O rebaixamento pra aviso é só pra unidade INFERIDA do item. Quando as
+    duas unidades vêm explícitas no texto (nenhuma suposição envolvida) e
+    os valores realmente não batem, continua sendo crítica — não pode virar
+    aviso genérico pra qualquer conflito de unidade mm/cm."""
+    item = "Régua com no mínimo 30 cm de comprimento, material acrílico"
+    produto = "Régua Acrílica Transparente 150mm Waleu"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.tipo == "numerico" and p.critico and "unidade assumida" not in p.descricao
+              for p in r.criticas)
 
 
 def test_validacao_reconhece_mesma_familia_de_unidade_com_escala_diferente():
