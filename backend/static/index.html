@@ -157,6 +157,7 @@
 
   /* ---- Modal de detalhes ---- */
   .modal{position:fixed;inset:0;background:var(--overlay);z-index:5000;
+    backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
     display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow-y:auto}
   .modal.hidden{display:none}
   html.modal-aberto{overflow-y:hidden}
@@ -721,7 +722,8 @@
           <div class="field"><label>Unidade de venda</label>
             <input id="p-unidade" style="width:100%" placeholder="ex: resma, unidade, caixa"></div>
           <div class="field"><label>Itens por unidade
-            <span class="muted" style="font-size:11px">(ex.: resma = 500 folhas)</span></label>
+            <span class="muted" style="font-size:11px">(ex.: resma = 500 folhas)</span>
+            <a href="#" onclick="event.preventDefault();abrirDuvida('itens-por-unidade')" style="font-size:11px">saiba mais →</a></label>
             <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
         </div>
         <div class="field"><label>Fornecedor
@@ -2712,6 +2714,52 @@ async function salvarProposta(){
 
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') fecharModal(); });
+
+// ---- Dúvidas detalhadas: modal com explicação mais longa que cabe no
+// tooltip "?" — usado quando o balão curto não é suficiente e a resposta
+// merece exemplo passo a passo, sem tirar o usuário do formulário (por
+// isso modal, não uma página separada — ele não perde o que já preencheu).
+// pra adicionar uma nova dúvida: só somar uma chave aqui e chamar
+// linkDuvida('chave') de dentro do texto de um "ajuda"/bolha existente.
+const _DUVIDAS = {
+  'itens-por-unidade': {
+    titulo: 'Itens por unidade — embalagem com mais de um nível',
+    corpo: `
+      <p>É a quantidade do que o edital pede (folhas, unidades, metros...) que cabe em UMA "unidade de venda" — sempre achatada num número só, mesmo quando a embalagem tem mais de um nível.</p>
+      <p><strong>Exemplo simples (1 nível):</strong> resma de papel A4 com 500 folhas.</p>
+      <ul style="margin:6px 0;padding-left:20px">
+        <li>Unidade de venda: <code>resma</code></li>
+        <li>Itens por unidade: <code>500</code></li>
+      </ul>
+      <p><strong>Exemplo com embalagem dupla:</strong> uma caixa contendo 10 resmas, cada resma com 500 folhas. Multiplica direto, sem precisar cadastrar a resma como um passo separado:</p>
+      <ul style="margin:6px 0;padding-left:20px">
+        <li>10 resmas × 500 folhas = <strong>5.000</strong></li>
+        <li>Unidade de venda: <code>caixa</code></li>
+        <li>Itens por unidade: <code>5000</code></li>
+      </ul>
+      <p class="muted" style="font-size:12px">O sistema usa essa conta pra achar o custo comparável ao que o edital pede: <code>preço da caixa ÷ itens por unidade = custo por folha</code>. Se o produto não vier em embalagem (vende por unidade solta), deixe o campo em branco.</p>`,
+  },
+};
+
+function linkDuvida(chave){
+  return ` <a href="#" onclick="event.preventDefault();abrirDuvida('${chave}')" style="font-size:11px">saiba mais →</a>`;
+}
+
+function abrirDuvida(chave){
+  const d = _DUVIDAS[chave];
+  if(!d) return;
+  // z-index acima do padrão (5000): abrirDuvida() costuma ser chamado de
+  // dentro de outro modal já aberto (ex.: o form de produto) — sem isso,
+  // esse modal nasce empatado em z-index e o de baixo (mais tarde no DOM)
+  // fica por cima, interceptando o clique no X.
+  $('#modal-mount').innerHTML = `<div class="modal" style="z-index:5100" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:520px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>${esc(d.titulo)}</h2>
+      <div style="margin-top:10px;font-size:14px;line-height:1.5">${d.corpo}</div>
+    </div>
+  </div>`;
+}
 
 // ---- Perfil ----
 async function loadPerfil(){
