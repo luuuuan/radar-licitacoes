@@ -2362,7 +2362,8 @@ async function _rodarAnaliseEdital(forcar){
     if(_paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
     if(meuToken === _abaEditalToken) cont.innerHTML = html;
   }catch(e){
-    if(meuToken === _abaEditalToken) cont.innerHTML = '<p>Erro ao analisar o edital.</p>';
+    if(meuToken === _abaEditalToken) cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
+      + '<button class="btn ghost" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">tentar novamente</button>';
   }finally{
     _analiseEmAndamento = false;
   }
@@ -2529,7 +2530,8 @@ async function _corpoAnaliseEdital(id, forcar){
     resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
   const portal = linkSeguro(r.portal);
   return `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
-    ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
+    <button class="btn ghost" style="margin-top:6px" onclick="abaEdital('analise',true)">tentar novamente</button>
+    ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
 }
 
 // ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens
