@@ -43,7 +43,22 @@ _CATEGORIAS = {
 
 # abaixo desse score (0..1), não considera match — melhor mostrar "não
 # cadastrado" do que sugerir um documento errado com falsa confiança.
-_LIMIAR_MATCH = 0.42
+#
+# 0.42 era baixo demais: token_set_ratio dá score alto pra textos longos que
+# só compartilham palavras de ligação comuns em português (de/que/da/para).
+# Caso real observado: 4 "declarações" (não emprego de trabalho degradante,
+# reserva de vagas PCD, ME/EPP, elaboração independente de proposta) E um
+# "credenciamento no Sicaf" bateram todos com uma CERTIDÃO NEGATIVA DE
+# DÉBITOS cadastrada sem ter NADA a ver — e como essa certidão estava
+# vencida, isso vazava um "vencido há Xd" falso pros itens errados.
+# Testado com pares reais que deveriam bater (CRF/FGTS, CNDT, alvará,
+# atestado técnico, Sicaf...) — todos ficam >= 0.65 — contra pares que não
+# deveriam (declaração vs. certidão não relacionada) — todos <= 0.51. 0.55
+# fica no meio dessa lacuna, cortando os falsos positivos observados; o
+# preço é perder matches legítimos com frase bem vaga e curta demais (ex.:
+# "prova de regularidade com a Fazenda Estadual", ~0.50) — mas isso vira
+# "não cadastrado" (seguro), nunca um "vencido" inventado (perigoso).
+_LIMIAR_MATCH = 0.55
 
 
 def _normalizar_doc(nome: str) -> str:
