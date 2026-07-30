@@ -2585,24 +2585,30 @@ async function _corpoCotacaoEdital(id){
       <tbody>${linhas}</tbody>
     </table></div>
 
-    <div style="margin-top:12px">
-    ${analisado ? `
-      <button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
-    ` : _analiseEmAndamento ? `
-      <div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>
+    <div style="margin-top:12px" id="cotacao-acoes">${_corpoCotacaoAcoes(analisado)}</div>`;
+}
+
+// Bloco de aviso/botões da Cotação (baixar / aguardando análise / etc.) —
+// separado do resto da aba pra "Verificar análise" poder atualizar só ISSO,
+// sem recriar a tabela inteira (o que apagaria seleção de itens e fretes já
+// preenchidos pelo usuário).
+function _corpoCotacaoAcoes(analisado){
+  if(analisado){
+    return `<button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>`;
+  }
+  if(_analiseEmAndamento){
+    return `<div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente).</p>
       <div class="toolbar">
         <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
         <button class="btn ghost" onclick="_verificarAnaliseEAtualizarCotacao()">${ICN.ia||''} Verificar análise</button>
-      </div>
-    ` : `
-      <div class="pill medio" style="display:inline-block;margin-bottom:6px">A análise por IA ainda não foi feita para este edital</div>
-      <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
-      <div class="toolbar">
-        <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
-        <button class="btn" onclick="abaEdital('analise', true)">${ICN.ia||''} Realizar análise com IA</button>
-      </div>
-    `}
+      </div>`;
+  }
+  return `<div class="pill medio" style="display:inline-block;margin-bottom:6px">A análise por IA ainda não foi feita para este edital</div>
+    <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
+    <div class="toolbar">
+      <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
+      <button class="btn" onclick="abaEdital('analise', true)">${ICN.ia||''} Realizar análise com IA</button>
     </div>`;
 }
 function toggleTodosCotacao(chk){
@@ -2636,16 +2642,22 @@ function baixarCotacao(){
 
 async function _verificarAnaliseEAtualizarCotacao(){
   // só reconsulta se a análise (disparada pela aba Análise por IA) já
-  // terminou — não dispara uma nova análise em paralelo daqui.
+  // terminou — não dispara uma nova análise em paralelo daqui. Atualiza só
+  // o bloco de aviso/botões (#cotacao-acoes), NÃO a aba inteira — recriar a
+  // tabela de itens apagaria a seleção e os fretes que o usuário já tinha
+  // preenchido.
   const id = _paginaEditalId;
-  const cont = $('#edital-conteudo');
-  const meuToken = ++_abaEditalToken;
-  const ativo = () => meuToken === _abaEditalToken;
-  cont.innerHTML = _spinnerHTML('Verificando...');
+  const acoes = $('#cotacao-acoes');
+  if(!acoes) return;
+  acoes.innerHTML = _spinnerHTML('Verificando...');
   try{
     _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
   }catch(e){}
-  if(ativo()) cont.innerHTML = await _corpoCotacaoEdital(id);
+  // usuário saiu da aba/edital enquanto verificava — não mexe em nada
+  if(_abaEditalAtual!=='cotacao' || _paginaEditalId!==id) return;
+  const analisado = !!(_paginaEditalDetalhe && _paginaEditalDetalhe.edital && _paginaEditalDetalhe.edital.analisado);
+  const acoesAgora = $('#cotacao-acoes');
+  if(acoesAgora) acoesAgora.innerHTML = _corpoCotacaoAcoes(analisado);
 }
 
 let _propEditalId = null;
