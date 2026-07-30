@@ -310,3 +310,26 @@ def test_par_de_dimensao_nao_confunde_multiplicador_de_quantidade():
     a = extrair_atributos("caixa com 3x500ml")
     assert not any(n.valor == 3.0 for n in a.numericos)
     assert any(n.unidade == "ml" and n.valor == 500.0 for n in a.numericos)
+
+
+def test_validacao_de_par_de_dimensao_gera_uma_so_pendencia_nao_quatro():
+    """Caso real: item 'BLOCO POST-IT 38 X 51' (par sem unidade) vs produto
+    'Post-it 38mm 50mm' (duas medidas soltas, sem 'x' entre elas). Antes da
+    comparação em grupo, cada exigência (38 e 51) procurava seu 'melhor'
+    candidato entre OS DOIS valores do produto (38mm, 50mm) isoladamente,
+    gerando 2x2=4 pendências repetidas. Agora deve virar só 1."""
+    item = "BLOCO POST-IT 38 X 51 COM 04 UNIDADES"
+    produto = "Bloco Adesivo Post-it 38mm 50mm tropical 50 Folhas"
+    r = validar(item, produto)
+    pendencias_dimensao = [p for p in r.pendencias if "38" in p.descricao or "51" in p.descricao]
+    assert len(pendencias_dimensao) == 1
+    assert not pendencias_dimensao[0].critico  # unidade assumida, não pode reprovar sozinha
+    assert r.atende  # aviso, não crítica
+
+
+def test_validacao_de_par_de_dimensao_bate_exato_sem_pendencia():
+    item = "BLOCO POST-IT 38 X 51 COM 04 UNIDADES"
+    produto = "Bloco Adesivo Post-it 38mm 51mm tropical 50 Folhas"
+    r = validar(item, produto)
+    assert not r.pendencias
+    assert r.atende

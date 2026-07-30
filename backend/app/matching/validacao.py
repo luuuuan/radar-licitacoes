@@ -57,6 +57,103 @@ def _compara(valor_produto: float, operador: str, valor_exigido: float) -> bool:
     return valor_produto == valor_exigido
 
 
+def _bruto_grupo(atributos) -> str:
+    return " x ".join(a.bruto for a in atributos)
+
+
+def _validar_numerico_simples(exigido, candidatos: list) -> list[Pendencia]:
+    """Valida UMA exigência numérica isolada contra os candidatos da mesma
+    família (comportamento original: procura o "melhor"/maior candidato e
+    compara). Usado quando o item exige só UM valor daquela família (ex.:
+    "no mínimo 250 folhas"). Para vários valores da mesma família de uma vez
+    (par de dimensão, ex.: item "38 x 51"), veja _validar_grupo_dimensao —
+    comparar cada um contra "o melhor candidato" isoladamente gera uma
+    pendência de "múltiplos valores" PRA CADA um, multiplicando N x M
+    mensagens repetidas quando na real é só uma dimensão com dois números."""
+    if not candidatos:
+        return [Pendencia(
+            "numerico",
+            f"item exige {exigido.bruto} — produto não informa '{exigido.unidade}' na descrição",
+            critico=False,
+        )]
+    _, valor_exigido_canon = familia_unidade(exigido.unidade, exigido.valor)
+    pendencias: list[Pendencia] = []
+    # compara pelo valor já convertido pra mesma escala (família) — "2
+    # litros" e "2000 ml" são o MESMO valor, não uma ambiguidade.
+    valores_canon = {familia_unidade(c.unidade, c.valor)[1] for c in candidatos}
+    if len(valores_canon) > 1:
+        # candidatos com valor efetivamente diferente (mesmo já convertidos
+        # pra mesma escala) — podem ser o mesmo atributo redito com um
+        # valor diferente, ou dois atributos distintos que só coincidem em
+        # unidade/família — regex não consegue desambiguar com segurança.
+        lista = ", ".join(c.bruto for c in candidatos)
+        pendencias.append(Pendencia(
+            "numerico",
+            f"produto menciona múltiplos valores de '{exigido.unidade}' ({lista}) — confirmar manualmente qual se refere ao item",
+            critico=False,
+        ))
+    melhor = max(candidatos, key=lambda o: familia_unidade(o.unidade, o.valor)[1])
+    _, melhor_canon = familia_unidade(melhor.unidade, melhor.valor)
+    if not _compara(melhor_canon, exigido.operador, valor_exigido_canon):
+        if exigido.inferido:
+            # a unidade do lado do ITEM foi uma suposição (campo estruturado
+            # do PNCP tipo "comprimento: 21" sem unidade no texto, assumida
+            # como mm) — não é fato lido do texto, então não pode reprovar
+            # sozinha. Ex.: "21" pode muito bem ser 21cm (uma tesoura), não
+            # 21mm; a suposição errada não pode virar uma crítica que
+            # derruba um produto bom.
+            pendencias.append(Pendencia(
+                "numerico",
+                f"item exige {exigido.bruto} (unidade assumida, não informada no texto) "
+                f"— produto oferece {melhor.bruto} — confirmar unidade manualmente",
+                critico=False,
+            ))
+        else:
+            pendencias.append(Pendencia(
+                "numerico",
+                f"item exige {exigido.bruto} — produto oferece {melhor.bruto}",
+                critico=True,
+            ))
+    return pendencias
+
+
+def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]:
+    """Valida um GRUPO de exigências da MESMA família (ex.: par de dimensão
+    "38 x 51", que vira 2 AtributoNumerico de comprimento) como CONJUNTO
+    contra o que o produto oferece — em vez de cada valor procurar seu
+    "melhor" candidato isoladamente (o que gerava uma pendência de
+    "múltiplos valores" REPETIDA pra cada valor exigido: um par 2x2 virava 4
+    mensagens pra dizer a mesma coisa duas vezes)."""
+    bruto_exigido = _bruto_grupo(exigidos)
+    if not candidatos:
+        return [Pendencia(
+            "numerico",
+            f"item exige {bruto_exigido} — produto não informa a medida na descrição",
+            critico=False,
+        )]
+    # ordena os dois lados e compara como conjunto — "38 x 51" bate com
+    # "51 x 38" (ordem de largura/altura é ambígua na notação "AxB").
+    valores_exigidos = sorted(familia_unidade(e.unidade, e.valor)[1] for e in exigidos)
+    valores_ofertados = sorted(familia_unidade(c.unidade, c.valor)[1] for c in candidatos)
+    if valores_exigidos == valores_ofertados:
+        return []
+    bruto_ofertado = _bruto_grupo(candidatos)
+    if any(e.inferido for e in exigidos):
+        # mesma lógica do caso simples: unidade assumida (sem estar no
+        # texto) não pode reprovar sozinha, só virar aviso.
+        return [Pendencia(
+            "numerico",
+            f"item exige {bruto_exigido} (unidade assumida, não informada no texto) "
+            f"— produto oferece {bruto_ofertado} — confirmar medida manualmente",
+            critico=False,
+        )]
+    return [Pendencia(
+        "numerico",
+        f"item exige {bruto_exigido} — produto oferece {bruto_ofertado}",
+        critico=True,
+    )]
+
+
 def validar(item_texto: str, produto_texto: str) -> ResultadoValidacao:
     """Extrai os requisitos do item e valida — atalho para quando só há UM
     produto candidato. Ao validar vários candidatos contra o mesmo item,
@@ -70,53 +167,23 @@ def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str) -> Result
     of = extrair_atributos(produto_texto)
     pendencias: list[Pendencia] = []
 
-    # 1) atributos numéricos (capacidade, velocidade, dimensão...)
+    # 1) atributos numéricos (capacidade, velocidade, dimensão...) — agrupa
+    # por FAMÍLIA primeiro: um par de dimensão (ex.: item "38 x 51") vira
+    # DOIS AtributoNumerico da mesma família (comprimento). Grupo com 2+
+    # exigências usa comparação de CONJUNTO (_validar_grupo_dimensao); grupo
+    # com só 1 usa o comportamento original de "melhor candidato"
+    # (_validar_numerico_simples) — ver os comentários de cada uma pro
+    # porquê da separação.
+    grupos: dict[str, list] = {}
     for exigido in req.numericos:
-        familia_exigida, valor_exigido_canon = familia_unidade(exigido.unidade, exigido.valor)
-        candidatos = [o for o in of.numericos if familia_unidade(o.unidade, o.valor)[0] == familia_exigida]
-        if not candidatos:
-            pendencias.append(Pendencia(
-                "numerico",
-                f"item exige {exigido.bruto} — produto não informa '{exigido.unidade}' na descrição",
-                critico=False,
-            ))
-            continue
-        # compara pelo valor já convertido pra mesma escala (família) — "2
-        # litros" e "2000 ml" são o MESMO valor, não uma ambiguidade.
-        valores_canon = {familia_unidade(c.unidade, c.valor)[1] for c in candidatos}
-        if len(valores_canon) > 1:
-            # candidatos com valor efetivamente diferente (mesmo já convertidos
-            # pra mesma escala) — podem ser o mesmo atributo redito com um
-            # valor diferente, ou dois atributos distintos que só coincidem em
-            # unidade/família — regex não consegue desambiguar com segurança.
-            lista = ", ".join(c.bruto for c in candidatos)
-            pendencias.append(Pendencia(
-                "numerico",
-                f"produto menciona múltiplos valores de '{exigido.unidade}' ({lista}) — confirmar manualmente qual se refere ao item",
-                critico=False,
-            ))
-        melhor = max(candidatos, key=lambda o: familia_unidade(o.unidade, o.valor)[1])
-        _, melhor_canon = familia_unidade(melhor.unidade, melhor.valor)
-        if not _compara(melhor_canon, exigido.operador, valor_exigido_canon):
-            if exigido.inferido:
-                # a unidade do lado do ITEM foi uma suposição (campo
-                # estruturado do PNCP tipo "comprimento: 21" sem unidade no
-                # texto, assumida como mm) — não é fato lido do texto, então
-                # não pode reprovar sozinha. Ex.: "21" pode muito bem ser
-                # 21cm (uma tesoura), não 21mm; a suposição errada não pode
-                # virar uma crítica que derruba um produto bom.
-                pendencias.append(Pendencia(
-                    "numerico",
-                    f"item exige {exigido.bruto} (unidade assumida, não informada no texto) "
-                    f"— produto oferece {melhor.bruto} — confirmar unidade manualmente",
-                    critico=False,
-                ))
-            else:
-                pendencias.append(Pendencia(
-                    "numerico",
-                    f"item exige {exigido.bruto} — produto oferece {melhor.bruto}",
-                    critico=True,
-                ))
+        familia, _ = familia_unidade(exigido.unidade, exigido.valor)
+        grupos.setdefault(familia, []).append(exigido)
+    for familia, exigidos in grupos.items():
+        candidatos = [o for o in of.numericos if familia_unidade(o.unidade, o.valor)[0] == familia]
+        if len(exigidos) >= 2:
+            pendencias.extend(_validar_grupo_dimensao(exigidos, candidatos))
+        else:
+            pendencias.extend(_validar_numerico_simples(exigidos[0], candidatos))
 
     # 2) atributos categóricos (formato/modelo — igualdade exata, ex.: grampo 26/6)
     for chave, valor_exigido in req.categoricos.items():
