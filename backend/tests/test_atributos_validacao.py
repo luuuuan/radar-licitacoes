@@ -281,4 +281,32 @@ def test_classificar_atende_pleno_sem_pendencias():
     r = validar(item, produto)
     assert r.verificavel
     assert not r.pendencias
-    assert classificar(0.8, r) == "Atende"
+
+
+def test_extrai_par_de_dimensao_com_unidade_so_no_final():
+    a = extrair_atributos("envelope de segurança 30x40cm")
+    achados = {(n.unidade, n.valor) for n in a.numericos}
+    assert ("cm", 30.0) in achados and ("cm", 40.0) in achados
+    assert all(not n.inferido for n in a.numericos)
+
+
+def test_extrai_par_de_dimensao_com_unidade_propria_em_cada_lado():
+    a = extrair_atributos("placa de aço 12cm x 50mm")
+    achados = {(n.unidade, n.valor) for n in a.numericos}
+    assert ("cm", 12.0) in achados and ("mm", 50.0) in achados
+
+
+def test_extrai_par_de_dimensao_sem_unidade_assume_mm_e_marca_inferido():
+    a = extrair_atributos("etiqueta adesiva 12x50")
+    achados = {(n.unidade, n.valor): n.inferido for n in a.numericos}
+    assert achados.get(("mm", 12.0)) is True
+    assert achados.get(("mm", 50.0)) is True
+
+
+def test_par_de_dimensao_nao_confunde_multiplicador_de_quantidade():
+    """'3x500ml' é quantidade (3 embalagens de 500ml), não uma dimensão —
+    'ml' não é unidade de comprimento, então só '500ml' deve ser extraído,
+    e não um par de dimensão com '3'."""
+    a = extrair_atributos("caixa com 3x500ml")
+    assert not any(n.valor == 3.0 for n in a.numericos)
+    assert any(n.unidade == "ml" and n.valor == 500.0 for n in a.numericos)

@@ -115,6 +115,47 @@ _CAMPOS_DIMENSAO_MM = re.compile(
 )
 
 
+# Par de dimensão físico ("30x40cm", "12mm x 50mm", ou só "12x50" sem
+# unidade nenhuma) — o "x" entre dois números é o sinal, não precisa de mais
+# nada pra reconhecer: por construção do padrão, só casa se houver um
+# dígito colado (ou separado por espaço) nos dois lados. Cada lado pode ter
+# sua PRÓPRIA unidade (mm ou cm); se só um dos dois tiver, essa unidade vale
+# pros dois (convenção mais comum: "30x40cm" é 30cm e 40cm); se nenhum
+# tiver, assume mm (igual ao campo estruturado do PNCP acima), marcado como
+# inferido=True — nunca reprova um produto sozinho, só vira aviso.
+_UNIDADE_COMPRIMENTO = r"(?:mm|milimetros?|cm|centimetros?)"
+_DIMENSAO = re.compile(
+    rf"\b(?P<n1>{_NUM})\s*(?P<u1>{_UNIDADE_COMPRIMENTO})?\s*x\s*(?P<n2>{_NUM})\s*(?P<u2>{_UNIDADE_COMPRIMENTO})?(?!\w)"
+)
+
+
+def _unidade_comprimento_canonica(txt: str | None) -> str | None:
+    if not txt:
+        return None
+    return "cm" if txt[0] == "c" else "mm"
+
+
+def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, str]], list[tuple[int, int]]]:
+    """Acha pares 'NxN' e devolve (entradas no mesmo formato que o scan por
+    unidade de _extrair_numericos usa, spans SEM unidade explícita — pra
+    marcar inferido=True via o mesmo mecanismo de spans_inferidos)."""
+    entradas: list[tuple[int, int, str, float, str]] = []
+    sem_unidade: list[tuple[int, int]] = []
+    for m in _DIMENSAO.finditer(texto_norm):
+        u1 = _unidade_comprimento_canonica(m.group("u1"))
+        u2 = _unidade_comprimento_canonica(m.group("u2"))
+        explicita = bool(u1 or u2)
+        unidade_comum = u1 or u2 or "mm"
+        for grupo, unidade_propria in (("n1", u1), ("n2", u2)):
+            ini, fim = m.span(grupo)
+            valor = _parse_numero(m.group(grupo))
+            unidade = unidade_propria or unidade_comum
+            entradas.append((ini, fim, unidade, valor, m.group(grupo)))
+            if not explicita:
+                sem_unidade.append((ini, fim))
+    return entradas, sem_unidade
+
+
 def _expandir_campos_estruturados(texto_norm: str) -> tuple[str, list[tuple[int, int]]]:
     """Reescreve 'comprimento: 145' -> '145 mm' ANTES da extração normal, pra
     reaproveitar toda a lógica de operador/contexto/dedup/família que já
@@ -185,6 +226,15 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
         for m in re.finditer(rf"{_NUM}\s*(?:{padrao})(?!\w)", texto_norm):
             valor = _parse_numero(m.group(1))
             brutos.append((m.start(), m.end(), unidade, valor, m.group(0).strip()))
+
+    # pares de dimensão ("30x40cm", "12x50"...) — pode se sobrepor com o scan
+    # acima quando os DOIS lados já têm unidade explícita (ex.: "40cm" seria
+    # achado pelos dois caminhos); inofensivo, o dedup abaixo por
+    # (unidade, valor, operador) colapsa a repetição.
+    pares, spans_sem_unidade = _pares_dimensao(texto_norm)
+    brutos.extend(pares)
+    spans_inferidos = list(spans_inferidos) + spans_sem_unidade
+
     brutos.sort(key=lambda b: b[0])
 
     achados: list[AtributoNumerico] = []
