@@ -402,3 +402,34 @@ def test_validacao_de_trio_de_dimensao_bate_exato_sem_pendencia():
     r = validar(item, produto)
     assert not r.pendencias
     assert r.atende
+
+
+def test_extrai_digitos_com_rotulo_antes_do_numero():
+    """Caso real: alguns editais descrevem primeiro o rótulo, depois o valor
+    ('dígitos: 12'), ao contrário da ordem natural ('12 dígitos'). Sem
+    reconhecer essa ordem invertida, o requisito de dígitos não era
+    extraído — o mesmo bug da calculadora, só que noutra redação."""
+    a = extrair_atributos("calculadora eletronica numero digitos: 12, tipo: mesa")
+    achado = next(n for n in a.numericos if n.unidade == "digitos")
+    assert achado.valor == 12.0
+    assert not achado.inferido
+
+
+def test_extrai_tensao_com_rotulo_antes_do_numero():
+    a = extrair_atributos("fonte alimentacao: bateria, tensao: 12")
+    achado = next(n for n in a.numericos if n.unidade == "volts")
+    assert achado.valor == 12.0
+    assert not achado.inferido
+
+
+def test_validacao_reprova_calculadora_com_rotulo_invertido():
+    """Mesmo caso real do teste de 'dígitos com rótulo antes do número',
+    ponta a ponta: item redigido com rótulo antes do número tem que
+    reprovar produto de 8 dígitos igual reprovaria na ordem natural."""
+    item = ("calculadora eletronica numero digitos: 12, tipo: mesa, "
+            "aplicacao: financeira, fonte alimentacao: bateria, tensao: 12, "
+            "caracteristicas adicionais: sem impressao")
+    produto = "calculadora de mesa 8 digitos vx1385"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.tipo == "numerico" and p.critico and "digitos" in p.descricao for p in r.criticas)

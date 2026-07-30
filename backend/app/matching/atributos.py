@@ -118,26 +118,42 @@ def _parse_numero(bruto: str) -> float:
 # campo estruturado OU de um par/trio de dimensão (ver abaixo).
 _UNIDADE_COMPRIMENTO = r"(?:mm|milimetros?|cm|centimetros?|m(?!/)|metros?)"
 
-# O PNCP costuma descrever especificação de item em campos estruturados SEM
-# unidade colada no número ("comprimento: 145", não "145mm") — a unidade
-# fica implícita no schema do catálogo (CATMAT), não no texto. Sem isso,
-# esses campos (super comuns em item real do PNCP) não batiam em nenhuma
-# unidade e o item inteiro ficava "não verificável" à toa. Convenção do
-# catálogo pra esses campos de dimensão física é sempre milímetro — MAS só
-# quando o texto não diz nada melhor: "comprimento: 96 metros" tem a unidade
-# certinha ali do lado (só que numa PALAVRA separada por espaço, não colada
-# no número) — sem o 2º lookahead abaixo, isso virava "96 mm" por engano,
-# um erro de escala de 1000x (96 metros != 96 milímetros).
-_CAMPOS_DIMENSAO_MM = re.compile(
-    r"\b(?:comprimento|largura|altura|diametro|espessura)\s*:\s*" + _NUM
-    + r"(?!\d*[a-z])"                                # unidade colada, ex.: "145mm"
-    # unidade em palavra separada, ex.: "96 metros" — precisa do MESMO
-    # "\d*" de folga que o lookahead acima usa: sem ele, o motor de regex
-    # backtrackeia o número pra um prefixo mais curto ("9" em vez de "96")
-    # e o dígito restante ("6") deixa de bloquear o lookahead, deixando
-    # "9" passar como se não tivesse unidade nenhuma na frente.
+# O PNCP costuma descrever especificação de item em campos estruturados —
+# "rótulo: número", sem unidade colada ("comprimento: 145", não "145mm").
+# Dois tipos, tratados igual na hora de reescrever mas com confiança
+# diferente:
+#  - dimensão física (comprimento/largura/altura/diâmetro/espessura): a
+#    unidade fica implícita no schema do catálogo (CATMAT), não no texto —
+#    é uma SUPOSIÇÃO (convenção do catálogo é sempre milímetro), então o
+#    resultado fica marcado como inferido=True (nunca reprova sozinho).
+#  - rótulo que JÁ NOMEIA a unidade (dígitos/tensão): "dígitos: 12" é tão
+#    firme quanto se o texto dissesse "12 dígitos" na ordem natural — não é
+#    suposição nenhuma, então NÃO fica marcado como inferido.
+# (rótulo_regex) -> (unidade, inferido)
+_CAMPOS_ROTULO_UNIDADE: dict[str, tuple[str, bool]] = {
+    r"comprimento|largura|altura|diametro|espessura": ("mm", True),
+    r"(?:numero\s+(?:de\s+)?|n[oº]?\s*(?:de\s+)?)?digitos": ("digitos", False),
+    r"tensao|voltagem": ("volts", False),
+}
+_CAMPOS_ROTULO_ALT = "|".join(f"(?:{r})" for r in _CAMPOS_ROTULO_UNIDADE)
+# Sem isso, "campo: 96 metros" virava "96 mm" por engano (a unidade certa
+# já tava ali do lado, só que como PALAVRA separada por espaço, não colada
+# no número) — erro de escala de até 1000x. O "\d*" de folga é necessário:
+# sem ele, o motor de regex backtrackeia o número pra um prefixo mais curto
+# ("9" em vez de "96") e o dígito restante ("6") deixa de bloquear o
+# lookahead, deixando "9" passar como se não tivesse unidade na frente.
+_CAMPO_ESTRUTURADO_RE = re.compile(
+    rf"\b(?P<rotulo>{_CAMPOS_ROTULO_ALT})\s*:\s*(?P<num>{_NUM})"
+    + r"(?!\d*[a-z])"
     + rf"(?!\d*\s+{_UNIDADE_COMPRIMENTO}\b)"
 )
+
+
+def _unidade_do_rotulo(rotulo_txt: str) -> tuple[str, bool] | None:
+    for padrao, par in _CAMPOS_ROTULO_UNIDADE.items():
+        if re.fullmatch(padrao, rotulo_txt):
+            return par
+    return None
 
 
 # Cadeia de dimensão físico ("30x40cm", "12mm x 50mm", "12x50" sem unidade
@@ -194,32 +210,33 @@ def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, s
 
 
 def _expandir_campos_estruturados(texto_norm: str) -> tuple[str, list[tuple[int, int]]]:
-    """Reescreve 'comprimento: 145' -> '145 mm' ANTES da extração normal, pra
-    reaproveitar toda a lógica de operador/contexto/dedup/família que já
-    existe pra número com unidade no texto (não duplica nada disso aqui).
-    Só dispara quando NÃO há unidade já colada no número — precisa ser
-    `(?!\d*[a-z])`, não só `(?![a-z])`: como o \\d+ da NUM pode dar
-    backtrack pra um prefixo mais curto ("14" em vez de "145"), um
-    `(?![a-z])` ingênuo passava no dígito seguinte ("5") e casava só o
-    resto ("5mm"). Olhar além de dígitos restantes fecha essa brecha.
+    """Reescreve campo estruturado 'rótulo: número' -> 'número unidade' ANTES
+    da extração normal, pra reaproveitar toda a lógica de operador/contexto/
+    dedup/família que já existe pra número com unidade no texto (não duplica
+    nada disso aqui). Cobre tanto "comprimento: 145" -> "145 mm" (unidade
+    SUPOSTA, convenção do catálogo) quanto "dígitos: 12" -> "12 digitos" ou
+    "tensão: 12" -> "12 volts" (unidade É O PRÓPRIO RÓTULO, fato, não
+    suposição) — ver _CAMPOS_ROTULO_UNIDADE pra qual é qual.
 
-    Retorna também os SPANS (posição no texto de saída) de cada "145 mm"
-    inserido — mm aqui é uma SUPOSIÇÃO (o campo do PNCP não diz a unidade),
-    não um fato lido do texto. _extrair_numericos() usa esses spans pra
-    marcar o AtributoNumerico como `inferido=True`, e validacao.py rebaixa
-    pendência baseada nisso de crítica pra aviso — "no mínimo 21" pode
-    muito bem ser 21cm (ex.: tesoura), não 21mm, então não é fato firme o
-    bastante pra reprovar um produto sozinho."""
+    Retorna também os SPANS (posição no texto de saída) de cada substituição
+    cuja unidade foi SUPOSTA (não os rótulos que já a nomeiam) —
+    _extrair_numericos() usa esses spans pra marcar o AtributoNumerico como
+    `inferido=True`, e validacao.py rebaixa pendência baseada nisso de
+    crítica pra aviso — "no mínimo 21" pode muito bem ser 21cm (ex.:
+    tesoura), não 21mm, então não é fato firme o bastante pra reprovar um
+    produto sozinho."""
     partes = []
     spans_inferidos: list[tuple[int, int]] = []
     pos = 0
     pos_saida = 0
-    for m in _CAMPOS_DIMENSAO_MM.finditer(texto_norm):
+    for m in _CAMPO_ESTRUTURADO_RE.finditer(texto_norm):
+        unidade, inferido = _unidade_do_rotulo(m.group("rotulo"))
         partes.append(texto_norm[pos:m.start()])
         pos_saida += m.start() - pos
-        substituto = f"{m.group(1)} mm"
+        substituto = f"{m.group('num')} {unidade}"
         partes.append(substituto)
-        spans_inferidos.append((pos_saida, pos_saida + len(substituto)))
+        if inferido:
+            spans_inferidos.append((pos_saida, pos_saida + len(substituto)))
         pos_saida += len(substituto)
         pos = m.end()
     partes.append(texto_norm[pos:])
