@@ -61,6 +61,11 @@ _UNIDADES: dict[str, str] = {
     "furos": r"furos?",
     "rpm": r"rpm",
     "dpi": r"dpi",
+    # capacidade de exibição de calculadora ("12 dígitos") — sem isso o
+    # número não batia em NENHUMA unidade reconhecida e um mismatch óbvio
+    # (item exige 12 dígitos, produto oferece 8) passava batido sem gerar
+    # nenhuma pendência.
+    "digitos": r"digitos?|dig\.?",
 }
 
 # unidades da MESMA família (só escala métrica, conversão exata e sem

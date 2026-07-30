@@ -333,3 +333,20 @@ def test_validacao_de_par_de_dimensao_bate_exato_sem_pendencia():
     r = validar(item, produto)
     assert not r.pendencias
     assert r.atende
+
+
+def test_extrai_digitos_de_calculadora():
+    a = extrair_atributos("Calculadora de Mesa 12 Dígitos")
+    assert any(n.unidade == "digitos" and n.valor == 12 for n in a.numericos)
+
+
+def test_validacao_reprova_calculadora_com_menos_digitos_que_o_exigido():
+    """Caso real: item exige 12 dígitos e o produto casado só tem 8 — antes
+    de 'digitos' virar unidade reconhecida, esse mismatch não gerava
+    NENHUMA pendência (o número não batia em nenhuma unidade da lista)."""
+    item = "CALCULADORA DE MESA 12 DIGITOS"
+    produto = "Calculadora de Mesa 8 Dígitos VX1385"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.tipo == "numerico" and p.critico for p in r.criticas)
+    assert classificar(0.9, r) == "Não atende"
