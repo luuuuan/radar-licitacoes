@@ -2313,10 +2313,13 @@ async function abaEdital(nome, forcar){
 
   // análise por IA não roda sozinha: mostra um botão (ou o resultado já
   // buscado nesta sessão da página) em vez de disparar a IA a cada clique
-  // na aba.
+  // na aba. Se já tem uma análise rodando em segundo plano (usuário saiu e
+  // voltou pra aba), mostra o progresso em vez do botão — senão o clique
+  // dispararia uma SEGUNDA análise em paralelo da mesma.
   if(nome==='analise'){
     if(forcar) return _rodarAnaliseEdital(true);
-    cont.innerHTML = _analiseCache || _corpoAnaliseIntro();
+    cont.innerHTML = _analiseCache
+      || (_analiseEmAndamento ? _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.') : _corpoAnaliseIntro());
     return;
   }
 
@@ -2346,11 +2349,16 @@ function _corpoAnaliseIntro(){
 }
 
 async function _rodarAnaliseEdital(forcar){
-  const meuToken = ++_abaEditalToken;
+  ++_abaEditalToken;
   _abaEditalAtual = 'analise';
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba==='analise'));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
+  // a análise continua rodando mesmo se o usuário sair da aba/edital e
+  // voltar depois — por isso NÃO usa o token (que marcaria como "stale"
+  // sempre que ele trocasse de aba). Em vez disso, checa se ele ainda está
+  // olhando pra esta mesma aba deste mesmo edital quando a resposta chegar.
+  const aindaAqui = () => _abaEditalAtual === 'analise' && _paginaEditalId === id;
   // troca pra aba Análise por IA de verdade (inclusive quando chamada a
   // partir da Cotação) — o progresso e o resultado sempre aparecem aqui,
   // nunca na aba de onde a análise foi disparada.
@@ -2360,9 +2368,9 @@ async function _rodarAnaliseEdital(forcar){
     const html = await _corpoAnaliseEdital(id, forcar);
     _analiseCache = html;
     if(_paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
-    if(meuToken === _abaEditalToken) cont.innerHTML = html;
+    if(aindaAqui()) cont.innerHTML = html;
   }catch(e){
-    if(meuToken === _abaEditalToken) cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
+    if(aindaAqui()) cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
       + '<button class="btn ghost" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">tentar novamente</button>';
   }finally{
     _analiseEmAndamento = false;
