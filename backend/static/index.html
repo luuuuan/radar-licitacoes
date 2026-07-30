@@ -2214,10 +2214,14 @@ let _abaEditalAtual = 'itens';
 let _abaEditalToken = 0;
 let _analiseCache = null;
 // true enquanto uma análise por IA está rodando em segundo plano (a análise
-// continua mesmo se o usuário trocar de aba — não é abortável). A aba
+// continua mesmo se o usuário trocar de aba/edital — não é abortável). A aba
 // Cotação usa isso pra saber "já pedi, só falta esperar" em vez de mostrar
-// o botão de novo (que disparava outra análise em paralelo).
+// o botão de novo (que disparava outra análise em paralelo). _analiseEmAndamentoId
+// guarda DE QUAL edital é essa análise — sem isso, trocar de edital enquanto uma
+// análise da aba anterior ainda roda faz o edital novo herdar o aviso "em
+// andamento" por engano (nenhuma análise foi pedida pra ele).
 let _analiseEmAndamento = false;
+let _analiseEmAndamentoId = null;
 
 function _spinnerHTML(texto){
   return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0"><span class="spinner-inline"></span>${esc(texto)}</p>`;
@@ -2255,6 +2259,11 @@ async function _renderPaginaEdital(editalId, aba){
   $('#t-edital').classList.remove('hidden');
   $('#edital-cabecalho').innerHTML = _spinnerHTML('Carregando…');
   $('#edital-conteudo').innerHTML = '';
+  // reseta a aba (destaque do botão) JÁ AQUI, antes de buscar os dados do
+  // edital novo — senão, enquanto a busca não termina, a barra de abas
+  // fica mostrando por um instante a aba em que o edital ANTERIOR estava.
+  _abaEditalAtual = aba;
+  document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===aba));
   try{
     _paginaEditalDetalhe = await api(`/api/editais/${editalId}/detalhe`);
     _renderCabecalhoEdital();
@@ -2318,8 +2327,9 @@ async function abaEdital(nome, forcar){
   // dispararia uma SEGUNDA análise em paralelo da mesma.
   if(nome==='analise'){
     if(forcar) return _rodarAnaliseEdital(true);
+    const emAndamentoAqui = _analiseEmAndamento && _analiseEmAndamentoId === id;
     cont.innerHTML = _analiseCache
-      || (_analiseEmAndamento ? _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.') : _corpoAnaliseIntro());
+      || (emAndamentoAqui ? _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.') : _corpoAnaliseIntro());
     return;
   }
 
@@ -2364,6 +2374,7 @@ async function _rodarAnaliseEdital(forcar){
   // nunca na aba de onde a análise foi disparada.
   cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
   _analiseEmAndamento = true;
+  _analiseEmAndamentoId = id;
   try{
     const html = await _corpoAnaliseEdital(id, forcar);
     _analiseCache = html;
@@ -2596,7 +2607,7 @@ function _corpoCotacaoAcoes(analisado){
   if(analisado){
     return `<button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>`;
   }
-  if(_analiseEmAndamento){
+  if(_analiseEmAndamento && _analiseEmAndamentoId === _paginaEditalId){
     return `<div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente).</p>
       <div class="toolbar">
