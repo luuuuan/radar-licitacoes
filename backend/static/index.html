@@ -2253,7 +2253,7 @@ window.addEventListener('popstate', ev=>{
 async function _renderPaginaEdital(editalId, aba){
   _paginaEditalId = editalId;
   _analiseCache = null;   // não carrega a análise de um edital antigo pro novo
-  _cotacaoDesmarcados = new Set();   // idem pra seleção de itens da cotação
+  _cotacaoSelecionados = new Set();   // idem pra seleção de itens da cotação
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
@@ -2418,6 +2418,16 @@ function _corpoItensEdital(d){
         bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
       }
       bloco += _validacaoTecnicaHTML(it.validacao_tecnica);
+      // "Adicionar na cotação" fica só nos itens com produto batido — a aba
+      // Cotação agora mostra SÓ o que foi adicionado por aqui (em vez de
+      // começar com tudo marcado e o usuário ter que desmarcar item por
+      // item entre dezenas de itens compatíveis).
+      const naCotacao = _cotacaoSelecionados.has(String(it.numero));
+      bloco += `<div style="margin-top:8px">
+        <button class="btn ghost" id="cotacao-btn-${esc(it.numero)}" onclick="_toggleCotacaoDoItem('${esc(it.numero)}', this)">
+          ${naCotacao ? ICN.check+' Na cotação (remover)' : '+ Adicionar na cotação'}
+        </button>
+      </div>`;
     } else {
       bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
     }
@@ -2553,30 +2563,30 @@ async function _corpoAnaliseEdital(id, forcar){
     ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
 }
 
-// ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens
-// compatíveis com o catálogo, no modelo que o usuário já usa em pregão. ----
-// itens desmarcados pelo usuário na tabela de seleção — um Set (não um
-// booleano por item) porque o padrão é "tudo marcado"; só precisa lembrar
-// as exceções. Sobrevive a trocar de aba (Itens/Documentos/Análise/
+// ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens que o
+// usuário ADICIONOU explicitamente (botão "Adicionar na cotação" na aba
+// Itens/margem) — em vez de começar com TODOS os itens compatíveis marcados
+// e o usuário ter que desmarcar um por um entre dezenas deles. Um Set com os
+// itens SELECIONADOS (oposto do modelo antigo, que guardava os
+// desmarcados). Sobrevive a trocar de aba (Itens/Documentos/Análise/
 // Cotação) dentro do MESMO edital; zera ao entrar em outro edital (junto
 // com _analiseCache, em _renderPaginaEdital).
-let _cotacaoDesmarcados = new Set();
+let _cotacaoSelecionados = new Set();
 async function _corpoCotacaoEdital(id){
   const d = _paginaEditalDetalhe;
   const itens = (d && d.itens) || [];
-  const compativeis = itens.filter(it=>it.compativel);
-  if(!compativeis.length){
-    return '<p class="muted" style="margin-top:0">Nenhum item deste edital bate com o seu catálogo — não há o que cotar.</p>';
+  const selecionados = itens.filter(it=>it.compativel && _cotacaoSelecionados.has(String(it.numero)));
+  if(!selecionados.length){
+    return '<p class="muted" style="margin-top:0">Nenhum item foi adicionado à cotação ainda. Vá na aba "Itens / margem" e clique em "Adicionar na cotação" nos itens que quiser incluir na planilha.</p>';
   }
   const analisado = !!(d.edital && d.edital.analisado);
   const tituloEntrada = 'Quanto custa trazer ESTE item do fornecedor até você (valor total pra a quantidade toda desse item, não por unidade).';
   const tituloSaida = 'Quanto custa entregar ESTE item no órgão (valor total pra a quantidade toda desse item, não por unidade).';
-  const linhas = compativeis.map(it=>{
+  const linhas = selecionados.map(it=>{
     const desc = it.descricao||'';
     const descCurta = desc.length>100 ? desc.slice(0,100)+'…' : desc;
-    const marcado = !_cotacaoDesmarcados.has(String(it.numero));
     return `<tr>
-      <td><input type="checkbox" class="chk-cotacao-item" value="${it.numero}" ${marcado?'checked':''} onchange="_marcarSelecaoCotacao('${it.numero}',this.checked)"></td>
+      <td><input type="checkbox" class="chk-cotacao-item" value="${it.numero}" checked onchange="_marcarSelecaoCotacao('${it.numero}',this.checked)"></td>
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td style="font-size:13px">${esc(descCurta)}</td>
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
@@ -2584,11 +2594,10 @@ async function _corpoCotacaoEdital(id){
       <td><input type="number" step="0.01" class="cot-frete-saida-item" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
     </tr>`;
   }).join('');
-  const todosMarcados = compativeis.every(it=>!_cotacaoDesmarcados.has(String(it.numero)));
-  return `<p class="muted" style="margin-top:0">Selecione os itens que entram na planilha de cotação — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos.</p>
+  return `<p class="muted" style="margin-top:0">Itens adicionados à cotação na aba "Itens / margem" — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos. Desmarcar aqui remove o item da cotação (mesmo efeito de clicar em "remover" na aba Itens / margem).</p>
     <div style="overflow-x:auto"><table>
       <thead><tr>
-        <th><input type="checkbox" id="chk-cotacao-todos" ${todosMarcados?'checked':''} onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
+        <th><input type="checkbox" id="chk-cotacao-todos" checked onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
         <th>Item</th><th>Descrição</th><th>Produto do catálogo</th>
         <th>Frete entrada (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Fornecedor → você, valor total pra esse item (pode ser de um fornecedor diferente dos outros itens). Fica em branco = sem custo de frete de entrada.</span></span></th>
         <th>Frete saída (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Você → órgão, valor total pra esse item. Fica em branco = sem custo de frete de saída.</span></span></th>
@@ -2628,12 +2637,25 @@ function toggleTodosCotacao(chk){
     _marcarSelecaoCotacao(el.value, chk.checked);
   });
 }
+// usada tanto pela checkbox da tabela da aba Cotação quanto pelo botão
+// "Adicionar na cotação" da aba Itens/margem — as duas mexem no MESMO Set,
+// então desmarcar na tabela da Cotação tem o mesmo efeito de "remover" lá.
 function _marcarSelecaoCotacao(numero, marcado){
-  if(marcado) _cotacaoDesmarcados.delete(String(numero));
-  else _cotacaoDesmarcados.add(String(numero));
+  if(marcado) _cotacaoSelecionados.add(String(numero));
+  else _cotacaoSelecionados.delete(String(numero));
   const chkTodos = $('#chk-cotacao-todos');
   if(chkTodos) chkTodos.checked = Array.from(document.querySelectorAll('.chk-cotacao-item')).every(el=>el.checked);
 }
+
+// Botão "Adicionar na cotação" da aba Itens/margem — alterna o item dentro/
+// fora de _cotacaoSelecionados e atualiza só o próprio botão (não precisa
+// re-renderizar a aba inteira pra isso).
+function _toggleCotacaoDoItem(numero, btn){
+  const marcado = !_cotacaoSelecionados.has(String(numero));
+  _marcarSelecaoCotacao(numero, marcado);
+  if(btn) btn.innerHTML = marcado ? (ICN.check+' Na cotação (remover)') : '+ Adicionar na cotação';
+}
+
 function baixarCotacao(){
   const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
   if(!selecionados.length){ alert('Selecione ao menos um item para cotar.'); return; }
