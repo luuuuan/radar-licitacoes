@@ -433,3 +433,27 @@ def test_validacao_reprova_calculadora_com_rotulo_invertido():
     r = validar(item, produto)
     assert not r.atende
     assert any(p.tipo == "numerico" and p.critico and "digitos" in p.descricao for p in r.criticas)
+
+
+def test_bruto_de_valor_inferido_nao_mostra_unidade_inventada():
+    """Caso real: 'comprimento: 13, largura: 4, altura: 2,3' (apagador de
+    quadro branco) virava, na mensagem pro usuário, 'item exige 13 mm x 4mm
+    x 2,3mm' — o 'mm' foi uma suposição interna (nunca esteve no texto),
+    mas aparecia como se fosse. Contraditório com o próprio aviso "(unidade
+    assumida, não informada no texto)" logo depois. bruto tem que trazer só
+    o número que de fato apareceu no edital."""
+    a = extrair_atributos("comprimento: 13, largura: 4, altura: 2,3")
+    for n in a.numericos:
+        assert n.inferido
+        assert n.bruto in ("13", "4", "2,3")   # sem "mm" grudado
+
+
+def test_validacao_de_grupo_inferido_nao_mostra_unidade_inventada_na_mensagem():
+    item = "apagador quadro branco - comprimento: 13, largura: 4, altura: 2,3"
+    produto = "apagador para quadro branco base plastica"
+    r = validar(item, produto)
+    assert len(r.pendencias) == 1
+    msg = r.pendencias[0].descricao
+    assert "13 x 4 x 2,3" in msg
+    assert "mm" not in msg   # não inventa unidade na frente do usuário
+    assert "unidade assumida" in msg   # mas deixa claro que precisa confirmar

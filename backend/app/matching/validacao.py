@@ -126,9 +126,10 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
     mensagens pra dizer a mesma coisa duas vezes)."""
     bruto_exigido = _bruto_grupo(exigidos)
     if not candidatos:
+        sufixo = " (unidade assumida, não informada no texto — confirmar)" if any(e.inferido for e in exigidos) else ""
         return [Pendencia(
             "numerico",
-            f"item exige {bruto_exigido} — produto não informa a medida na descrição",
+            f"item exige {bruto_exigido}{sufixo} — produto não informa a medida na descrição",
             critico=False,
         )]
     # ordena os dois lados e compara como conjunto — "38 x 51" bate com
