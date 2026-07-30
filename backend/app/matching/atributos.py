@@ -58,6 +58,11 @@ _UNIDADES: dict[str, str] = {
     "ghz": r"ghz",
     "mm": r"mm|milimetros?",
     "cm": r"cm|centimetros?",
+    # "m" (bare) exige (?!/) pra não confundir com taxa/velocidade tipo
+    # "2 M/MIN" (2 metros por minuto — velocidade de corte de uma
+    # fragmentadora, não comprimento nenhum): "/" não é \w, então o
+    # (?!\w) do scan geral não bloqueia isso sozinho.
+    "m": r"metros?|m(?!/)",
     "furos": r"furos?",
     "rpm": r"rpm",
     "dpi": r"dpi",
@@ -76,7 +81,7 @@ _FAMILIA_UNIDADE: dict[str, tuple[str, float]] = {
     "litros": ("volume", 1000.0), "ml": ("volume", 1.0),
     "kg": ("massa", 1000.0), "gramas": ("massa", 1.0),
     "tb": ("armazenamento", 1_000_000.0), "gb": ("armazenamento", 1_000.0), "mb": ("armazenamento", 1.0),
-    "cm": ("comprimento", 10.0), "mm": ("comprimento", 1.0),
+    "cm": ("comprimento", 10.0), "mm": ("comprimento", 1.0), "m": ("comprimento", 1000.0),
 }
 
 
@@ -109,53 +114,80 @@ def _parse_numero(bruto: str) -> float:
     return float(bruto.replace(".", ""))
 
 
+# Unidades de comprimento que podem aparecer coladas num número dentro de um
+# campo estruturado OU de um par/trio de dimensão (ver abaixo).
+_UNIDADE_COMPRIMENTO = r"(?:mm|milimetros?|cm|centimetros?|m(?!/)|metros?)"
+
 # O PNCP costuma descrever especificação de item em campos estruturados SEM
 # unidade colada no número ("comprimento: 145", não "145mm") — a unidade
 # fica implícita no schema do catálogo (CATMAT), não no texto. Sem isso,
 # esses campos (super comuns em item real do PNCP) não batiam em nenhuma
 # unidade e o item inteiro ficava "não verificável" à toa. Convenção do
-# catálogo pra esses campos de dimensão física é sempre milímetro.
+# catálogo pra esses campos de dimensão física é sempre milímetro — MAS só
+# quando o texto não diz nada melhor: "comprimento: 96 metros" tem a unidade
+# certinha ali do lado (só que numa PALAVRA separada por espaço, não colada
+# no número) — sem o 2º lookahead abaixo, isso virava "96 mm" por engano,
+# um erro de escala de 1000x (96 metros != 96 milímetros).
 _CAMPOS_DIMENSAO_MM = re.compile(
-    r"\b(?:comprimento|largura|altura|diametro|espessura)\s*:\s*" + _NUM + r"(?!\d*[a-z])"
+    r"\b(?:comprimento|largura|altura|diametro|espessura)\s*:\s*" + _NUM
+    + r"(?!\d*[a-z])"                                # unidade colada, ex.: "145mm"
+    # unidade em palavra separada, ex.: "96 metros" — precisa do MESMO
+    # "\d*" de folga que o lookahead acima usa: sem ele, o motor de regex
+    # backtrackeia o número pra um prefixo mais curto ("9" em vez de "96")
+    # e o dígito restante ("6") deixa de bloquear o lookahead, deixando
+    # "9" passar como se não tivesse unidade nenhuma na frente.
+    + rf"(?!\d*\s+{_UNIDADE_COMPRIMENTO}\b)"
 )
 
 
-# Par de dimensão físico ("30x40cm", "12mm x 50mm", ou só "12x50" sem
-# unidade nenhuma) — o "x" entre dois números é o sinal, não precisa de mais
-# nada pra reconhecer: por construção do padrão, só casa se houver um
-# dígito colado (ou separado por espaço) nos dois lados. Cada lado pode ter
-# sua PRÓPRIA unidade (mm ou cm); se só um dos dois tiver, essa unidade vale
-# pros dois (convenção mais comum: "30x40cm" é 30cm e 40cm); se nenhum
-# tiver, assume mm (igual ao campo estruturado do PNCP acima), marcado como
-# inferido=True — nunca reprova um produto sozinho, só vira aviso.
-_UNIDADE_COMPRIMENTO = r"(?:mm|milimetros?|cm|centimetros?)"
+# Cadeia de dimensão físico ("30x40cm", "12mm x 50mm", "12x50" sem unidade
+# nenhuma, ou um TRIO/mais "28 X 16 X 7CM" — comprimento x largura x altura é
+# super comum em item real do PNCP) — o "x" entre números é o sinal, não
+# precisa de mais nada pra reconhecer: por construção do padrão, só casa se
+# houver um dígito colado (ou separado por espaço) nos dois lados de CADA
+# "x". Cada número pode ter sua PRÓPRIA unidade (mm/cm/m); se só um tiver,
+# essa unidade vale pra todos (convenção mais comum: "30x40cm" é 30cm e
+# 40cm); se nenhum tiver, assume mm (igual ao campo estruturado acima),
+# marcado como inferido=True — nunca reprova um produto sozinho, só vira aviso.
+_NUM_UNID_OPC = rf"{_NUM}\s*(?:{_UNIDADE_COMPRIMENTO})?"
 _DIMENSAO = re.compile(
-    rf"\b(?P<n1>{_NUM})\s*(?P<u1>{_UNIDADE_COMPRIMENTO})?\s*x\s*(?P<n2>{_NUM})\s*(?P<u2>{_UNIDADE_COMPRIMENTO})?(?!\w)"
+    rf"\b{_NUM_UNID_OPC}(?:\s*x\s*{_NUM_UNID_OPC})+(?!\w)"
 )
+# mesma peça, mas com grupos NOMEADOS — usada por dentro de cada match de
+# _DIMENSAO pra separar os números/unidades individuais da cadeia.
+_NUM_UNID_NOMEADO = re.compile(rf"(?P<num>{_NUM})\s*(?P<un>{_UNIDADE_COMPRIMENTO})?")
 
 
 def _unidade_comprimento_canonica(txt: str | None) -> str | None:
     if not txt:
         return None
-    return "cm" if txt[0] == "c" else "mm"
+    if txt.startswith("mm") or txt.startswith("milimetro"):
+        return "mm"
+    if txt.startswith("cm") or txt.startswith("centimetro"):
+        return "cm"
+    return "m"
 
 
 def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, str]], list[tuple[int, int]]]:
-    """Acha pares 'NxN' e devolve (entradas no mesmo formato que o scan por
-    unidade de _extrair_numericos usa, spans SEM unidade explícita — pra
-    marcar inferido=True via o mesmo mecanismo de spans_inferidos)."""
+    """Acha cadeias 'NxNx...xN' e devolve (entradas no mesmo formato que o
+    scan por unidade de _extrair_numericos usa, spans SEM unidade explícita —
+    pra marcar inferido=True via o mesmo mecanismo de spans_inferidos)."""
     entradas: list[tuple[int, int, str, float, str]] = []
     sem_unidade: list[tuple[int, int]] = []
     for m in _DIMENSAO.finditer(texto_norm):
-        u1 = _unidade_comprimento_canonica(m.group("u1"))
-        u2 = _unidade_comprimento_canonica(m.group("u2"))
-        explicita = bool(u1 or u2)
-        unidade_comum = u1 or u2 or "mm"
-        for grupo, unidade_propria in (("n1", u1), ("n2", u2)):
-            ini, fim = m.span(grupo)
-            valor = _parse_numero(m.group(grupo))
+        partes = list(_NUM_UNID_NOMEADO.finditer(m.group(0)))
+        unidades = [_unidade_comprimento_canonica(p.group("un")) for p in partes]
+        # a unidade explícita mais comum na prática é a do ÚLTIMO número da
+        # cadeia ("28 x 16 x 7cm" -> os 3 são cm); usa a última encontrada,
+        # senão qualquer uma que apareça, senão assume mm.
+        unidade_comum = next((u for u in reversed(unidades) if u), None) or "mm"
+        explicita = any(unidades)
+        for parte, unidade_propria in zip(partes, unidades):
+            ini = m.start() + parte.start("num")
+            fim = m.start() + parte.end("num")
+            valor = _parse_numero(parte.group("num"))
             unidade = unidade_propria or unidade_comum
-            entradas.append((ini, fim, unidade, valor, m.group(grupo)))
+            entradas.append((ini, fim, unidade, valor, parte.group("num")))
             if not explicita:
                 sem_unidade.append((ini, fim))
     return entradas, sem_unidade

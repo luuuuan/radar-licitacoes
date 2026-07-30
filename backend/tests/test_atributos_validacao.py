@@ -350,3 +350,55 @@ def test_validacao_reprova_calculadora_com_menos_digitos_que_o_exigido():
     assert not r.atende
     assert any(p.tipo == "numerico" and p.critico for p in r.criticas)
     assert classificar(0.9, r) == "Não atende"
+
+
+def test_extrai_metros_de_campo_estruturado_sem_assumir_mm():
+    """Caso real (edital): 'COMPRIMENTO: 96 METROS' estava virando 96mm por
+    engano — o campo estruturado do PNCP assume mm só quando o texto NÃO diz
+    nada melhor; aqui a unidade já vem explícita (só que como palavra
+    separada, não colada no número), e usar mm seria um erro de escala de
+    1000x."""
+    a = extrair_atributos("material: papel - comprimento: 96 metros - diametro: 11cm")
+    achado = next(n for n in a.numericos if n.unidade == "m")
+    assert achado.valor == 96.0
+    assert not achado.inferido
+
+
+def test_extrai_metros_com_texto_solto_sem_dois_pontos():
+    a = extrair_atributos("papel contact transparente - rolo c/ 25 metros")
+    achado = next(n for n in a.numericos if n.unidade == "m")
+    assert achado.valor == 25.0
+
+
+def test_par_de_dimensao_com_unidades_mistas_mm_e_m():
+    """Caso real: 'CORRETIVO EM FITA 4,2MM X 12M' — um lado em mm, outro em
+    metros (m bem maior que mm, unidades bem diferentes de escala)."""
+    a = extrair_atributos("corretivo em fita 4,2mm x 12m")
+    achados = {(n.unidade, n.valor) for n in a.numericos}
+    assert ("mm", 4.2) in achados
+    assert ("m", 12.0) in achados
+
+
+def test_unidade_m_nao_confunde_com_taxa_m_por_min():
+    """Caso real: 'VELOCIDADE DE FRAGMENTACAO: 2 M/MIN' é uma TAXA (2 metros
+    por minuto), não um comprimento de 2 metros — '/' não é \\w, então a
+    proteção geral (?!\\w) sozinha não bloqueava isso."""
+    a = extrair_atributos("velocidade de fragmentacao: 2 m/min")
+    assert not any(n.unidade == "m" and n.valor == 2.0 for n in a.numericos)
+
+
+def test_extrai_trio_de_dimensao_comprimento_largura_altura():
+    """Caso real: 'DIMENSOES (COMPR. X LARG. X ALT.) 28 X 16 X 7CM' — trio de
+    dimensão (não só par), unidade só no último número valendo pros três."""
+    a = extrair_atributos("dimensoes (compr. x larg. x alt.) 28 x 16 x 7cm")
+    achados = {(n.unidade, n.valor) for n in a.numericos}
+    assert {("cm", 28.0), ("cm", 16.0), ("cm", 7.0)} <= achados
+    assert all(not n.inferido for n in a.numericos if n.unidade == "cm")
+
+
+def test_validacao_de_trio_de_dimensao_bate_exato_sem_pendencia():
+    item = "grampeador metalico - dimensoes 28 x 16 x 7cm"
+    produto = "grampeador de mesa - dimensoes 28cm x 16cm x 7cm"
+    r = validar(item, produto)
+    assert not r.pendencias
+    assert r.atende
