@@ -29,14 +29,14 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 5
+VERSAO_PROMPT = 6
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
 
 - "objeto": string. Resumo claro do que está sendo contratado, em 1 a 2 frases.
 
-- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array de strings. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Vazio (não a chave, a lista) se essa categoria não constar:
+- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array de strings. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Cada exigência entra em UMA ÚNICA categoria — mesmo quando o edital diz que um cadastro (ex.: Sicaf) substitui documentação de VÁRIAS categorias ao mesmo tempo (jurídica, fiscal, econômico-financeira), liste-o UMA VEZ SÓ, na categoria mais natural pra ele; nunca repita a mesma exigência em duas categorias diferentes. Vazio (não a chave, a lista) se essa categoria não constar:
   - "juridica": habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
   - "fiscal_trabalhista": regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
   - "tecnica": qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
