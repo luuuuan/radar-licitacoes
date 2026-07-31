@@ -180,9 +180,18 @@
   .ajuda .bolha{visibility:hidden;opacity:0;position:absolute;bottom:140%;left:50%;
     transform:translateX(calc(-50% + var(--ajuda-shift,0px)));background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:8px;padding:8px 10px;font-size:12px;font-weight:400;line-height:1.4;
-    width:230px;max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
-    text-align:left;transition:opacity .15s;pointer-events:none}
-  .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1}
+    max-width:70vw;z-index:6000;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    text-align:left;transition:opacity .15s;pointer-events:none;
+    /* fechado, largura 0 (não 230px) — mesmo invisível (visibility:hidden,
+       não display:none), um elemento position:absolute de 230px continua
+       contando pra largura rolável da PÁGINA INTEIRA quando fica perto da
+       borda (comum nos ícones de ajuda dos cards de KPI). html{overflow-x:
+       hidden} impede rolar até lá, mas isso ainda deixava o
+       document.documentElement.scrollWidth maior que a tela — achado real
+       testando em viewport de celular (390px), causava ~20px de "sobra"
+       horizontal invisível na página inteira. */
+    width:0;overflow:hidden}
+  .ajuda:hover .bolha, .ajuda.aberto .bolha{visibility:visible;opacity:1;width:230px;overflow:visible}
   .ajuda .bolha::after{content:"";position:absolute;top:100%;left:calc(50% - var(--ajuda-shift,0px));
     transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--line)}
   /* variante que abre pra baixo, usada quando abrir pra cima ficaria cortado pelo
