@@ -244,6 +244,31 @@ def test_validacao_avisa_quando_ha_multiplos_valores_para_a_mesma_unidade():
     )
 
 
+def test_multiplos_valores_ambiguos_nao_vira_critica_com_pick_arbitrario():
+    """Caso real (auditoria em produção): "Papel Sulfite A4 180 g/m² 60 kg
+    Branco ..." tem "180 g/m²" (a gramatura, o que interessa) e "60 kg"
+    (peso de fardo/caixa, uma coisa completamente diferente que só cai na
+    mesma família "massa" por coincidência de unidade) — comparar contra o
+    MAIOR valor (60kg) reprovava o produto com "produto oferece 60 kg" numa
+    comparação de gramatura de papel, o que não faz sentido físico nenhum.
+    Já que o próprio aviso de ambiguidade admite não saber qual valor vale,
+    também não dá pra afirmar com confiança que o produto NÃO atende."""
+    item = "Papel Sulfite gramatura 75g/m2, tipo A4"
+    produto = "Papel Sulfite A4 180 g/m2 60 kg Branco 5074 Chamex - 50FL"
+    r = validar(item, produto)
+    assert not r.criticas
+    assert any("múltiplos valores" in p.descricao for p in r.avisos)
+
+
+def test_valor_unico_sem_ambiguidade_continua_reprovando():
+    """A correção acima não pode virar falso negativo generalizado — um
+    único valor claro que não bate continua reprovando normalmente."""
+    item = "Papel Sulfite gramatura 90g/m2, tipo A4"
+    produto = "Caixa Papel A4 75g 500 Folhas Branco Chamex - 10 Resmas"
+    r = validar(item, produto)
+    assert any(p.critico for p in r.criticas)
+
+
 def test_classificar_score_baixo_e_sempre_nao_atende():
     from app.matching.validacao import ResultadoValidacao
     assert classificar(0.1, ResultadoValidacao()) == "Não atende"

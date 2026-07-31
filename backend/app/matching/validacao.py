@@ -134,12 +134,23 @@ def _validar_numerico_simples(exigido, candidatos: list) -> list[Pendencia]:
         # pra mesma escala) — podem ser o mesmo atributo redito com um
         # valor diferente, ou dois atributos distintos que só coincidem em
         # unidade/família — regex não consegue desambiguar com segurança.
+        # Caso real: "Papel Sulfite A4 180 g/m² 60 kg Branco..." — "180 g/m²"
+        # é a gramatura (o que interessa), "60 kg" é peso de fardo/caixa (uma
+        # coisa completamente diferente que só cai na mesma família "massa"
+        # por coincidência de unidade) — comparar contra o "maior valor" só
+        # porque ele "vence" a comparação numérica reprovava o produto com
+        # uma crítica que não faz sentido nenhum fisicamente ("produto
+        # oferece 60 kg" numa comparação de gramatura de papel). Já que o
+        # próprio aviso abaixo admite não saber qual valor vale, não dá pra
+        # também afirmar com confiança que o produto NÃO atende — sem isso
+        # dessa vez, não teria como saber se é uma reprovação de verdade.
         lista = ", ".join(c.bruto for c in candidatos)
         pendencias.append(Pendencia(
             "numerico",
             f"produto menciona múltiplos valores de '{exigido.unidade}' ({lista}) — confirmar manualmente qual se refere ao item",
             critico=False,
         ))
+        return pendencias
     melhor = max(candidatos, key=lambda o: familia_unidade(o.unidade, o.valor)[1])
     _, melhor_canon = familia_unidade(melhor.unidade, melhor.valor)
     if not _compara(melhor_canon, exigido.operador, valor_exigido_canon):
