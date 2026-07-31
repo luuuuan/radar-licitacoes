@@ -479,3 +479,48 @@ def test_validacao_de_grupo_inferido_nao_mostra_unidade_inventada_na_mensagem():
     assert "13 x 4 x 2,3" in msg
     assert "mm" not in msg   # não inventa unidade na frente do usuário
     assert "unidade assumida" in msg   # mas deixa claro que precisa confirmar
+
+
+def test_itens_por_unidade_corrige_folhas_de_embalagem_maior():
+    """Caso real (auditoria em produção): 'Caixa Papel A4 75g 500 Folhas ...
+    - 10 Resmas' tinha o texto descrevendo a contagem por RESMA (500), não
+    da caixa inteira (5000) — um item pedindo 5.000 folhas reprovava esse
+    produto por engano, mesmo sendo exatamente o mesmo produto. Com
+    itens_por_unidade (campo estruturado do catálogo, sempre o TOTAL de
+    folhas soltas na unidade vendida) informado, a crítica falsa some."""
+    item = "Papel A4 caixa com 10 resmas contendo 5.000 folhas cada, gramatura: 75"
+    produto = "Caixa Papel A4 75g 500 Folhas Branco Chamex - 10 Resmas"
+
+    sem_correcao = validar(item, produto)
+    assert any("folhas" in p.descricao for p in sem_correcao.criticas)
+
+    com_correcao = validar(item, produto, itens_por_unidade=5000.0)
+    assert not com_correcao.criticas
+
+
+def test_itens_por_unidade_nao_mexe_quando_e_menor_que_o_valor_do_texto():
+    """itens_por_unidade menor que o valor extraído do texto conta uma
+    granularidade DIFERENTE (ex.: bloco adesivo vendido em pacote de 4
+    BLOCOS, itens_por_unidade=4, cada bloco com 50 folhas) — não dá pra
+    saber com segurança o total de folhas só com esse número, então o
+    comportamento tem que continuar o mesmo de antes (comparação normal)."""
+    item = "Bloco adesivo numero de folhas: 400 folhas"
+    produto = "Bloco Adesivo Post-it 38mm 50mm tropical 50 Folhas 2267 3M - 4BL"
+
+    sem = validar(item, produto)
+    com = validar(item, produto, itens_por_unidade=4.0)
+    assert [p.descricao for p in sem.criticas] == [p.descricao for p in com.criticas]
+
+
+def test_itens_por_unidade_nao_afeta_unidades_que_nao_sao_contagem_de_pecas():
+    """itens_por_unidade não pode "vazar" pra unidades tipo dígitos/volts —
+    ali o número só diz quantos produtos vêm na caixa, sem relação nenhuma
+    com a especificação técnica (ex.: calculadora vendida em caixa com 10
+    unidades não vira "10 dígitos" por causa disso)."""
+    item = "Calculadora numero digitos: 12"
+    produto = "Calculadora de Mesa 8 Digitos VX1385"
+
+    sem = validar(item, produto)
+    com = validar(item, produto, itens_por_unidade=10.0)
+    assert [p.descricao for p in sem.criticas] == [p.descricao for p in com.criticas]
+    assert any("digitos" in p.descricao for p in com.criticas)

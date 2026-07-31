@@ -1060,8 +1060,24 @@ def listar_editais(
 
     from .matching.validacao import validar, classificar
 
+    linhas = db.execute(q).all()
+    # itens_por_unidade (campo do catálogo usado por _corrigir_por_embalagem
+    # em validacao.py — ver o módulo) não vem "congelado" no detalhe salvo
+    # pelo engine.py, só o texto; busca em lote (1 query pra página inteira,
+    # não 1 por item) pra não vazar N+1 numa lista de até 200 editais.
+    ids_produto: set[int] = set()
+    for match, _ed in linhas:
+        for it in ((match.detalhe or {}).get("itens") or [])[:4]:
+            if it.get("produto_id"):
+                ids_produto.add(it["produto_id"])
+    itens_por_unidade_map: dict[int, float] = {}
+    if ids_produto:
+        itens_por_unidade_map = dict(db.execute(
+            select(Produto.id, Produto.itens_por_unidade).where(Produto.id.in_(ids_produto))
+        ).all())
+
     out = []
-    for match, ed in db.execute(q).all():
+    for match, ed in linhas:
         dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
         detalhe = match.detalhe
         if detalhe and detalhe.get("itens"):
@@ -1075,7 +1091,8 @@ def listar_editais(
             for it in itens_copia[:4]:
                 if not it.get("produto") or it.get("score_item") is None:
                     continue
-                resultado = validar(it.get("descricao_item") or "", it["produto"])
+                resultado = validar(it.get("descricao_item") or "", it["produto"],
+                                    itens_por_unidade_map.get(it.get("produto_id")))
                 if resultado.verificavel:
                     it["validacao_tecnica"] = {
                         "classificacao": classificar(it["score_item"], resultado),
@@ -1189,7 +1206,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         validacao_tecnica = None
         if prod:
             score_item = scores_item.get(it.numero)
-            resultado = validar(it.descricao, prod.descricao)
+            resultado = validar(it.descricao, prod.descricao, prod.itens_por_unidade)
             # só reporta validação técnica quando havia algo de fato
             # verificável (unidade/característica reconhecida) e um score
             # por item disponível — senão fica sem opinião, em vez de

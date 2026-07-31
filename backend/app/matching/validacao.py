@@ -17,7 +17,7 @@ aquele atributo, só que o catálogo não descreve.
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .atributos import AtributosTecnicos, estado_caracteristica, extrair_atributos, familia_unidade
+from .atributos import AtributoNumerico, AtributosTecnicos, estado_caracteristica, extrair_atributos, familia_unidade
 
 
 @dataclass
@@ -59,6 +59,54 @@ def _compara(valor_produto: float, operador: str, valor_exigido: float) -> bool:
 
 def _bruto_grupo(atributos) -> str:
     return " x ".join(a.bruto for a in atributos)
+
+
+def _formatar_qtd(valor: float) -> str:
+    inteiro = int(valor) if valor == int(valor) else valor
+    return f"{inteiro:,}".replace(",", ".")
+
+
+# Unidades que representam CONTAGEM de peças soltas do próprio produto (ex.:
+# folha de papel) — as únicas onde itens_por_unidade (campo do catálogo,
+# "quantos itens soltos cabem na unidade vendida", ex.: resma = 500 folhas,
+# caixa com 10 resmas = 5000) pode legitimamente divergir do texto da
+# descrição sem ser erro de leitura. Não generaliza pra outras unidades
+# (ex. "volts"/"dígitos"/"rpm") — ali itens_por_unidade é só "quantos
+# produtos vêm na caixa", sem relação nenhuma com o número na especificação
+# técnica (comparar "8 dígitos" de uma calculadora com "itens_por_unidade=10
+# calculadoras por caixa" não faz sentido nenhum).
+_UNIDADES_POR_EMBALAGEM = {"folhas"}
+
+
+def _corrigir_por_embalagem(atributos: list[AtributoNumerico], itens_por_unidade: float | None) -> list[AtributoNumerico]:
+    """Caso real (auditoria em produção): "Caixa Papel A4 75g 500 Folhas ...
+    - 10 Resmas" tinha valor=500 extraído do texto (a contagem por RESMA,
+    granularidade descrita na frase) enquanto itens_por_unidade=5000 (campo
+    estruturado do catálogo, sempre o TOTAL de folhas soltas na unidade
+    vendida — a caixa inteira) — um item pedindo "5.000 folhas" reprovava
+    esse produto por engano, mesmo sendo exatamente a mesma coisa.
+
+    Só substitui quando itens_por_unidade é MAIOR que o valor lido do texto:
+    nesse caso o texto plausivelmente descreve um subpacote (resma) dentro
+    da embalagem maior (caixa), e itens_por_unidade é a fonte mais confiável
+    pro TOTAL. Quando itens_por_unidade é MENOR (ex.: bloco adesivo vendido
+    em pacote de 4 BLOCOS, itens_por_unidade=4, cada bloco com 50 folhas)
+    ele conta uma granularidade diferente (blocos, não folhas) — não dá pra
+    saber com segurança o total de folhas só com esse número, então não
+    mexe (mantém o comportamento conservador de antes)."""
+    if not itens_por_unidade or itens_por_unidade <= 0:
+        return atributos
+    corrigidos = []
+    for a in atributos:
+        if a.unidade in _UNIDADES_POR_EMBALAGEM and itens_por_unidade > a.valor:
+            corrigidos.append(AtributoNumerico(
+                a.unidade, itens_por_unidade, a.operador,
+                f"{_formatar_qtd(itens_por_unidade)} {a.unidade} (embalagem completa — {a.bruto} por unidade menor)",
+                a.inferido,
+            ))
+        else:
+            corrigidos.append(a)
+    return corrigidos
 
 
 def _validar_numerico_simples(exigido, candidatos: list) -> list[Pendencia]:
@@ -155,17 +203,22 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
     )]
 
 
-def validar(item_texto: str, produto_texto: str) -> ResultadoValidacao:
+def validar(item_texto: str, produto_texto: str, itens_por_unidade: float | None = None) -> ResultadoValidacao:
     """Extrai os requisitos do item e valida — atalho para quando só há UM
     produto candidato. Ao validar vários candidatos contra o mesmo item,
     prefira extrair_atributos(item_texto) uma vez e chamar
     validar_com_requisitos() por candidato, para não repetir a extração do
-    lado do item a cada chamada."""
-    return validar_com_requisitos(extrair_atributos(item_texto), produto_texto)
+    lado do item a cada chamada.
+
+    itens_por_unidade: campo do catálogo (quantos itens soltos cabem na
+    unidade vendida, ex.: resma = 500 folhas) — ver _corrigir_por_embalagem."""
+    return validar_com_requisitos(extrair_atributos(item_texto), produto_texto, itens_por_unidade)
 
 
-def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str) -> ResultadoValidacao:
+def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str,
+                            itens_por_unidade: float | None = None) -> ResultadoValidacao:
     of = extrair_atributos(produto_texto)
+    of.numericos = _corrigir_por_embalagem(of.numericos, itens_por_unidade)
     pendencias: list[Pendencia] = []
 
     # 1) atributos numéricos (capacidade, velocidade, dimensão...) — agrupa
