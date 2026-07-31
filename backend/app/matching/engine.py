@@ -191,14 +191,15 @@ class MatchingEngine:
         sims = cosine_similarity(vecs, self._matriz_prod)
         return [(float(row[j]), int(j)) for row, j in zip(sims, sims.argmax(axis=1))]
 
-    # Piso de similaridade textual (cosseno TF-IDF do texto INTEIRO, não só
-    # da palavra que bateu) exigido pra um match de palavra-chave ISOLADA
-    # (0-1 termo específico) virar o candidato escolhido. Calibrado com
-    # pares REAIS de produção: falsos positivos de 1-palavra (ex.: "Ribbon"
-    # x "Bobina Térmica" só por "térmica"; "papel"/"metal" batendo em
-    # produtos completamente diferentes) sempre ficavam < 0.30; matches de
-    # 1-palavra genuínos (ex.: "clipe" x "Clips Galvanizado") sempre ficavam
-    # > 0.34 — 0.30 corta exatamente nesse intervalo.
+    # Piso de similaridade textual (cosseno TF-IDF do texto INTEIRO contra o
+    # candidato ESPECÍFICO da palavra-chave, não contra o melhor de qualquer
+    # candidato) exigido pra um match de palavra-chave ISOLADA (0-1 termo
+    # específico) virar o candidato escolhido. Calibrado com pares REAIS de
+    # produção: candidatos ERRADOS de 1-palavra (ex.: "Ribbon" x "Bobina
+    # Térmica" só por "térmica"; "papel"/"metal"/"kraft" batendo em produtos
+    # completamente diferentes) sempre ficavam < 0.30; candidatos genuínos
+    # (ex.: "clipe" x "Clips Galvanizado") sempre ficavam > 0.34 — 0.30 corta
+    # exatamente nesse intervalo.
     _PISO_TFIDF_PRA_PALAVRA_ISOLADA = 0.30
 
     # ---- score de um único item do edital contra todo o catálogo ----------
@@ -223,13 +224,14 @@ class MatchingEngine:
 
         # 2) similaridade TF-IDF — usa o resultado pré-calculado em lote por
         # avaliar() quando disponível; senão calcula avulso (uso isolado, ex. testes).
+        vec_item = None
         if tfidf is not None:
             sim, j = tfidf
             if j is not None and sim > melhor:
                 melhor, melhor_prod, motivo = sim, self.produtos[j], "similaridade textual"
         elif self._vectorizer is not None and self._matriz_prod is not None:
-            vec = self._vectorizer.transform([texto_item])
-            sims = cosine_similarity(vec, self._matriz_prod)[0]
+            vec_item = self._vectorizer.transform([texto_item])
+            sims = cosine_similarity(vec_item, self._matriz_prod)[0]
             j = int(sims.argmax())
             if sims[j] > melhor:
                 melhor = float(sims[j])
@@ -242,22 +244,36 @@ class MatchingEngine:
         melhor_kw = self._melhor_por_keywords(texto_item)
         if melhor_kw and melhor_kw[0] > melhor:
             sc_kw, prod_kw, motivo_kw, n_kw = melhor_kw
-            # Sinal fraco (só 0-1 palavra-chave ESPECÍFICA) só pode substituir
-            # a similaridade textual quando ela mesma não é irrisória — achado
-            # real em produção: item de "Ribbon p/ impressora térmica"
-            # casava com "Bobina Térmica" (produto de papel, não fita) só por
-            # compartilharem a palavra "térmica" (um MODIFICADOR, não o
-            # substantivo do produto); "papel"/"metal" tinham o mesmo problema
-            # com produtos completamente diferentes. A contagem de
-            # palavras-chave sozinha não enxerga isso (conta 1 termo batendo
-            # e pronto); o cosseno do TEXTO INTEIRO sim, porque pondera todas
-            # as palavras dos dois lados, não só a que bateu — nesses casos
-            # reais ficava sempre < 0.30, enquanto matches de 1-palavra
-            # genuínos (ex.: "clipe" batendo com "Clips Galvanizado") ficavam
-            # > 0.34. Sinal forte (2+ específicas) continua valendo sem essa
-            # checagem — muito menos provável de ser coincidência.
-            if n_kw >= 2 or melhor >= self._PISO_TFIDF_PRA_PALAVRA_ISOLADA:
+            if n_kw >= 2:
                 melhor, melhor_prod, motivo = sc_kw, prod_kw, motivo_kw
+            elif self._vectorizer is not None and self._matriz_prod is not None:
+                # Sinal fraco (0-1 palavra-chave ESPECÍFICA) só pode substituir
+                # a similaridade textual quando o PRÓPRIO candidato da keyword
+                # tem corroboração textual — não quando "existe ALGUM produto
+                # razoável no catálogo" (esse era o bug: comparar contra
+                # `melhor`, o argmax de QUALQUER candidato, deixava passar um
+                # candidato ERRADO da keyword sempre que o TF-IDF já sabia a
+                # resposta CERTA mas com score < que o flat da keyword — achado
+                # real em produção: "Perfurador Papel...quantidade furos: 2"
+                # tinha o candidato CERTO via TF-IDF (~0.34, abaixo do flat
+                # 0.35 de "metal") mas o piso antigo comparava contra `melhor`
+                # [a similaridade do candidato CERTO] em vez da similaridade
+                # do candidato ERRADO da keyword [Grampeador, ~0.13] — deixando
+                # o errado vencer só por 0.34 > 0.30 já bastar como "prova de
+                # relevância", mesmo sendo relevância de OUTRO produto).
+                # Mesmos casos reais de antes ("Ribbon"/"Bobina Térmica",
+                # "papel"/"metal"/"kraft" batendo em produtos diferentes)
+                # seguem cortados: a similaridade ESPECÍFICA do candidato
+                # errado da keyword sempre ficava < 0.30 nesses casos; a de
+                # candidatos genuínos (ex.: "clipe" -> "Clips Galvanizado")
+                # sempre ficava > 0.34.
+                if vec_item is None:
+                    vec_item = self._vectorizer.transform([texto_item])
+                idx_kw = self._prod_indice.get(id(prod_kw))
+                sim_kw = (float(cosine_similarity(vec_item, self._matriz_prod[idx_kw])[0][0])
+                         if idx_kw is not None else 0.0)
+                if sim_kw >= self._PISO_TFIDF_PRA_PALAVRA_ISOLADA:
+                    melhor, melhor_prod, motivo = sc_kw, prod_kw, motivo_kw
 
         # Anti-coincidência: se o casamento se apoia em UMA única palavra
         # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora

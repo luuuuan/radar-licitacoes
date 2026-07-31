@@ -199,6 +199,27 @@ def test_palavra_isolada_com_similaridade_textual_boa_continua_valendo():
     assert r.itens_compativeis == 1
 
 
+def test_piso_de_palavra_isolada_compara_o_candidato_certo_nao_qualquer_um():
+    """Caso real (auditoria em produção): item "Perfurador Papel...
+    quantidade furos: 2" tinha o candidato CERTO ("Perfurador de Papel")
+    disponível via similaridade textual, só que com score abaixo do score
+    fixo da palavra-chave isolada "metal" (que aponta pro candidato ERRADO,
+    "Grampeador Metal"). A primeira versão do piso comparava contra
+    `melhor` — a similaridade do MELHOR candidato qualquer, nesse caso o
+    próprio Perfurador — e como esse valor já passava do piso, "liberava"
+    a troca pelo candidato ERRADO da palavra-chave, mesmo esse candidato
+    não tendo nenhuma similaridade real com o item. Tem que comparar a
+    similaridade do candidato ESPECÍFICO que a palavra-chave escolheu."""
+    eng = MatchingEngine(_catalogo_diverso(), usar_ia=False)
+    it = ItemEdt(1, "Perfurador Papel material: metal, tipo: mesa, tratamento "
+                    "superficial: pintado, capacidade perfuracao: 30, funcionamento: "
+                    "manual, caracteristicas adicionais: furo redondo, quantidade furos: 2")
+    sc, prod, motivo = eng._score_item(it)
+    assert prod is not None
+    assert "Grampeador" not in prod.descricao
+    assert "Perfurador" in prod.descricao
+
+
 def test_codigo_catmat_exato_nao_e_afetado_pela_anti_coincidencia():
     """Match por código exato retorna 1.0 antes de chegar na checagem de
     palavras em comum (return antecipado na etapa 1) — não pode ser rebaixado
