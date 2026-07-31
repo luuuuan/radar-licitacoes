@@ -379,6 +379,28 @@ def test_par_de_dimensao_com_unidades_mistas_mm_e_m():
     assert ("m", 12.0) in achados
 
 
+def test_3m_marca_nao_vira_3_metros():
+    """Caso real (auditoria em produção): 'Bloco Adesivo Post-it 38mm 50mm
+    ... 2267 3M - 4BL' estava lendo a MARCA "3M" (fabricante — onipresente em
+    fita/adesivo) como um atributo m=3.0, gerando pendência de "medida
+    incompatível" sem sentido nenhum. Recorreu em vários produtos/editais
+    reais diferentes. "3 metros"/"3m" como medida de verdade não apareceu em
+    nenhum caso real visto até agora — a exclusão é só do token exato "3m"
+    colado, não de "m" em geral (12m, 20m, "3 metros" por extenso continuam
+    batendo, ver testes acima)."""
+    a = extrair_atributos("Bloco Adesivo Post-it 38mm 50mm tropical 50 Folhas 2267 3M - 4BL")
+    unidades = {n.unidade for n in a.numericos}
+    assert "m" not in unidades
+    assert ("mm", 38.0) in {(n.unidade, n.valor) for n in a.numericos}
+    assert ("mm", 50.0) in {(n.unidade, n.valor) for n in a.numericos}
+
+
+def test_3m_marca_dentro_de_cadeia_de_dimensao_tambem_nao_conta():
+    a = extrair_atributos("fita dupla face 38mm x 50mm x 3m marca 3M")
+    achados = {(n.unidade, n.valor) for n in a.numericos}
+    assert ("m", 3.0) not in achados
+
+
 def test_unidade_m_nao_confunde_com_taxa_m_por_min():
     """Caso real: 'VELOCIDADE DE FRAGMENTACAO: 2 M/MIN' é uma TAXA (2 metros
     por minuto), não um comprimento de 2 metros — '/' não é \\w, então a

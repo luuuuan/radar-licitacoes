@@ -93,6 +93,18 @@ def familia_unidade(unidade: str, valor: float) -> tuple[str, float]:
     return familia, valor * fator
 
 
+def _e_marca_3m(unidade: str, valor: float, bruto: str) -> bool:
+    """"3M" é a marca (Post-it, Scotch, fita/adesivo em geral — a categoria
+    inteira de papelaria/fita é dominada por ela), não "3 metros". Achado em
+    dados reais de produção: "Bloco Adesivo Post-it 38mm 50mm ... 2267 3M -
+    4BL" virava um atributo numérico m=3.0 inventado, gerando pendência de
+    "medida incompatível" sem sentido nenhum. Não há nenhum caso real visto
+    até agora de "3m" bare (glued, sem escrever "metro(s)") sendo uma medida
+    de verdade — "3 metros" por extenso continua batendo normalmente, essa
+    exclusão só bloqueia o token exato "3m" colado."""
+    return unidade == "m" and valor == 3.0 and bruto.strip() == "3m"
+
+
 # 3 alternativas, nessa ordem (a 1ª que casar vence): grupo(s) de milhar
 # ("2.500", opcionalmente com vírgula decimal depois: "2.500,50") -> decimal
 # com PONTO fora do padrão BR mas comum em ficha técnica copiada de fora
@@ -203,6 +215,8 @@ def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, s
             fim = m.start() + parte.end("num")
             valor = _parse_numero(parte.group("num"))
             unidade = unidade_propria or unidade_comum
+            if _e_marca_3m(unidade, valor, parte.group(0)):
+                continue
             entradas.append((ini, fim, unidade, valor, parte.group("num")))
             if not explicita:
                 sem_unidade.append((ini, fim))
@@ -279,7 +293,10 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
         # é seguida de espaço/pontuação, que é o caso normal.
         for m in re.finditer(rf"{_NUM}\s*(?:{padrao})(?!\w)", texto_norm):
             valor = _parse_numero(m.group(1))
-            brutos.append((m.start(), m.end(), unidade, valor, m.group(0).strip()))
+            bruto = m.group(0).strip()
+            if _e_marca_3m(unidade, valor, bruto):
+                continue
+            brutos.append((m.start(), m.end(), unidade, valor, bruto))
 
     # pares de dimensão ("30x40cm", "12x50"...) — pode se sobrepor com o scan
     # acima quando os DOIS lados já têm unidade explícita (ex.: "40cm" seria
