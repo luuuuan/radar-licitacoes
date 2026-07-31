@@ -5,6 +5,8 @@ palavras_chave (ex.: "papel sulfite a4", "papel sulfite", "sulfite" e
 "papel" separados) — sem deduplicar substrings, isso inflava o score contando
 o mesmo sinal várias vezes. Rode com:  cd backend && pytest
 """
+import pytest
+
 from app.matching.engine import MatchingEngine, ItemEdt, ProdutoCat
 
 
@@ -23,7 +25,12 @@ def test_palavras_chave_redundantes_nao_inflam_o_score():
         "vertical, capa dura, folhas brancas pauta"
     ))
     score, _, motivo = engine._melhor_por_keywords(item.texto_busca())
-    assert score == 0.35, motivo  # 1 termo específico ("fraco"), não 3+ ("forte")
+    # 1 termo específico ("papel sulfit", "fraco") + bônus de +0.05 por
+    # "papel" bare também bater como termo genérico de reforço (ver
+    # _GENERICAS — "papel" sozinho virou genérico depois do bug real de
+    # "Papel Não Clorado" casando com "Papel Photo Glossy" só por essa
+    # palavra) — 0.35 + 0.05, não 3+ termos específicos inflados ("forte").
+    assert score == pytest.approx(0.40), motivo
     assert "3" not in motivo
 
 

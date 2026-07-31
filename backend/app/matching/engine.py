@@ -277,6 +277,17 @@ class MatchingEngine:
         # em "Lápis de Cor" quanto em "resina odontológica NAS CORES A3,A2",
         # produtos completamente diferentes que só compartilham o atributo)
         "cor", "cores", "bloco", "blocos",
+        # "papel" sozinho: bug real em produção — item "Papel Não Clorado"
+        # (papel sulfite comum) casava por 1 palavra-chave ("papel") com
+        # "Papel Photo 135g Glossy Adesivo" (produto completamente diferente)
+        # com o MESMO score de vários "Papel A4 75g Sulfite" corretos também
+        # cadastrados — a única palavra em comum sendo "papel" (presente em
+        # QUALQUER produto de papel, sulfite/kraft/foto/térmico...) faz o
+        # empate ser desfeito por ordem arbitrária no catálogo, não por
+        # relevância. Sem "papel" nessa lista o score cai abaixo de
+        # LIMIAR_ITEM e cede lugar à similaridade textual (TF-IDF), que
+        # naturalmente prefere o produto certo.
+        "papel",
     }
     # palavras de ligação (preposições/artigos/conjunções) — não contam como "termo
     # em comum" na checagem de anti-coincidência, senão inflam a contagem sem

@@ -108,6 +108,29 @@ def test_papel_sulfite_bate_com_varias_palavras_em_comum():
     assert r.nivel == "forte"
 
 
+def test_papel_generico_nao_desempata_arbitrariamente_pra_produto_errado():
+    """Caso real (auditoria em produção): item "Papel Não Clorado" (papel
+    sulfite comum) casava com "Papel Photo 135g Glossy Adesivo" — produto
+    sem nenhuma relação — só porque a única palavra-chave em comum era
+    "papel", empatando com vários "Papel A4 75g Sulfite" corretos também
+    cadastrados; o desempate acabava sendo por ordem no catálogo, não por
+    relevância. Com catálogo tendo o produto errado ANTES do certo (a ordem
+    que expôs o bug), a similaridade textual agora precisa vencer e escolher
+    o certo."""
+    catalogo = [
+        ProdutoCat(id=1, descricao="Papel Photo 135g A4 Glossy Adesivo",
+                   palavras_chave="papel fotografico, papel brilhante, papel glossy, papel photo, papel"),
+        ProdutoCat(id=2, descricao="Papel A4 75 g/m2 500 Folhas Branco Chamex",
+                   palavras_chave="papel sulfite a4, papel branco a4, papel sulfite, papel 75g, folha a4, papel a4, sulfite, papel, resma"),
+    ]
+    eng = MatchingEngine(catalogo)
+    r = eng.avaliar("Material de expediente", [ItemEdt(
+        1, "Papel Nao Clorado formato: a4, comprimento: 297, largura: 210, "
+           "gramatura: 75, aplicacao: impressora laser")])
+    if r.detalhe and r.detalhe[0]["produto_id"] is not None:
+        assert r.detalhe[0]["produto_id"] == 2
+
+
 def test_codigo_catmat_exato_nao_e_afetado_pela_anti_coincidencia():
     """Match por código exato retorna 1.0 antes de chegar na checagem de
     palavras em comum (return antecipado na etapa 1) — não pode ser rebaixado
