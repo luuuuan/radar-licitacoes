@@ -2101,6 +2101,39 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 
 
 # --------------------------- Inteligência de preço -------------------- #
+# Detecta quando a descrição do item deixa claro que a unidade cotada é uma
+# EMBALAGEM com várias peças dentro (ex.: "caixa com 250 unidades", "(100
+# UND)") — sem isso, a Inteligência de Preço comparava "preço de 1 peça
+# avulsa" com "preço de uma caixa de 250" como se fossem a mesma grandeza,
+# distorcendo mediana/mínimo/máximo em até 100x+. Achado real em produção:
+# "Envelope Kraft" variava de R$0,84 a R$164,80 só por causa dessa mistura
+# de escala entre editais que cotam por unidade e editais que cotam por caixa.
+_RE_MULTIPLICADOR_EMBALAGEM = re.compile(
+    r"(?:caixa|cx|pacote|pct|kit|fardo|embalagem)\s*(?:com|c/)?\s*(?P<n1>\d+)\s*"
+    r"(?:unidades?|und?|un\.?|pe[cç]as?|folhas?)?\b"
+    r"|(?:com|c/)\s*(?P<n2>\d+)\s*(?:unidades?|und?|un\.?|pe[cç]as?|folhas?)\b"
+    r"|\(\s*(?P<n3>\d+)\s*(?:unidades?|und?|un\.?)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _valor_unitario_normalizado(item: ItemEdital) -> float | None:
+    """Valor unitário do item, dividido pelo multiplicador de embalagem
+    quando a descrição deixa claro que a unidade cotada é uma caixa/pacote
+    com várias peças — pra comparar "preço por peça" com "preço por peça"
+    na Inteligência de Preço, não misturar escalas diferentes. Sem isso, um
+    item cotado "caixa com 250" e outro cotado por unidade avulsa entravam
+    na mesma amostra como se fossem o mesmo tipo de valor."""
+    if item.valor_unitario is None or item.valor_unitario <= 0:
+        return None
+    m = _RE_MULTIPLICADOR_EMBALAGEM.search(item.descricao or "")
+    if m:
+        n = int(m.group("n1") or m.group("n2") or m.group("n3"))
+        if n > 1:
+            return item.valor_unitario / n
+    return item.valor_unitario
+
+
 def _banda_outlier_preco(valores: list[float], multiplicador: float = 15,
                          amostra_minima: int = 5) -> tuple[float, float] | None:
     """Faixa [mediana_bruta/multiplicador, mediana_bruta*multiplicador] usada
@@ -2164,9 +2197,11 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
         for it in db.execute(
             select(ItemEdital).where(ItemEdital.edital_id.in_(numeros_por_edital.keys()))
         ).scalars():
-            if (it.valor_unitario is not None and it.valor_unitario > 0
-                    and it.numero in numeros_por_edital.get(it.edital_id, ())):
-                valor_do_item[(it.edital_id, it.numero)] = it.valor_unitario
+            if it.numero not in numeros_por_edital.get(it.edital_id, ()):
+                continue
+            v = _valor_unitario_normalizado(it)
+            if v is not None:
+                valor_do_item[(it.edital_id, it.numero)] = v
 
     valores_por_produto: dict[int, list[float]] = {}
     for edital_id, numero, produto_id in referencias:
@@ -2221,8 +2256,8 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
     itens_map = {(it.edital_id, it.numero): it for it in db.execute(
         select(ItemEdital).where(ItemEdital.edital_id.in_(edital_ids))).scalars()}
 
-    valores_validos = [it.valor_unitario for it in itens_map.values()
-                       if it.valor_unitario is not None and it.valor_unitario > 0]
+    valores_validos = [v for it in itens_map.values()
+                       if (v := _valor_unitario_normalizado(it)) is not None]
     banda = _banda_outlier_preco(valores_validos)
 
     linhas = []
@@ -2231,8 +2266,8 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
         ed = editais.get(edital_id)
         if not it or not ed:
             continue
-        valor = it.valor_unitario
-        tem_valor = valor is not None and valor > 0
+        valor = _valor_unitario_normalizado(it)
+        tem_valor = valor is not None
         motivo_exclusao = None
         if not tem_valor:
             motivo_exclusao = "sem_valor"
@@ -2242,6 +2277,7 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
             "edital_id": edital_id, "orgao": ed.orgao,
             "municipio": ed.municipio, "uf": ed.uf,
             "descricao_item": it.descricao, "valor_unitario": valor,
+            "valor_original": it.valor_unitario if valor != it.valor_unitario else None,
             "link": ed.link, "usado_no_calculo": motivo_exclusao is None,
             "motivo_exclusao": motivo_exclusao,
         })

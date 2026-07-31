@@ -1874,7 +1874,7 @@ async function abrirEditaisPreco(produtoId){
           return `<tr${excluido?' style="opacity:.55"':''}>
             <td>${esc(l.orgao||'—')}</td>
             <td class="muted">${esc(local||'—')}</td>
-            <td>${fmtR(l.valor_unitario)}${excluido?`<br><span class="muted" style="font-size:11px">excluído do cálculo — ${esc(motivoTxt[l.motivo_exclusao]||'')}</span>`:''}</td>
+            <td>${fmtR(l.valor_unitario)}${l.valor_original!=null?`<br><span class="muted" style="font-size:11px">valor por unidade — órgão cotou ${fmtR(l.valor_original)} pela embalagem</span>`:''}${excluido?`<br><span class="muted" style="font-size:11px">excluído do cálculo — ${esc(motivoTxt[l.motivo_exclusao]||'')}</span>`:''}</td>
             <td>${link?`<a href="${esc(link)}" target="_blank">Abrir edital ↗</a>`:''}</td>
           </tr>`;
         }).join('')}</tbody></table>`
