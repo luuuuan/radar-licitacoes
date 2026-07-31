@@ -1947,12 +1947,15 @@ async function loadColetaStatus(){
   const el=$('#coleta-status');
   try{
     const s=await api('/api/coleta/status');
+    _setBtnColetarOcupado(s.estado==='em_andamento');
     if(s.estado==='em_andamento'){
       el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
     } else if(s.estado==='nunca'){
       el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
     } else if(s.estado==='travado'){
       el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Última coleta não finalizou'; el.style.color='var(--destructive)';
+    } else if(s.erro==='cancelado'){
+      el.textContent='Última coleta foi cancelada'; el.style.color='var(--muted)';
     } else if(s.erro){
       el.innerHTML='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Erro na última coleta'; el.style.color='var(--destructive)';
     } else {
@@ -2038,17 +2041,69 @@ async function coletar(){
   }, 8000);
 }
 
+// enquanto ocupado, o próprio botão vira "Cancelar" (em vez de só desabilitar
+// sem dar nenhuma saída pro usuário que clicou sem querer ou mudou de ideia
+// numa rodada longa). dataset.rotuloOriginal guarda o HTML de volta pra
+// quando ocupado voltar a false.
 function _setBtnRecalcularOcupado(ocupado){
   const btn=$('#btn-recalcular');
   if(btn){
-    btn.disabled=ocupado;
-    btn.title=ocupado ? 'Já existe um recálculo em andamento' : 'Reavalia os editais já coletados contra o catálogo atual';
+    if(ocupado){
+      if(btn.dataset.rotuloOriginal===undefined) btn.dataset.rotuloOriginal=btn.innerHTML;
+      btn.innerHTML='Cancelar recálculo';
+      btn.onclick=cancelarRecalculo;
+      btn.title='Para o recálculo em andamento (mantém o que já foi processado até aqui)';
+      btn.disabled=false;
+    } else {
+      if(btn.dataset.rotuloOriginal!==undefined) btn.innerHTML=btn.dataset.rotuloOriginal;
+      btn.onclick=abrirRecalcular;
+      btn.title='Reavalia os editais já coletados contra o catálogo atual';
+    }
   }
   // enquanto recalcula, não dá pra coletar (os dois mexem nos matches ao mesmo tempo)
   const btnColetar=$('#btn-coletar');
-  if(btnColetar){
-    btnColetar.disabled=ocupado;
-    btnColetar.title=ocupado ? 'Aguarde o recálculo terminar' : '';
+  if(btnColetar && !ocupado && !btnColetar.dataset.coletaOcupada){
+    btnColetar.disabled=false;
+    btnColetar.title='';
+  } else if(btnColetar && ocupado){
+    btnColetar.disabled=true;
+    btnColetar.title='Aguarde o recálculo terminar';
+  }
+}
+async function cancelarRecalculo(){
+  try{
+    const r=await api('/api/recalcular/cancelar',{method:'POST'});
+    toast(r.mensagem||'Cancelamento solicitado.', 'aviso');
+  }catch(e){
+    toast('Não consegui cancelar agora. Tente de novo.', 'erro');
+  }
+}
+
+// mesma ideia do recálculo: enquanto uma coleta está rodando, o botão
+// "Coletar agora" vira "Cancelar busca".
+function _setBtnColetarOcupado(ocupado){
+  const btn=$('#btn-coletar');
+  if(!btn) return;
+  btn.dataset.coletaOcupada = ocupado ? '1' : '';
+  if(_recalcTimer) return;   // recálculo já está controlando o botão (mutuamente exclusivos)
+  if(ocupado){
+    if(btn.dataset.rotuloOriginal===undefined) btn.dataset.rotuloOriginal=btn.innerHTML;
+    btn.innerHTML='Cancelar busca';
+    btn.onclick=cancelarColeta;
+    btn.title='Para a busca de editais em andamento (mantém o que já foi salvo até aqui)';
+    btn.disabled=false;
+  } else {
+    if(btn.dataset.rotuloOriginal!==undefined) btn.innerHTML=btn.dataset.rotuloOriginal;
+    btn.onclick=coletar;
+    btn.title='';
+  }
+}
+async function cancelarColeta(){
+  try{
+    const r=await api('/api/coletar/cancelar',{method:'POST'});
+    toast(r.mensagem||'Cancelamento solicitado.', 'aviso');
+  }catch(e){
+    toast('Não consegui cancelar agora. Tente de novo.', 'erro');
   }
 }
 
@@ -2107,12 +2162,16 @@ function acompanharRecalculo(){
     if(s.erro){
       el.textContent='Erro ao recalcular'; el.style.color='var(--destructive)';
       toast('O recálculo falhou: '+s.erro, 'erro', 6000);
+    } else if(s.cancelado){
+      el.textContent=`Recálculo cancelado · ${s.atualizados||0} edital(is) processados antes de parar`;
+      el.style.color='var(--muted)';
+      toast('Recálculo cancelado.', 'aviso', 4000);
     } else if(s.atualizados!=null){
       el.textContent=`✓ Recalculados ${s.atualizados||0} edital(is) · ${s.fortes||0} de alta compatibilidade`;
       el.style.color='var(--muted)';
       toast('Recálculo concluído!', 'ok', 4000);
     }
-    loadEditais(); loadResumo();
+    loadColetaStatus(); loadEditais(); loadResumo();
   }, 5000);
 }
 

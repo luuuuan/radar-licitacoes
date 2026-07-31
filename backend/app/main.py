@@ -1291,9 +1291,15 @@ def remover_regra(regra_id: int, user: Usuario = Depends(_auth.get_current_user)
 # Trava para impedir coletas simultâneas (evita condição de corrida que
 # duplica matches). Só uma coleta roda por vez; as demais são ignoradas.
 _coleta_lock = threading.Lock()
+# Uma coleta só (a trava acima é global, não por usuário) — então o
+# cancelamento também é global: quem estiver acompanhando pode pedir pra
+# parar, não importa quem disparou. Resetada no fim de cada rodada (sucesso,
+# erro ou cancelamento) pra não vazar pro próximo disparo.
+_coleta_cancelar = False
 
 
 def _rodar_coleta_bg(usuario_id: int | None = None):
+    global _coleta_cancelar
     # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
     if not _coleta_lock.acquire(blocking=False):
         import logging
@@ -1302,7 +1308,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
         return
     db = SessionLocal()
     try:
-        processar_coleta(db, usuario_id=usuario_id)
+        processar_coleta(db, usuario_id=usuario_id, deve_cancelar=lambda: _coleta_cancelar)
         # após coletar, verifica prazos encerrando e documentos vencendo
         # (e-mail sai daqui; Telegram é só o resumo com botões, logo abaixo)
         from .lembretes import verificar_todos
@@ -1326,6 +1332,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
                     "Falha ao enviar resumo do Telegram pro usuário %s", u.id)
     finally:
         db.close()
+        _coleta_cancelar = False
         _coleta_lock.release()
 
 
@@ -1347,6 +1354,19 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
     return {"ok": True, "mensagem": "Coleta iniciada em segundo plano."}
 
 
+@app.post("/api/coletar/cancelar")
+def coletar_cancelar(user: Usuario = Depends(_auth.get_current_user)):
+    """Pede pra parar a coleta em andamento (de qualquer usuário — a trava é
+    global, só uma roda por vez). Cooperativo: para no próximo ponto de
+    checagem (a cada ~100 editais gravados), não instantâneo; o que já foi
+    salvo até ali permanece."""
+    global _coleta_cancelar
+    if not _coleta_lock.locked():
+        return {"ok": False, "mensagem": "Nenhuma coleta em andamento."}
+    _coleta_cancelar = True
+    return {"ok": True, "mensagem": "Cancelamento solicitado — a coleta vai parar em instantes."}
+
+
 # --------------------------- Recalcular (background) ------------------- #
 # Recalcular percorre TODOS os editais já coletados (podem ser dezenas de
 # milhares) contra o catálogo. Rodar isso dentro da request HTTP estoura o
@@ -1355,6 +1375,9 @@ def coletar_agora(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current
 # mesmo padrão da coleta, e o front acompanha por polling em /api/recalcular/status.
 _recalculo_locks: dict[int, threading.Lock] = {}
 _recalculo_status: dict[int, dict] = {}
+# por usuário (diferente da coleta, que é global) — cada um só pode cancelar
+# o PRÓPRIO recálculo, já que a trava de recálculo também é por usuário.
+_recalculo_cancelar: dict[int, bool] = {}
 
 
 def _lock_recalculo(usuario_id: int) -> threading.Lock:
@@ -1374,8 +1397,9 @@ def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
             st.update({"rodando": True, "erro": None, "feito": feito, "total": total})
             _recalculo_status[usuario_id] = st
 
-        resultado = recalcular_matches(db, usuario_id=usuario_id,
-                                       usar_ia=usar_ia, progresso=_prog)
+        resultado = recalcular_matches(
+            db, usuario_id=usuario_id, usar_ia=usar_ia, progresso=_prog,
+            deve_cancelar=lambda: _recalculo_cancelar.get(usuario_id, False))
         _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
     except Exception as e:
         db.rollback()
@@ -1383,6 +1407,7 @@ def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
         _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
     finally:
         db.close()
+        _recalculo_cancelar.pop(usuario_id, None)
         lock.release()
 
 
@@ -1398,10 +1423,23 @@ def recalcular(bg: BackgroundTasks, com_ia: bool = Query(True),
         return {"ok": False, "em_andamento": True,
                 "mensagem": "Já existe um recálculo em andamento."}
     _recalculo_status[user.id] = {"rodando": True, "erro": None, "feito": 0, "total": 0}
+    _recalculo_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
     # com_ia=True respeita a config; com_ia=False força sem IA
     usar_ia = None if com_ia else False
     bg.add_task(_rodar_recalculo_bg, user.id, usar_ia)
     return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
+
+
+@app.post("/api/recalcular/cancelar")
+def recalcular_cancelar(user: Usuario = Depends(_auth.get_current_user)):
+    """Pede pra parar o recálculo deste usuário. Cooperativo: para no próximo
+    ponto de checagem (a cada ~200 editais), não instantâneo; o que já foi
+    salvo até ali permanece."""
+    lock = _lock_recalculo(user.id)
+    if not lock.locked():
+        return {"ok": False, "mensagem": "Nenhum recálculo em andamento."}
+    _recalculo_cancelar[user.id] = True
+    return {"ok": True, "mensagem": "Cancelamento solicitado — o recálculo vai parar em instantes."}
 
 
 @app.get("/api/recalcular/status")

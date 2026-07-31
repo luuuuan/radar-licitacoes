@@ -91,9 +91,15 @@ def _usuarios_ativos(db: Session):
 
 
 def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
-                           forcar_usar_ia: bool | None = None, progresso=None) -> dict:
+                           forcar_usar_ia: bool | None = None, progresso=None,
+                           deve_cancelar=None) -> dict:
     """Gera/atualiza os matches de UM usuário contra os editais coletados,
-    usando o catálogo e as regras de exclusão dele. Isolado por usuário."""
+    usando o catálogo e as regras de exclusão dele. Isolado por usuário.
+
+    deve_cancelar: callable() -> bool, checado periodicamente (mesma cadência
+    dos commits parciais) — permite abortar uma rodada longa a pedido do
+    usuário sem perder o que já foi processado até ali."""
+    deve_cancelar = deve_cancelar or (lambda: False)
     catalogo = _carregar_catalogo(db, usuario.id)
     termos_excl, categorias_excl = _carregar_exclusoes(db, usuario.id)
     from . import configuracoes as cfg
@@ -168,6 +174,14 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                 resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
                 log.warning("Conexão com o banco caiu durante os matches do usuário %s "
                            "— parando nesta rodada com o progresso já salvo.", usuario.id)
+                break
+            # cancelamento a pedido do usuário — mesmo ponto dos commits
+            # parciais, então o que já foi salvo continua salvo (só não
+            # processa o resto da fila).
+            if deve_cancelar():
+                resumo["cancelado"] = True
+                log.info("Recálculo do usuário %s cancelado a pedido — %s/%s editais processados.",
+                         usuario.id, _i, total)
                 break
         existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
@@ -272,10 +286,15 @@ def _notificar_usuario(usuario, fortes: list[Edital]):
 
 
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
-                     usuario_id: int | None = None) -> dict:
+                     usuario_id: int | None = None, deve_cancelar=None) -> dict:
     """Coleta editais do PNCP (compartilhados) e gera matches.
     - usuario_id definido: gera matches só para esse usuário (coleta manual).
-    - usuario_id None: gera para todos os usuários já ativos (cron diário)."""
+    - usuario_id None: gera para todos os usuários já ativos (cron diário).
+    - deve_cancelar: callable() -> bool, permite abortar a pedido do usuário
+      (checado na gravação dos editais coletados e repassado pro cálculo de
+      matches). A busca em si no PNCP (conector.coletar()) não é
+      interrompível no meio — só o que vem DEPOIS dela."""
+    deve_cancelar = deve_cancelar or (lambda: False)
     if conectores is None:
         from . import configuracoes as cfg
         conectores = [PNCPConnector(
@@ -315,8 +334,16 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             log_coleta.finalizado_em = utcnow()
             db.commit()
             continue
+        cancelado = False
         try:
-            for ec in coletados:
+            for _i, ec in enumerate(coletados):
+                # checa a cada 100 (não a cada item — deve_cancelar() pode
+                # envolver um lock, não vale a pena pagar isso item a item)
+                if _i > 0 and _i % 100 == 0 and deve_cancelar():
+                    cancelado = True
+                    log.info("Coleta cancelada a pedido — %s/%s itens do conector %s processados.",
+                             _i, len(coletados), conector.nome)
+                    break
                 resumo["vistos"] += 1
                 try:
                     ed = _persistir_edital(db, ec)
@@ -330,7 +357,15 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             log_coleta.editais_vistos = resumo["vistos"] - base["vistos"]
             log_coleta.editais_novos = resumo["novos"] - base["novos"]
             log_coleta.finalizado_em = utcnow()
+            if cancelado:
+                log_coleta.erro = "cancelado"
             db.commit()
+        if cancelado:
+            if log_usuario is not None:
+                log_usuario.erro = "cancelado"
+                log_usuario.finalizado_em = utcnow()
+                db.commit()
+            return resumo
 
     # gera matches: só para o usuário que pediu (manual), ou todos os ativos (cron)
     if usuario_id is not None:
@@ -347,8 +382,14 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
     fonte_label = " + ".join(c.nome.upper() for c in conectores)
     inicio_user = utcnow()
     for u in alvos:
+        if deve_cancelar():
+            if log_usuario is not None and log_usuario.finalizado_em is None:
+                log_usuario.erro = "cancelado"
+                log_usuario.finalizado_em = utcnow()
+                db.commit()
+            break
         try:
-            r = _gerar_matches_usuario(db, u, recalcular_todos=False)
+            r = _gerar_matches_usuario(db, u, recalcular_todos=False, deve_cancelar=deve_cancelar)
             resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
             # registra no Histórico DESTE usuário o que entrou na conta dele
             if log_usuario is not None and u.id == usuario_id:
@@ -359,6 +400,8 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
                 log_usuario.editais_vistos = r.get("editais", 0)
                 log_usuario.editais_novos = r.get("atualizados", 0)
                 log_usuario.matches_fortes = r.get("fortes", 0)
+                if r.get("cancelado"):
+                    log_usuario.erro = "cancelado"
             else:
                 db.add(LogColeta(
                     usuario_id=u.id, fonte=fonte_label, origem="cron",
@@ -392,13 +435,15 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
 
 
 def recalcular_matches(db: Session, usuario_id: int, usar_ia: bool | None = None,
-                       progresso=None) -> dict:
+                       progresso=None, deve_cancelar=None) -> dict:
     """Reavalia todos os editais contra o catálogo ATUAL do usuário.
     - usar_ia=None: respeita a configuração; usar_ia=False: força recálculo só por
       texto (rápido, sem gastar cota — recomendado para a base inteira).
-    - progresso(feito, total): callback opcional para reportar andamento."""
+    - progresso(feito, total): callback opcional para reportar andamento.
+    - deve_cancelar: callable() -> bool, permite abortar a pedido do usuário."""
     u = db.get(Usuario, usuario_id)
     if not u:
         return {"editais": 0, "atualizados": 0, "fortes": 0}
     return _gerar_matches_usuario(db, u, recalcular_todos=True,
-                                  forcar_usar_ia=usar_ia, progresso=progresso)
+                                  forcar_usar_ia=usar_ia, progresso=progresso,
+                                  deve_cancelar=deve_cancelar)
