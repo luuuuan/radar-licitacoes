@@ -2385,9 +2385,14 @@ async function _rodarAnaliseEdital(forcar){
   _analiseEmAndamento = true;
   _analiseEmAndamentoId = id;
   try{
-    const html = await _corpoAnaliseEdital(id, forcar);
+    const {html, sucesso} = await _corpoAnaliseEdital(id, forcar);
     _analiseCache = html;
-    if(_paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
+    // só marca "analisado" quando a IA de fato respondeu com sucesso — um
+    // erro passageiro (ex.: "serviço de IA sobrecarregado") não pode contar
+    // como análise feita, senão o botão "Realizar análise com IA" some da
+    // aba Cotação mesmo sem nenhuma análise ter sido concluída de verdade,
+    // deixando só "Baixar cotação" sem chance de tentar de novo por lá.
+    if(sucesso && _paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
     if(aindaAqui()) cont.innerHTML = html;
   }catch(e){
     if(aindaAqui()) cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
@@ -2556,7 +2561,7 @@ async function _corpoAnaliseEdital(id, forcar){
     const vencidosOuPerto = (r.checklist_documentos||[]).filter(i=>i.status==='vencido'||i.status==='vence_em_breve').length;
     const orgao = r.dados_orgao || {};
     const proposta = r.dados_proposta || {};
-    return `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
+    return {sucesso: true, html: `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
       ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
       ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
 
@@ -2596,7 +2601,7 @@ async function _corpoAnaliseEdital(id, forcar){
       <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
         Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
         <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">refazer</button>
-      </div>`;
+      </div>`};
   }
   const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',
     sem_chave:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini).',
@@ -2607,9 +2612,9 @@ async function _corpoAnaliseEdital(id, forcar){
     erro_ia:_msgErroIA(r.detalhe),
     resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
   const portal = linkSeguro(r.portal);
-  return `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
+  return {sucesso: false, html: `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
     <button class="btn ghost" style="margin-top:6px" onclick="abaEdital('analise',true)">tentar novamente</button>
-    ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`;
+    ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`};
 }
 
 // ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens que o
