@@ -131,6 +131,74 @@ def test_papel_generico_nao_desempata_arbitrariamente_pra_produto_errado():
         assert r.detalhe[0]["produto_id"] == 2
 
 
+def _catalogo_diverso():
+    """Catálogo com uma boa variedade de categorias — necessário pra
+    reproduzir de forma realista o peso IDF do TF-IDF (um catálogo com só 1-2
+    produtos deixa a ponderação de termo raro/comum degenerada e não
+    reproduz o comportamento real; a auditoria que achou esse bug usou o
+    catálogo de produção, com 63 produtos de categorias variadas)."""
+    return [
+        ProdutoCat(id=1, descricao="Bobina Termica 80mm x 40m Branca 48g 0118 Rio branco - 30UN",
+                   palavras_chave="bobina para impressora, bobina termica, papel termico, bobina 80mm, termica, bobina"),
+        ProdutoCat(id=2, descricao="Caneta Esferografica Cristal Dura 1,0mm Azul 0819 Bic - 50UN",
+                   palavras_chave="caneta esferografica, caneta cristal, esferografica"),
+        ProdutoCat(id=3, descricao="Grampeador Metal 20 Folhas MX-G20C 714465 Maxprint - UN",
+                   palavras_chave="grampeador de mesa, grampeador manual, grampeador metal, grampeador, metal"),
+        ProdutoCat(id=4, descricao="Papel A4 75 g/m2 500 Folhas Branco 3502 Chamex",
+                   palavras_chave="papel sulfite a4, papel branco a4, papel sulfite, papel a4, sulfite, papel, resma"),
+        ProdutoCat(id=5, descricao="Clips Galvanizado N4/0 420 Unidades Linha Leve Bacchi",
+                   palavras_chave="clipe para papel, clips galvanizado, clipe metalico, clips, clipe"),
+        ProdutoCat(id=6, descricao="Cola Branca 40g 0065 Iris - UN",
+                   palavras_chave="cola escolar, cola liquida, cola branca, cola pva, branca, cola"),
+        ProdutoCat(id=7, descricao="Lapis Grafite N2 com Borracha EcoMax Sextavo FaberCastell",
+                   palavras_chave="lapis grafite, lapis preto, lapis n2, lapis"),
+        ProdutoCat(id=8, descricao="Pasta Suspensa Delloplus Pacote com 6 Unidades Azul Dello",
+                   palavras_chave="pasta suspensa, pasta arquivo, pasta azul, pasta"),
+        ProdutoCat(id=9, descricao="Fita Crepe Branca Phenix Tape 15mm x 50m",
+                   palavras_chave="fita crepe branca 15mm"),
+        ProdutoCat(id=10, descricao="Envelope Kraft Natural 240mm 340mm 80G 0233 Scrity - 100UN",
+                   palavras_chave="envelope kraft, envelope pardo, envelope saco, envelope, natural, kraft"),
+        ProdutoCat(id=11, descricao="Calculadora de Mesa 8 Digitos VX1385",
+                   palavras_chave="calculadora de mesa, calculadora 8 digitos, calculadora"),
+        ProdutoCat(id=12, descricao="Perfurador de Papel 2 Furos para 12 Folhas Jocar Office",
+                   palavras_chave="perfurador de papel, furador de papel, perfurador"),
+        ProdutoCat(id=13, descricao="Compasso Escolar Colorido Metal Sortido Tris",
+                   palavras_chave="compasso escolar, compasso metal, compasso"),
+        ProdutoCat(id=14, descricao="Marcador Quadro Branco Slim 12 Unidades Preto BRW",
+                   palavras_chave="marcador quadro branco, caneta quadro branco, marcador"),
+        ProdutoCat(id=15, descricao="Corretivo Liquido a Base de Agua 18ml Radex",
+                   palavras_chave="corretivo liquido, corretivo, radex"),
+    ]
+
+
+def test_palavra_isolada_precisa_de_similaridade_textual_minima():
+    """Caso real (auditoria em produção): item "Ribbon ... impressora
+    térmica" casava com "Bobina Térmica" (produto de PAPEL, não fita de
+    impressão) só por compartilharem a palavra "térmica" — um MODIFICADOR,
+    não o substantivo do produto. A contagem de palavras-chave sozinha não
+    enxerga isso (bate 1 termo e pronto); o cosseno TF-IDF do texto INTEIRO
+    sim (fica bem baixo, porque o resto das duas descrições não se parece em
+    nada). Regra geral, não específica desse produto: 0-1 palavra-chave
+    específica só vale se a similaridade textual junto não for irrisória —
+    2+ específicas continuam valendo incondicionalmente."""
+    eng = MatchingEngine(_catalogo_diverso(), usar_ia=False)
+    r = eng.avaliar("Material de expediente", [ItemEdt(
+        1, "Ribbon material: cera, largura: 110, comprimento: 74, cor: preta, "
+           "aplicacao: impressora termica")])
+    assert r.itens_compativeis == 0
+
+
+def test_palavra_isolada_com_similaridade_textual_boa_continua_valendo():
+    """A correção não pode virar falso negativo generalizado — uma palavra
+    isolada mas GENUÍNA ("clipe"/"clips") com o resto do texto também
+    parecido (similaridade textual acima do piso) continua batendo."""
+    eng = MatchingEngine(_catalogo_diverso(), usar_ia=False)
+    r = eng.avaliar("Material de expediente", [ItemEdt(
+        1, "Clipe tratamento superficial: galvanizado, tamanho: 8/0, "
+           "material: arame de aco, formato: paralelo")])
+    assert r.itens_compativeis == 1
+
+
 def test_codigo_catmat_exato_nao_e_afetado_pela_anti_coincidencia():
     """Match por código exato retorna 1.0 antes de chegar na checagem de
     palavras em comum (return antecipado na etapa 1) — não pode ser rebaixado

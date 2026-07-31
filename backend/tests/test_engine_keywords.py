@@ -24,7 +24,7 @@ def test_palavras_chave_redundantes_nao_inflam_o_score():
         "comprimento: 220, largura: 330, características adicionais: "
         "vertical, capa dura, folhas brancas pauta"
     ))
-    score, _, motivo = engine._melhor_por_keywords(item.texto_busca())
+    score, _, motivo, _n = engine._melhor_por_keywords(item.texto_busca())
     # 1 termo específico ("papel sulfit", "fraco") + bônus de +0.05 por
     # "papel" bare também bater como termo genérico de reforço (ver
     # _GENERICAS — "papel" sozinho virou genérico depois do bug real de
@@ -48,7 +48,7 @@ def test_palavras_chave_singular_plural_nao_conta_duas_vezes():
     item = ItemEdt(numero=1, descricao=(
         "CADERNO PORTFÓLIO DO ALUNO - MEDINDO 26,5X31 CM - ACABAMENTO GRAMPO - TIRAGEM 1000 UNIDADES"
     ))
-    score, _, motivo = engine._melhor_por_keywords(item.texto_busca())
+    score, _, motivo, _n = engine._melhor_por_keywords(item.texto_busca())
     assert score == 0.35, motivo  # 1 termo específico ("fraco"), não 2 ("médio")
 
 
@@ -88,5 +88,5 @@ def test_palavras_chave_genuinamente_distintas_ainda_somam():
     )]
     engine = MatchingEngine(produtos, usar_ia=False)
     item = ItemEdt(numero=1, descricao="Caneta esferografica azul compactor para escritorio")
-    score, _, motivo = engine._melhor_por_keywords(item.texto_busca())
+    score, _, motivo, _n = engine._melhor_por_keywords(item.texto_busca())
     assert score == 0.66  # 3 termos específicos genuinamente distintos

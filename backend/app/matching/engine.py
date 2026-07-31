@@ -191,6 +191,16 @@ class MatchingEngine:
         sims = cosine_similarity(vecs, self._matriz_prod)
         return [(float(row[j]), int(j)) for row, j in zip(sims, sims.argmax(axis=1))]
 
+    # Piso de similaridade textual (cosseno TF-IDF do texto INTEIRO, não só
+    # da palavra que bateu) exigido pra um match de palavra-chave ISOLADA
+    # (0-1 termo específico) virar o candidato escolhido. Calibrado com
+    # pares REAIS de produção: falsos positivos de 1-palavra (ex.: "Ribbon"
+    # x "Bobina Térmica" só por "térmica"; "papel"/"metal" batendo em
+    # produtos completamente diferentes) sempre ficavam < 0.30; matches de
+    # 1-palavra genuínos (ex.: "clipe" x "Clips Galvanizado") sempre ficavam
+    # > 0.34 — 0.30 corta exatamente nesse intervalo.
+    _PISO_TFIDF_PRA_PALAVRA_ISOLADA = 0.30
+
     # ---- score de um único item do edital contra todo o catálogo ----------
     def _score_item(self, item: ItemEdt, texto_busca: str | None = None,
                     tfidf: tuple[float, int | None] | None = None,
@@ -231,7 +241,23 @@ class MatchingEngine:
         #    "fragmentadora de papel"); várias palavras elevam o nível.
         melhor_kw = self._melhor_por_keywords(texto_item)
         if melhor_kw and melhor_kw[0] > melhor:
-            melhor, melhor_prod, motivo = melhor_kw
+            sc_kw, prod_kw, motivo_kw, n_kw = melhor_kw
+            # Sinal fraco (só 0-1 palavra-chave ESPECÍFICA) só pode substituir
+            # a similaridade textual quando ela mesma não é irrisória — achado
+            # real em produção: item de "Ribbon p/ impressora térmica"
+            # casava com "Bobina Térmica" (produto de papel, não fita) só por
+            # compartilharem a palavra "térmica" (um MODIFICADOR, não o
+            # substantivo do produto); "papel"/"metal" tinham o mesmo problema
+            # com produtos completamente diferentes. A contagem de
+            # palavras-chave sozinha não enxerga isso (conta 1 termo batendo
+            # e pronto); o cosseno do TEXTO INTEIRO sim, porque pondera todas
+            # as palavras dos dois lados, não só a que bateu — nesses casos
+            # reais ficava sempre < 0.30, enquanto matches de 1-palavra
+            # genuínos (ex.: "clipe" batendo com "Clips Galvanizado") ficavam
+            # > 0.34. Sinal forte (2+ específicas) continua valendo sem essa
+            # checagem — muito menos provável de ser coincidência.
+            if n_kw >= 2 or melhor >= self._PISO_TFIDF_PRA_PALAVRA_ISOLADA:
+                melhor, melhor_prod, motivo = sc_kw, prod_kw, motivo_kw
 
         # Anti-coincidência: se o casamento se apoia em UMA única palavra
         # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora
@@ -319,7 +345,10 @@ class MatchingEngine:
 
     def _melhor_por_keywords(self, texto_item: str):
         """Avalia o catálogo contra o texto do item somando palavras-chave que
-        casam. Retorna (score, produto, motivo) ou None."""
+        casam. Retorna (score, produto, motivo, n_especificas) ou None — o 4º
+        campo (quantas palavras-chave ESPECÍFICAS bateram, sem contar
+        genéricas) é usado por _score_item pra decidir se esse sinal é forte
+        o bastante pra dispensar corroboração da similaridade textual."""
         melhor = None
         for p, kws in zip(self.produtos, self._keywords_prod):
             especificas, genericas = [], 0
@@ -378,7 +407,7 @@ class MatchingEngine:
                 motivo = f"{n} palavras-chave ({', '.join(especificas[:3])})"
 
             if melhor is None or sc > melhor[0]:
-                melhor = (sc, p, motivo)
+                melhor = (sc, p, motivo, n)
         return melhor
 
     # ---- avalia um edital inteiro -----------------------------------------
