@@ -1996,7 +1996,14 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     em_andamento = ultimo.finalizado_em is None
     travado = False
     if em_andamento and ultimo.iniciado_em:
-        if (agora - ultimo.iniciado_em).total_seconds() > 1800:  # >30 min sem terminar
+        # limiar calibrado com o histórico real de coletas concluídas (ver
+        # /api/logs): uma coleta completa (busca no PNCP + geração de matches
+        # de todos os usuários) rotineiramente leva de 50min a ~2h — 30min
+        # era baixo demais e marcava "não finalizou" em toda coleta saudável
+        # ainda rodando, não só nas realmente travadas (processo morto por
+        # redeploy, por exemplo). 3h dá folga confortável acima do maior
+        # tempo já observado sem deixar de detectar uma travada de verdade.
+        if (agora - ultimo.iniciado_em).total_seconds() > 10800:  # >3h sem terminar
             em_andamento, travado = False, True
 
     # última coleta concluída (pode ser anterior à que está rodando)
