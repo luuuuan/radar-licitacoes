@@ -1711,6 +1711,50 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     return _anexar_checklist_documentos(resultado, user, db)
 
 
+_TIPOS_UPLOAD_ANALISE_PERMITIDOS = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+_TAMANHO_MAX_UPLOAD_ANALISE = 15 * 1024 * 1024  # 15 MB
+
+
+@app.post("/api/editais/{edital_id}/analise-documento")
+async def analise_documento_edital(edital_id: int, arquivo: UploadFile = File(...),
+                                   user: Usuario = Depends(_auth.get_current_user),
+                                   db: Session = Depends(get_session)):
+    """Compara um documento enviado pelo usuário (PDF ou imagem — ficha
+    técnica, catálogo, atestado, certidão...) contra o que a análise por IA
+    já extraiu deste edital (requisitos técnicos / documentos de
+    habilitação — reaproveita o cache de /analise, não reanalisa o edital).
+    Específico do arquivo enviado: não fica em cache nem é salvo em disco,
+    roda a cada envio e é descartado depois da resposta (mesmo padrão sem
+    storage do import de catálogo em /api/produtos/importar)."""
+    from . import analise_edital as ia
+    import json as _json
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+
+    chave = _auth.decifrar(user.gemini_key_cifrada)
+    if not ia.ia_texto_disponivel(chave):
+        return {"status": "sem_ia"}
+
+    if not ed.analise_ia:
+        return {"status": "sem_analise_base"}
+    try:
+        base = _json.loads(ed.analise_ia)
+    except ValueError:
+        return {"status": "sem_analise_base"}
+
+    if arquivo.content_type not in _TIPOS_UPLOAD_ANALISE_PERMITIDOS:
+        raise HTTPException(400, "Envie um PDF ou imagem (jpg/png/webp).")
+    conteudo = await arquivo.read()
+    if len(conteudo) > _TAMANHO_MAX_UPLOAD_ANALISE:
+        raise HTTPException(400, "Arquivo muito grande (máximo 15 MB).")
+
+    texto = ia.extrair_texto_upload(arquivo.filename or "", conteudo, arquivo.content_type)
+    return ia.analisar_documento_usuario(
+        ed.objeto or "", base.get("requisitos_tecnicos"), base.get("documentos_habilitacao"),
+        arquivo.filename or "documento", texto, api_key=chave)
+
+
 # --------------------------- Cotação (planilha) ------------------------ #
 _MODALIDADE_ABREV = {
     "pregao eletronico": "PE", "pregao presencial": "PP",

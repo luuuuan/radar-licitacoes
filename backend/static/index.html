@@ -2690,6 +2690,13 @@ async function _corpoAnaliseEdital(id, forcar){
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
+      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
+        <strong>Verificar um documento seu</strong>
+        <p class="muted" style="font-size:12px;margin:4px 0 8px">Envie uma ficha técnica, catálogo do produto, atestado ou certidão (PDF ou imagem) pra IA comparar contra o que este edital pede.</p>
+        <input type="file" id="doc-verificar-arquivo" accept=".pdf,image/*" style="font-size:12px;max-width:100%">
+        <button class="btn ghost" style="margin-left:6px" onclick="verificarDocumentoEdital()">Verificar compatibilidade</button>
+        <div id="doc-verificar-resultado" style="margin-top:10px"></div>
+      </div>
       <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
         Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
         <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">refazer</button>
@@ -2707,6 +2714,50 @@ async function _corpoAnaliseEdital(id, forcar){
   return {sucesso: false, html: `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
     <button class="btn ghost" style="margin-top:6px" onclick="abaEdital('analise',true)">tentar novamente</button>
     ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`};
+}
+
+// Verifica um documento do usuário (ficha técnica, catálogo, atestado,
+// certidão) contra os requisitos que a análise por IA já extraiu deste
+// edital. Não fica em cache (é por arquivo, não por edital) — some se
+// trocar de aba e voltar, igual a qualquer resultado ao vivo não salvo.
+async function verificarDocumentoEdital(){
+  const input = $('#doc-verificar-arquivo');
+  const out = $('#doc-verificar-resultado');
+  const f = input && input.files && input.files[0];
+  if(!out) return;
+  if(!f){ toast('Escolha um arquivo primeiro.', 'aviso'); return; }
+  out.innerHTML = _spinnerHTML('Lendo o documento e comparando com o edital…');
+  const fd = new FormData();
+  fd.append('arquivo', f);
+  try{
+    const resp = await fetch(`/api/editais/${_paginaEditalId}/analise-documento`, {method:'POST', body:fd});
+    const r = await resp.json();
+    out.innerHTML = _resultadoVerificacaoDocumentoHTML(r);
+  }catch(e){
+    out.innerHTML = '<p class="muted" style="font-size:13px">Erro ao verificar o documento. Tente de novo.</p>';
+  }
+}
+
+function _resultadoVerificacaoDocumentoHTML(r){
+  if(r.status!=='ok'){
+    const msgs={
+      sem_ia:'A análise por IA está desativada. Configure sua chave Gemini em <b>Meu perfil</b>.',
+      sem_analise_base:'Rode a análise por IA deste edital primeiro (acima) — a verificação de documento compara contra o que ela extraiu.',
+      sem_texto:'Não consegui ler texto neste arquivo (imagem de baixa qualidade ou PDF sem conteúdo extraível).',
+      erro_ia:_msgErroIA(r.detalhe),
+      resposta_invalida:'A IA respondeu num formato inesperado. Tente de novo.',
+    };
+    return `<p class="muted" style="font-size:13px">${msgs[r.status]||'Não foi possível verificar este documento.'}</p>`;
+  }
+  const label = r.classificacao==='Nao_verificavel' ? 'Não foi possível avaliar' : r.classificacao;
+  const cor = CORES_VALIDACAO[r.classificacao] || 'var(--muted-fg,#888)';
+  const icone = r.classificacao==='Atende' ? '✓' : (r.classificacao==='Não atende' ? '✗' : '⚠');
+  return `<div style="font-size:13px">
+    <div style="font-weight:600;color:${cor}">${icone} ${esc(label)}</div>
+    ${r.resumo?`<p style="margin:4px 0">${esc(r.resumo)}</p>`:''}
+    ${_listaHTML('Pontos atendidos', r.pontos_atendidos)}
+    ${_listaHTML('Pontos não atendidos', r.pontos_nao_atendidos)}
+  </div>`;
 }
 
 // ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens que o

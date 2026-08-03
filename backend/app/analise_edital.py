@@ -170,6 +170,40 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
     return _texto_de_pdf_bytes(r.content, max_paginas, max_chars)
 
 
+def _ocr_imagem(conteudo: bytes) -> str:
+    """OCR de uma imagem solta (jpg/png/webp/...), mesmo motor do OCR de PDF
+    escaneado (_ocr_pdf), só que sem o passo de rasterizar páginas — a
+    imagem já É a página."""
+    try:
+        import pytesseract
+        from PIL import Image
+    except Exception:
+        log.warning("OCR indisponível (pytesseract/Pillow não instalados).")
+        return ""
+    try:
+        img = Image.open(io.BytesIO(conteudo))
+        return pytesseract.image_to_string(img, lang=settings.OCR_IDIOMA).strip()
+    except Exception as e:
+        log.warning("Falha no OCR de imagem: %s", e)
+        return ""
+
+
+def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str | None,
+                         max_chars: int = 16000) -> str:
+    """Extrai texto de um arquivo que o usuário enviou (PDF ou imagem) —
+    mesmo pipeline de PDF/OCR usado pra ler o edital do PNCP, só que a
+    origem é um upload em vez de uma URL. Não persiste nada em disco: o
+    conteúdo já vem em memória (bytes) e o texto extraído é descartado
+    depois da chamada à IA (não tem storage de arquivo neste sistema)."""
+    nome = (nome_arquivo or "").lower()
+    eh_pdf = nome.endswith(".pdf") or (content_type or "") == "application/pdf"
+    if eh_pdf:
+        return _texto_de_pdf_bytes(conteudo, max_paginas=20, max_chars=max_chars)
+    if not settings.OCR_ATIVO:
+        return ""
+    return _ocr_imagem(conteudo)[:max_chars]
+
+
 def _ocr_pdf(conteudo: bytes) -> str:
     """OCR de PDF escaneado com Tesseract (grátis, local, sem GPU).
     Pesado: limita o nº de páginas para não sobrecarregar o servidor.
@@ -351,4 +385,77 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "julgamento": s(data.get("julgamento")),
         "garantia_contratual": s(data.get("garantia_contratual")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
+    }
+
+
+# Prompt pra comparar um documento QUE O USUÁRIO ENVIOU (ficha técnica,
+# catálogo do produto, atestado, certidão...) contra o que o edital já pede —
+# reaproveita os campos que `analisar()` acima já extraiu (requisitos_tecnicos
+# e documentos_habilitacao), em vez de reanalisar o edital do zero.
+_PROMPT_DOCUMENTO = """Você é um especialista em licitações públicas brasileiras. Abaixo estão os REQUISITOS/EXIGÊNCIAS de um edital e o TEXTO extraído de um documento que um fornecedor quer verificar (ex.: ficha técnica do produto, catálogo, atestado de capacidade técnica, certidão).
+
+Compare o DOCUMENTO ENVIADO contra os REQUISITOS/EXIGÊNCIAS e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
+- "classificacao": "Atende" (o documento comprovadamente cobre o que foi comparado), "Atende parcialmente" (cobre só parte, faltam pontos), "Não atende" (não cobre o que foi exigido), ou "Nao_verificavel" (o documento não tem relação com o que está sendo pedido, ou não dá pra avaliar a partir do texto).
+- "resumo": string curta (1 a 2 frases) explicando o veredito.
+- "pontos_atendidos": array de strings — exigências específicas que o documento comprovadamente atende (cite o requisito).
+- "pontos_nao_atendidos": array de strings — exigências que faltam, estão incompletas, ou não ficaram claras no documento.
+
+Regras: não invente nada que não esteja nos textos abaixo. Avalie só o que der pra comparar de fato; se REQUISITOS/EXIGÊNCIAS estiver vazio, avalie o documento de forma geral em relação ao OBJETO DO EDITAL. Responda em português.
+
+OBJETO DO EDITAL: {objeto}
+
+REQUISITOS/EXIGÊNCIAS DO EDITAL:
+{requisitos}
+
+TEXTO DO DOCUMENTO ENVIADO ("{nome_arquivo}"):
+\"\"\"{texto}\"\"\""""
+
+
+def _formatar_requisitos(requisitos_tecnicos: list, documentos_habilitacao: dict) -> str:
+    linhas = []
+    for r in (requisitos_tecnicos or []):
+        linhas.append(f"- {r}")
+    docs = documentos_habilitacao or {}
+    for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira", "declaracoes"):
+        for d in (docs.get(categoria) or []):
+            linhas.append(f"- {d}")
+    return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
+
+
+def analisar_documento_usuario(objeto: str, requisitos_tecnicos: list, documentos_habilitacao: dict,
+                               nome_arquivo: str, texto_documento: str,
+                               api_key: str | None = None) -> dict:
+    """Compara um documento enviado pelo usuário (texto já extraído, ver
+    extrair_texto_upload) contra o que o edital pede. NÃO fica em cache — ao
+    contrário de analisar(), é específico do arquivo+usuário, não do edital."""
+    if not ia_texto_disponivel(api_key):
+        return {"status": "sem_ia"}
+    if len(texto_documento.strip()) < 30:
+        return {"status": "sem_texto"}
+
+    requisitos = _formatar_requisitos(requisitos_tecnicos, documentos_habilitacao)
+    prompt = _PROMPT_DOCUMENTO.format(
+        objeto=(objeto or "")[:1000], requisitos=requisitos[:6000],
+        nome_arquivo=nome_arquivo or "documento", texto=texto_documento[:16000])
+    txt, st = _gerar(prompt, api_key=api_key)
+    if st != "ok" or not txt:
+        return {"status": "erro_ia", "detalhe": st}
+    data = _parse_json(txt)
+    if not isinstance(data, dict):
+        return {"status": "resposta_invalida"}
+
+    classificacoes_validas = {"Atende", "Atende parcialmente", "Não atende", "Nao_verificavel"}
+    classificacao = str(data.get("classificacao") or "")
+    if classificacao not in classificacoes_validas:
+        classificacao = "Nao_verificavel"
+
+    def lista(x):
+        return [str(i) for i in x] if isinstance(x, list) else ([str(x)] if x else [])
+
+    return {
+        "status": "ok",
+        "classificacao": classificacao,
+        "resumo": str(data.get("resumo") or ""),
+        "pontos_atendidos": lista(data.get("pontos_atendidos")),
+        "pontos_nao_atendidos": lista(data.get("pontos_nao_atendidos")),
     }
