@@ -1076,11 +1076,28 @@ def listar_editais(
             select(Produto.id, Produto.itens_por_unidade).where(Produto.id.in_(ids_produto))
         ).all())
 
+    def _item_conta_como_compativel(it: dict) -> bool:
+        # mesma regra de "compatível de verdade" usada em /detalhe, /cotacao.xlsx
+        # e Inteligência de Preço: confiança alta OU confirmado manualmente —
+        # confiança média é sugestão, não conta até o usuário confirmar (evita
+        # o card da lista anunciar como "compatível" um match que a tela do
+        # edital já trata como precisando de confirmação). `"confianca" not in
+        # it` é dado ANTERIOR a essa faixa existir (ainda não recalculado) —
+        # mantém o comportamento de antes até a próxima recalculação chegar
+        # nele, em vez de anunciar "0 compatível" pra base toda de uma vez.
+        if not it.get("produto_id"):
+            return False
+        if "confianca" in it:
+            return it.get("confianca") == "alta" or bool(it.get("confirmado_manualmente"))
+        return True
+
     out = []
     for match, ed in linhas:
         dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
         detalhe = match.detalhe
+        itens_compativeis = match.itens_compativeis
         if detalhe and detalhe.get("itens"):
+            itens_compativeis = sum(1 for it in detalhe["itens"] if _item_conta_como_compativel(it))
             # cópia (não mutar o dict rastreado pelo ORM) — só os 4 primeiros
             # itens porque é só isso que o card da lista mostra (_corpoItensEdital
             # já não usa esse "detalhe" resumido, usa /detalhe com o catálogo
@@ -1108,7 +1125,7 @@ def listar_editais(
             "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
             "dias_restantes": dias, "link": ed.link,
             "score": match.score, "nivel": match.nivel,
-            "itens_compativeis": match.itens_compativeis,
+            "itens_compativeis": itens_compativeis,
             "lido": match.lido, "interessante": match.interessante,
             "status": match.status,
             "detalhe": detalhe,

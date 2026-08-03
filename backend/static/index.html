@@ -1312,8 +1312,14 @@ function cardEdital(e){
     // aba Itens/margem) — silencioso quando não verificável, mesma lógica
     // de "sem opinião != atende" da aba de detalhe.
     const selo = vt ? ` <span style="color:${CORES_VALIDACAO[vt.classificacao]||''};font-weight:600;font-size:11px">· ${vt.classificacao==='Não atende'?'✗':(vt.classificacao==='Atende'?'✓':'⚠')} ${esc(vt.classificacao)}</span>` : '';
+    // "confianca" só existe em dado já passado pelo motor novo (recalculado
+    // com a faixa alta/média) — item de confiança média ainda não confirmado
+    // não é um match resolvido, é uma sugestão; mesmo critério usado na aba
+    // Itens/margem (compativel = confianca alta OU confirmado manualmente).
+    const sugestaoPendente = d.confianca==='media' && !d.confirmado_manualmente;
+    const aviso = sugestaoPendente ? ` <span style="color:var(--medio);font-weight:600;font-size:11px">· ⚠ sugestão — confirme no edital</span>` : '';
     return `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
-      + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'') + selo;
+      + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'') + selo + aviso;
   }).join('<br>');
   const linkEdital = linkSeguro(e.link);
   return `<div class="card">

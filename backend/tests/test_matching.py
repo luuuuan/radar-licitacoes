@@ -303,3 +303,35 @@ def test_ia_com_sinal_combina_score(monkeypatch):
     assert r.detalhe[0]["score_item"] == pytest.approx(esperado, abs=1e-3)
     assert r.detalhe[0]["produto_id"] == produto_ia.id
     assert "IA" in r.detalhe[0]["motivo"]
+
+
+def test_codigo_exato_com_texto_relacionado_e_confianca_alta():
+    """Código bate E o texto corrobora (mesmo que fracamente) — confia
+    automático, como sempre foi."""
+    eng = MatchingEngine(_catalogo())
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel branco", ncm="4802.55.90")])
+    assert r.detalhe[0]["confianca"] == "alta"
+    assert r.detalhe[0]["produto_id"] == 1
+
+
+def test_codigo_exato_sem_relacao_textual_vira_confianca_media():
+    """Caso real de produção: item "Álcool Etílico ... gel ... 70% v/v" bateu
+    por NCM idêntico com "Desinfetante 5 litros Lavanda" — mesmo código
+    fiscal (categoria ampla de produto de limpeza/higiene), mas os textos não
+    têm nada em comum. Código exato sozinho, sem NENHUM sinal textual, não
+    pode virar "compatível" automático — tem que cair pra sugestão (média),
+    pedindo confirmação, mesmo continuando como o melhor palpite disponível
+    (candidatos[0])."""
+    catalogo = [ProdutoCat(id=1, descricao="Desinfetante 5 litros Lavanda 9007 Urca",
+                           ncm="34029090", palavras_chave="desinfetante, lavanda, limpeza")]
+    eng = MatchingEngine(catalogo)
+    r = eng.avaliar("Material de limpeza e higiene", [ItemEdt(
+        1, "Álcool Etílico composição básica: com emoliente, forma farmacêutica: gel, "
+           "teor alcoólico: 70% v/v", ncm="3402.90.90")])
+    item = r.detalhe[0]
+    assert item["motivo"].startswith("código NCM")
+    assert item["confianca"] == "media"
+    # continua sendo o melhor palpite (é o único produto do catálogo) —
+    # só não confia cego, exige confirmação do usuário.
+    assert item["produto_id"] == 1
+    assert item["candidatos"][0]["produto_id"] == 1

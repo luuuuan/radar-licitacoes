@@ -203,6 +203,18 @@ class MatchingEngine:
     # exatamente nesse intervalo.
     _PISO_TFIDF_PRA_PALAVRA_ISOLADA = 0.30
 
+    # Piso de similaridade textual exigido pra um match de CÓDIGO EXATO
+    # (NCM/CATMAT/CATSER) virar confiança "alta" automática, em vez de
+    # "média" (pedindo confirmação). Achado real em produção: item "Álcool
+    # Etílico ... gel ... 70% v/v" casou por NCM idêntico com "Desinfetante
+    # 5 litros Lavanda" — mesmo código fiscal (categoria ampla de produto de
+    # limpeza/higiene), produtos completamente diferentes, cosseno TF-IDF
+    # entre os dois textos ~0. Bem mais baixo que o piso de palavra isolada
+    # (0.30) porque código exato já é um sinal bem mais forte por si só — só
+    # queremos barrar o caso de ZERO relação textual nenhuma, não exigir
+    # semelhança forte.
+    _PISO_TFIDF_CODIGO_EXATO = 0.15
+
     def _sims_item(self, texto_item: str, sims_row=None):
         """Linha de similaridade TF-IDF do item contra cada produto do
         catálogo — usa a linha já calculada em lote (sims_row, vinda de
@@ -282,16 +294,25 @@ class MatchingEngine:
     # ---- score de um único item do edital contra todo o catálogo ----------
     def _score_item(self, item: ItemEdt, texto_busca: str | None = None,
                     sims_row=None) -> tuple[float, ProdutoCat | None, str]:
-        # 1) match exato de código (sinal mais forte — mas não infalível, ver
-        # _pontuar_produtos: o usuário sempre pode trocar mesmo esse caso)
+        texto_item = texto_busca if texto_busca is not None else item.texto_busca()
+
+        # 1) match exato de código (sinal mais forte — mas não infalível: NCM
+        # é uma classificação FISCAL, ampla, não garante ser o MESMO produto
+        # físico. Continua sendo o melhor palpite disponível mesmo sem
+        # corroboração textual nenhuma (motivo "código X"), mas só vira
+        # confiança "alta" automática (ver avaliar()) quando o texto também
+        # corrobora nem que seja fracamente — ver _PISO_TFIDF_CODIGO_EXATO.
         item_ncm = so_digitos(item.ncm)
         item_cat = so_digitos(item.catalogo_codigo)
         for chave, valor in (("ncm", item_ncm), ("catmat", item_cat), ("catser", item_cat)):
             if valor and f"{chave}:{valor}" in self._idx_codigo:
                 idx = self._idx_codigo[f"{chave}:{valor}"][0]
-                return 1.0, self.produtos[idx], f"código {chave.upper()} {valor}"
+                sim = float(self._sims_item(texto_item, sims_row)[idx]) if texto_item else 0.0
+                motivo = f"código {chave.upper()} {valor}"
+                if sim < self._PISO_TFIDF_CODIGO_EXATO:
+                    motivo += " (sem sinal textual — confirme)"
+                return 1.0, self.produtos[idx], motivo
 
-        texto_item = texto_busca if texto_busca is not None else item.texto_busca()
         if not texto_item:
             return 0.0, None, ""
 
@@ -535,8 +556,19 @@ class MatchingEngine:
             if sc < settings.LIMIAR_ITEM_SUGESTAO:
                 continue
 
+            # "(sem sinal textual...)" = código bateu mas o texto não corrobora
+            # nem fracamente (ver _score_item) — não confia cego, pede
+            # confirmação, MESMO que sc seja 1.0 (score de código exato é
+            # fixo em 1.0 de propósito, pra não mexer no score/nível agregado
+            # do edital — por isso não pode entrar na comparação normal
+            # `sc >= LIMIAR_ITEM_ALTA`, senão o próprio 1.0 destrava "alta"
+            # de novo por trás, ignorando a falta de corroboração textual).
             codigo_exato = motivo.startswith("código ")
-            confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
+            codigo_sem_corroboracao = codigo_exato and "sem sinal textual" in motivo
+            if codigo_sem_corroboracao:
+                confianca = "media"
+            else:
+                confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
 
             sims_row_i = tfidf_lote[idx] if tfidf_lote is not None else None
             candidatos_raw = self._pontuar_produtos(textos_alvos[idx], sims_row_i)
