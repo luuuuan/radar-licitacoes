@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from .models import utcnow as _utcnow_main
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File
+from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -583,14 +583,6 @@ class RegraIn(BaseModel):
 class MarcarIn(BaseModel):
     lido: bool | None = None
     interessante: bool | None = None
-
-
-class DocumentoIn(BaseModel):
-    nome: str
-    orgao_emissor: str | None = None
-    data_validade: date
-    link: str | None = None
-    observacao: str | None = None
 
 
 class FornecedorIn(BaseModel):
@@ -1676,6 +1668,35 @@ def _anexar_checklist_documentos(resultado: dict, user: Usuario, db: Session) ->
     return resultado
 
 
+def _anexar_verificacao_ia_documentos(resultado: dict, user: Usuario, db: Session,
+                                      api_key: str | None) -> dict:
+    """Verificação por CONTEÚDO (IA) dos documentos que o usuário já tem
+    cadastrados (aba Documentos, cada um com o texto extraído do arquivo
+    anexado no cadastro) contra o que este edital exige — complementar ao
+    checklist por NOME (_anexar_checklist_documentos, sempre grátis e
+    instantâneo, roda em toda leitura). Isto aqui só roda numa análise
+    FRESCA (chamado só no branch que gera a análise, não no cache hit): é
+    uma chamada de IA a mais, então só vale rodar quando o usuário já está
+    esperando a análise mesmo. NÃO fica em cache — ed.analise_ia é
+    compartilhado entre todos que veem este edital, e isto é por usuário."""
+    if resultado.get("status") != "ok":
+        return resultado
+    docs_usuario = db.execute(
+        select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True,  # noqa: E712
+                                Documento.texto_extraido.is_not(None))
+    ).scalars().all()
+    if not docs_usuario:
+        return resultado
+    from . import analise_edital as ia
+    resultado["verificacao_documentos_ia"] = ia.verificar_documentos_usuario(
+        resultado.get("objeto") or "", resultado.get("requisitos_tecnicos"),
+        resultado.get("documentos_habilitacao"),
+        [{"nome": d.nome, "texto": d.texto_extraido} for d in docs_usuario],
+        api_key=api_key,
+    )
+    return resultado
+
+
 @app.get("/api/editais/{edital_id}/analise")
 def analise_edital(edital_id: int, forcar: bool = Query(False),
                    user: Usuario = Depends(_auth.get_current_user),
@@ -1708,51 +1729,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
+    resultado = _anexar_verificacao_ia_documentos(resultado, user, db, chave)
     return _anexar_checklist_documentos(resultado, user, db)
-
-
-_TIPOS_UPLOAD_ANALISE_PERMITIDOS = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
-_TAMANHO_MAX_UPLOAD_ANALISE = 15 * 1024 * 1024  # 15 MB
-
-
-@app.post("/api/editais/{edital_id}/analise-documento")
-async def analise_documento_edital(edital_id: int, arquivo: UploadFile = File(...),
-                                   user: Usuario = Depends(_auth.get_current_user),
-                                   db: Session = Depends(get_session)):
-    """Compara um documento enviado pelo usuário (PDF ou imagem — ficha
-    técnica, catálogo, atestado, certidão...) contra o que a análise por IA
-    já extraiu deste edital (requisitos técnicos / documentos de
-    habilitação — reaproveita o cache de /analise, não reanalisa o edital).
-    Específico do arquivo enviado: não fica em cache nem é salvo em disco,
-    roda a cada envio e é descartado depois da resposta (mesmo padrão sem
-    storage do import de catálogo em /api/produtos/importar)."""
-    from . import analise_edital as ia
-    import json as _json
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-
-    chave = _auth.decifrar(user.gemini_key_cifrada)
-    if not ia.ia_texto_disponivel(chave):
-        return {"status": "sem_ia"}
-
-    if not ed.analise_ia:
-        return {"status": "sem_analise_base"}
-    try:
-        base = _json.loads(ed.analise_ia)
-    except ValueError:
-        return {"status": "sem_analise_base"}
-
-    if arquivo.content_type not in _TIPOS_UPLOAD_ANALISE_PERMITIDOS:
-        raise HTTPException(400, "Envie um PDF ou imagem (jpg/png/webp).")
-    conteudo = await arquivo.read()
-    if len(conteudo) > _TAMANHO_MAX_UPLOAD_ANALISE:
-        raise HTTPException(400, "Arquivo muito grande (máximo 15 MB).")
-
-    texto = ia.extrair_texto_upload(arquivo.filename or "", conteudo, arquivo.content_type)
-    return ia.analisar_documento_usuario(
-        ed.objeto or "", base.get("requisitos_tecnicos"), base.get("documentos_habilitacao"),
-        arquivo.filename or "documento", texto, api_key=chave)
 
 
 # --------------------------- Cotação (planilha) ------------------------ #
@@ -2192,13 +2170,42 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
         "data_validade": d.data_validade.isoformat(),
         "dias_para_vencer": (d.data_validade - hoje).days,
         "observacao": d.observacao, "link": d.link, "ativo": d.ativo,
+        "tem_arquivo": bool(d.texto_extraido),
     } for d in docs]
 
 
+_TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+_TAMANHO_MAX_UPLOAD_DOCUMENTO = 15 * 1024 * 1024  # 15 MB
+
+
+async def _extrair_texto_documento_upload(arquivo: UploadFile | None) -> str | None:
+    """Extrai texto do PDF/imagem anexado ao cadastrar um documento de
+    habilitação (Documento.texto_extraido) — usado depois pela análise por
+    IA do edital pra comparar o CONTEÚDO real do documento contra o que está
+    sendo exigido, não só o nome cadastrado. None = nenhum arquivo enviado
+    (cadastro sem upload continua funcionando, como sempre)."""
+    if arquivo is None or not arquivo.filename:
+        return None
+    if arquivo.content_type not in _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS:
+        raise HTTPException(400, "Envie um PDF ou imagem (jpg/png/webp).")
+    conteudo = await arquivo.read()
+    if len(conteudo) > _TAMANHO_MAX_UPLOAD_DOCUMENTO:
+        raise HTTPException(400, "Arquivo muito grande (máximo 15 MB).")
+    from . import analise_edital as ia
+    return ia.extrair_texto_upload(arquivo.filename, conteudo, arquivo.content_type) or None
+
+
 @app.post("/api/documentos")
-def criar_documento(dados: DocumentoIn, user: Usuario = Depends(_auth.get_current_user),
-                    db: Session = Depends(get_session)):
-    d = Documento(**dados.model_dump(), usuario_id=user.id)
+async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = Form(None),
+                          data_validade: date = Form(...), link: str | None = Form(None),
+                          observacao: str | None = Form(None),
+                          arquivo: UploadFile | None = File(None),
+                          user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    texto = await _extrair_texto_documento_upload(arquivo)
+    d = Documento(nome=nome, orgao_emissor=orgao_emissor or None, data_validade=data_validade,
+                 link=link or None, observacao=observacao or None, texto_extraido=texto,
+                 usuario_id=user.id)
     db.add(d)
     db.commit()
     return {"id": d.id}
@@ -2212,12 +2219,21 @@ def _documento_do_usuario(db, doc_id, user) -> Documento:
 
 
 @app.put("/api/documentos/{doc_id}")
-def atualizar_documento(doc_id: int, dados: DocumentoIn,
-                        user: Usuario = Depends(_auth.get_current_user),
-                        db: Session = Depends(get_session)):
+async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor: str | None = Form(None),
+                              data_validade: date = Form(...), link: str | None = Form(None),
+                              observacao: str | None = Form(None),
+                              arquivo: UploadFile | None = File(None),
+                              user: Usuario = Depends(_auth.get_current_user),
+                              db: Session = Depends(get_session)):
     d = _documento_do_usuario(db, doc_id, user)
-    for campo, valor in dados.model_dump().items():
-        setattr(d, campo, valor)
+    d.nome, d.orgao_emissor = nome, orgao_emissor or None
+    d.data_validade, d.link, d.observacao = data_validade, link or None, observacao or None
+    # arquivo é OPCIONAL na edição: só re-extrai e substitui o texto salvo
+    # se o usuário mandar um novo; sem arquivo, mantém o texto já extraído
+    # de antes (editar validade/observação não pode apagar o upload anterior).
+    texto = await _extrair_texto_documento_upload(arquivo)
+    if texto is not None:
+        d.texto_extraido = texto
     d.avisado_para = None  # validade mudou -> permite avisar de novo
     db.commit()
     return {"ok": True}

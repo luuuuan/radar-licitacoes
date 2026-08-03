@@ -230,6 +230,11 @@ class Documento(Base):
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)  # onde está o documento
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # texto extraído do PDF/imagem que o usuário anexou ao cadastrar (PDF via
+    # pypdf/OCR, imagem via OCR — ver analise_edital.extrair_texto_upload).
+    # Usado pela análise por IA do edital para comparar o CONTEÚDO real do
+    # documento contra o que está sendo exigido, não só o nome cadastrado.
+    texto_extraido: Mapped[str | None] = mapped_column(Text, nullable=True)
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
     avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)             # e-mail
     avisado_para_telegram: Mapped[date | None] = mapped_column(Date, nullable=True)    # menu do Telegram

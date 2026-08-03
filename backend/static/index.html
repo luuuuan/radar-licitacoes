@@ -860,6 +860,10 @@
         <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
       <div class="field"><label>Observação (opcional)</label>
         <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
+      <div class="field"><label>Arquivo do documento (opcional)
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">PDF ou imagem (foto/scan) deste documento. A IA lê o conteúdo e usa pra conferir automaticamente se ele atende o que cada edital está pedindo, quando você roda a "Análise por IA".</span></span></label>
+        <input type="file" id="d-arquivo" accept=".pdf,image/*" style="width:100%">
+        <div class="muted" id="d-arquivo-atual" style="font-size:11px;margin-top:2px"></div></div>
       <div class="toolbar" style="margin-top:8px">
         <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
         <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
@@ -1031,7 +1035,7 @@ function _apiInicio(){
     _apiBarraTO=setTimeout(()=>{ const b=$('#loadingbar'); if(b) b.classList.add('ativa'); }, 200);
     _apiLentoTO=setTimeout(()=>{
       toast('Isso está demorando um pouco mais que o normal — só um instante...', 'aviso', 8000);
-    }, 15000);
+    }, 30000);
   }
 }
 function _apiFim(){
@@ -1794,7 +1798,7 @@ async function loadDocumentos(){
     else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
     const link = linkSeguro(d.link);
     return `<tr>
-      <td>${esc(d.nome)}${link?` <a href="${esc(link)}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
+      <td>${esc(d.nome)}${link?` <a href="${esc(link)}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}${d.tem_arquivo?' <span title="Arquivo anexado — usado na verificação por IA" style="font-size:11px">📎</span>':''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
       <td>${d.data_validade.split('-').reverse().join('/')}</td>
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
@@ -1814,11 +1818,23 @@ function fecharFormDocumento(){
 }
 
 async function salvarDocumento(){
-  const body={nome:$('#d-nome').value.trim(), orgao_emissor:$('#d-orgao').value.trim()||null,
-    data_validade:$('#d-validade').value, link:$('#d-link').value.trim()||null, observacao:$('#d-obs').value.trim()||null};
-  if(!body.nome || !body.data_validade){ alert('Informe o nome e a validade'); return; }
+  const nome=$('#d-nome').value.trim(), data_validade=$('#d-validade').value;
+  if(!nome || !data_validade){ alert('Informe o nome e a validade'); return; }
+  const fd = new FormData();
+  fd.append('nome', nome);
+  fd.append('orgao_emissor', $('#d-orgao').value.trim());
+  fd.append('data_validade', data_validade);
+  fd.append('link', $('#d-link').value.trim());
+  fd.append('observacao', $('#d-obs').value.trim());
+  const arquivo = $('#d-arquivo').files[0];
+  if(arquivo) fd.append('arquivo', arquivo);
   const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
-  await api(url,{method: editandoDocId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const resp = await fetch(url, {method: editandoDocId?'PUT':'POST', body: fd});
+  if(!resp.ok){
+    const err = await resp.json().catch(()=>({}));
+    toast(err.detail || 'Não foi possível salvar o documento.', 'erro');
+    return;
+  }
   fecharFormDocumento(); loadDocumentos();
 }
 
@@ -1827,6 +1843,7 @@ function editarDocumento(id){
   if(!d) return;
   $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
   $('#d-validade').value=d.data_validade; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
+  $('#d-arquivo-atual').textContent = d.tem_arquivo ? '📎 já tem um arquivo anexado — escolher outro substitui o atual.' : '';
   editandoDocId=d.id;
   $('#doc-form-titulo').textContent='Editar documento';
   $('#btn-salvar-doc').textContent='Salvar alterações';
@@ -1835,7 +1852,8 @@ function editarDocumento(id){
 
 function cancelarEdicaoDoc(){
   editandoDocId=null;
-  ['d-nome','d-orgao','d-validade','d-link','d-obs'].forEach(i=>$('#'+i).value='');
+  ['d-nome','d-orgao','d-validade','d-link','d-obs','d-arquivo'].forEach(i=>$('#'+i).value='');
+  $('#d-arquivo-atual').textContent='';
   $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
   $('#btn-salvar-doc').textContent='Salvar documento';
 }
@@ -2260,6 +2278,31 @@ function cadastrarDocumentoChecklist(idx){
   if(!item) return;
   abrirFormDocumento();
   $('#d-nome').value = item.exigido;
+}
+
+// Verificação por CONTEÚDO (IA) dos documentos que o usuário já tem
+// cadastrados (aba Documentos, arquivo anexado no cadastro) contra este
+// edital — diferente do checklist acima (_checklistDocsHTML), que só
+// compara pelo NOME cadastrado. Só existe quando a análise rodou fresca
+// (não em cache hit) e o usuário tem ao menos 1 documento com arquivo.
+function _verificacaoDocumentosIAHTML(v){
+  if(!v || v.status==='sem_documentos' || v.status==='sem_requisitos' || v.status==='sem_ia') return '';
+  if(v.status==='erro_ia'){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível verificar o conteúdo dos seus documentos contra este edital agora (${esc(_msgErroIA(v.detalhe))}).</div>`;
+  }
+  if(v.status!=='ok' || !v.itens || !v.itens.length) return '';
+  const atendidos = v.itens.filter(i=>i.atendido).length;
+  return `<div style="margin-top:14px">
+    <strong>Verificação por IA dos seus documentos (${atendidos}/${v.itens.length} atendidos)</strong>
+    <p class="muted" style="font-size:11px;margin:2px 0 6px">Lê o conteúdo dos arquivos anexados na aba Documentos — diferente do checklist acima, que só compara pelo nome cadastrado.</p>
+    <ul style="margin:4px 0 0;padding-left:18px">
+      ${v.itens.map(i=>`<li style="margin:3px 0;font-size:13px">
+        <span style="color:${i.atendido?'var(--forte)':'var(--destructive)'};font-weight:600">${i.atendido?'✓':'✗'}</span>
+        ${esc(i.exigido)}${i.documento?` <span class="muted">— ${esc(i.documento)}</span>`:''}
+        ${i.observacao?`<div class="muted" style="font-size:11px;margin-left:18px">${esc(i.observacao)}</div>`:''}
+      </li>`).join('')}
+    </ul>
+  </div>`;
 }
 
 // mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
@@ -2687,16 +2730,10 @@ async function _corpoAnaliseEdital(id, forcar){
         ${r.validade_documentos_habilitacao?`<div class="muted" style="font-size:12px;margin-top:2px">Prazo de emissão exigido: ${esc(r.validade_documentos_habilitacao)}</div>`:''}
         ${_checklistDocsHTML(r.checklist_documentos)}
       </div>`:''}
+      ${_verificacaoDocumentosIAHTML(r.verificacao_documentos_ia)}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
-      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
-        <strong>Verificar um documento seu</strong>
-        <p class="muted" style="font-size:12px;margin:4px 0 8px">Envie uma ficha técnica, catálogo do produto, atestado ou certidão (PDF ou imagem) pra IA comparar contra o que este edital pede.</p>
-        <input type="file" id="doc-verificar-arquivo" accept=".pdf,image/*" style="font-size:12px;max-width:100%">
-        <button class="btn ghost" style="margin-left:6px" onclick="verificarDocumentoEdital()">Verificar compatibilidade</button>
-        <div id="doc-verificar-resultado" style="margin-top:10px"></div>
-      </div>
       <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
         Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
         <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">refazer</button>
@@ -2714,50 +2751,6 @@ async function _corpoAnaliseEdital(id, forcar){
   return {sucesso: false, html: `<p style="line-height:1.5">${msgs[r.status]||'Não foi possível analisar este edital.'}</p>
     <button class="btn ghost" style="margin-top:6px" onclick="abaEdital('analise',true)">tentar novamente</button>
     ${portal?`<a class="btn" href="${esc(portal)}" target="_blank" style="display:inline-block;margin-top:6px;margin-left:6px">Abrir edital no portal ${ICN.externo}</a>`:''}`};
-}
-
-// Verifica um documento do usuário (ficha técnica, catálogo, atestado,
-// certidão) contra os requisitos que a análise por IA já extraiu deste
-// edital. Não fica em cache (é por arquivo, não por edital) — some se
-// trocar de aba e voltar, igual a qualquer resultado ao vivo não salvo.
-async function verificarDocumentoEdital(){
-  const input = $('#doc-verificar-arquivo');
-  const out = $('#doc-verificar-resultado');
-  const f = input && input.files && input.files[0];
-  if(!out) return;
-  if(!f){ toast('Escolha um arquivo primeiro.', 'aviso'); return; }
-  out.innerHTML = _spinnerHTML('Lendo o documento e comparando com o edital…');
-  const fd = new FormData();
-  fd.append('arquivo', f);
-  try{
-    const resp = await fetch(`/api/editais/${_paginaEditalId}/analise-documento`, {method:'POST', body:fd});
-    const r = await resp.json();
-    out.innerHTML = _resultadoVerificacaoDocumentoHTML(r);
-  }catch(e){
-    out.innerHTML = '<p class="muted" style="font-size:13px">Erro ao verificar o documento. Tente de novo.</p>';
-  }
-}
-
-function _resultadoVerificacaoDocumentoHTML(r){
-  if(r.status!=='ok'){
-    const msgs={
-      sem_ia:'A análise por IA está desativada. Configure sua chave Gemini em <b>Meu perfil</b>.',
-      sem_analise_base:'Rode a análise por IA deste edital primeiro (acima) — a verificação de documento compara contra o que ela extraiu.',
-      sem_texto:'Não consegui ler texto neste arquivo (imagem de baixa qualidade ou PDF sem conteúdo extraível).',
-      erro_ia:_msgErroIA(r.detalhe),
-      resposta_invalida:'A IA respondeu num formato inesperado. Tente de novo.',
-    };
-    return `<p class="muted" style="font-size:13px">${msgs[r.status]||'Não foi possível verificar este documento.'}</p>`;
-  }
-  const label = r.classificacao==='Nao_verificavel' ? 'Não foi possível avaliar' : r.classificacao;
-  const cor = CORES_VALIDACAO[r.classificacao] || 'var(--muted-fg,#888)';
-  const icone = r.classificacao==='Atende' ? '✓' : (r.classificacao==='Não atende' ? '✗' : '⚠');
-  return `<div style="font-size:13px">
-    <div style="font-weight:600;color:${cor}">${icone} ${esc(label)}</div>
-    ${r.resumo?`<p style="margin:4px 0">${esc(r.resumo)}</p>`:''}
-    ${_listaHTML('Pontos atendidos', r.pontos_atendidos)}
-    ${_listaHTML('Pontos não atendidos', r.pontos_nao_atendidos)}
-  </div>`;
 }
 
 // ---- Cotação: exporta a planilha de cotação (.xlsx) só com os itens que o

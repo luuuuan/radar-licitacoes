@@ -89,7 +89,7 @@ if ("usuario_id", "INTEGER") not in _COLUNAS_NOVAS["logs_coleta"]:
 if ("origem", "VARCHAR(10)") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("origem", "VARCHAR(10)"))
 _COLUNAS_NOVAS.setdefault("documentos", [])
-for _c in (("link", "VARCHAR(500)"), ("avisado_para_telegram", "DATE")):
+for _c in (("link", "VARCHAR(500)"), ("avisado_para_telegram", "DATE"), ("texto_extraido", "TEXT")):
     if _c not in _COLUNAS_NOVAS["documentos"]:
         _COLUNAS_NOVAS["documentos"].append(_c)
 _COLUNAS_NOVAS.setdefault("produtos", [])

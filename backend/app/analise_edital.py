@@ -388,27 +388,31 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     }
 
 
-# Prompt pra comparar um documento QUE O USUÁRIO ENVIOU (ficha técnica,
-# catálogo do produto, atestado, certidão...) contra o que o edital já pede —
-# reaproveita os campos que `analisar()` acima já extraiu (requisitos_tecnicos
-# e documentos_habilitacao), em vez de reanalisar o edital do zero.
-_PROMPT_DOCUMENTO = """Você é um especialista em licitações públicas brasileiras. Abaixo estão os REQUISITOS/EXIGÊNCIAS de um edital e o TEXTO extraído de um documento que um fornecedor quer verificar (ex.: ficha técnica do produto, catálogo, atestado de capacidade técnica, certidão).
+# Prompt pra cruzar os DOCUMENTOS QUE O USUÁRIO JÁ TEM CADASTRADOS (aba
+# Documentos, cada um com o texto extraído do PDF/imagem anexado no cadastro
+# — ver Documento.texto_extraido) contra o que ESTE edital exige. Reaproveita
+# os campos que `analisar()` acima já extraiu (requisitos_tecnicos e
+# documentos_habilitacao), em vez de reanalisar o edital do zero. Ao
+# contrário do cruzamento por NOME (checklist_habilitacao.montar, sempre
+# ativo, rápido/grátis), este lê o CONTEÚDO de cada documento.
+_PROMPT_VERIFICACAO_DOCUMENTOS = """Você é um especialista em licitações públicas brasileiras. Abaixo estão os REQUISITOS/EXIGÊNCIAS de um edital e os DOCUMENTOS QUE O FORNECEDOR JÁ TEM CADASTRADOS (nome + texto extraído de cada um).
 
-Compare o DOCUMENTO ENVIADO contra os REQUISITOS/EXIGÊNCIAS e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
-- "classificacao": "Atende" (o documento comprovadamente cobre o que foi comparado), "Atende parcialmente" (cobre só parte, faltam pontos), "Não atende" (não cobre o que foi exigido), ou "Nao_verificavel" (o documento não tem relação com o que está sendo pedido, ou não dá pra avaliar a partir do texto).
-- "resumo": string curta (1 a 2 frases) explicando o veredito.
-- "pontos_atendidos": array de strings — exigências específicas que o documento comprovadamente atende (cite o requisito).
-- "pontos_nao_atendidos": array de strings — exigências que faltam, estão incompletas, ou não ficaram claras no documento.
+Para CADA exigência listada, verifique se algum dos documentos cadastrados comprovadamente a atende. Responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
+- "itens": array, um item pra CADA exigência da lista abaixo (não pule nenhuma), cada um com:
+  - "exigido": a exigência, copiada exatamente como está na lista.
+  - "atendido": true se algum documento cadastrado comprova isso, false caso contrário.
+  - "documento": nome do documento cadastrado que atende (o mais relevante), ou "" se nenhum atende.
+  - "observacao": string curta (só quando relevante) — ex. "documento encontrado mas sem data de emissão visível", "atestado cobre item diferente do exigido". "" se não houver nada a observar.
 
-Regras: não invente nada que não esteja nos textos abaixo. Avalie só o que der pra comparar de fato; se REQUISITOS/EXIGÊNCIAS estiver vazio, avalie o documento de forma geral em relação ao OBJETO DO EDITAL. Responda em português.
+Regras: não invente nada que não esteja nos textos. Se a lista de documentos cadastrados estiver vazia, todo item vem com atendido=false e documento="". Responda em português.
 
 OBJETO DO EDITAL: {objeto}
 
-REQUISITOS/EXIGÊNCIAS DO EDITAL:
+EXIGÊNCIAS DO EDITAL:
 {requisitos}
 
-TEXTO DO DOCUMENTO ENVIADO ("{nome_arquivo}"):
-\"\"\"{texto}\"\"\""""
+DOCUMENTOS CADASTRADOS PELO FORNECEDOR:
+{documentos}"""
 
 
 def _formatar_requisitos(requisitos_tecnicos: list, documentos_habilitacao: dict) -> str:
@@ -422,40 +426,53 @@ def _formatar_requisitos(requisitos_tecnicos: list, documentos_habilitacao: dict
     return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
 
 
-def analisar_documento_usuario(objeto: str, requisitos_tecnicos: list, documentos_habilitacao: dict,
-                               nome_arquivo: str, texto_documento: str,
-                               api_key: str | None = None) -> dict:
-    """Compara um documento enviado pelo usuário (texto já extraído, ver
-    extrair_texto_upload) contra o que o edital pede. NÃO fica em cache — ao
-    contrário de analisar(), é específico do arquivo+usuário, não do edital."""
+def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documentos_habilitacao: dict,
+                                 documentos_usuario: list[dict], api_key: str | None = None) -> dict:
+    """Cruza os documentos que o usuário já tem cadastrados (cada um com
+    `nome` e `texto`, vindo de Documento.texto_extraido) contra o que este
+    edital exige — verificação de CONTEÚDO, complementar ao cruzamento por
+    nome que já existe (checklist_habilitacao). NÃO fica em cache: é
+    específico do usuário, e ed.analise_ia é um cache compartilhado entre
+    todos que veem este edital."""
     if not ia_texto_disponivel(api_key):
         return {"status": "sem_ia"}
-    if len(texto_documento.strip()) < 30:
-        return {"status": "sem_texto"}
+    if not documentos_usuario:
+        return {"status": "sem_documentos"}
 
     requisitos = _formatar_requisitos(requisitos_tecnicos, documentos_habilitacao)
-    prompt = _PROMPT_DOCUMENTO.format(
-        objeto=(objeto or "")[:1000], requisitos=requisitos[:6000],
-        nome_arquivo=nome_arquivo or "documento", texto=texto_documento[:16000])
+    if not (requisitos_tecnicos or (documentos_habilitacao or {})):
+        return {"status": "sem_requisitos"}
+
+    # até 8 documentos, ~3000 chars cada — o mesmo teto de prompt do
+    # analisar() principal (24000 chars) dividido entre vários documentos
+    # em vez de 1-2 arquivos grandes do edital.
+    partes = []
+    for d in documentos_usuario[:8]:
+        nome = (d.get("nome") or "documento").strip()
+        texto = (d.get("texto") or "").strip()[:3000]
+        if texto:
+            partes.append(f'### "{nome}"\n{texto}')
+    if not partes:
+        return {"status": "sem_documentos"}
+    documentos_txt = "\n\n".join(partes)
+
+    prompt = _PROMPT_VERIFICACAO_DOCUMENTOS.format(
+        objeto=(objeto or "")[:1000], requisitos=requisitos[:6000], documentos=documentos_txt)
     txt, st = _gerar(prompt, api_key=api_key)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
         return {"status": "resposta_invalida"}
 
-    classificacoes_validas = {"Atende", "Atende parcialmente", "Não atende", "Nao_verificavel"}
-    classificacao = str(data.get("classificacao") or "")
-    if classificacao not in classificacoes_validas:
-        classificacao = "Nao_verificavel"
-
-    def lista(x):
-        return [str(i) for i in x] if isinstance(x, list) else ([str(x)] if x else [])
-
-    return {
-        "status": "ok",
-        "classificacao": classificacao,
-        "resumo": str(data.get("resumo") or ""),
-        "pontos_atendidos": lista(data.get("pontos_atendidos")),
-        "pontos_nao_atendidos": lista(data.get("pontos_nao_atendidos")),
-    }
+    itens = []
+    for it in data["itens"]:
+        if not isinstance(it, dict) or not it.get("exigido"):
+            continue
+        itens.append({
+            "exigido": str(it.get("exigido")),
+            "atendido": bool(it.get("atendido")),
+            "documento": str(it.get("documento") or ""),
+            "observacao": str(it.get("observacao") or ""),
+        })
+    return {"status": "ok", "itens": itens}

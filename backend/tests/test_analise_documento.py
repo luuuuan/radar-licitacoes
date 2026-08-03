@@ -1,6 +1,7 @@
 """
-Testes da verificação de documento do usuário contra o edital (sem rede —
-a chamada à IA é mockada). Rode com:  cd backend && pytest
+Testes da verificação por IA dos documentos que o usuário já tem cadastrados
+contra o que um edital exige (sem rede — a chamada à IA é mockada). Rode
+com:  cd backend && pytest
 """
 import json
 
@@ -23,52 +24,58 @@ def test_formatar_requisitos_vazio_retorna_mensagem_padrao():
     assert "nenhum requisito" in texto.lower()
 
 
-def test_analisar_documento_sem_chave_retorna_sem_ia():
-    r = ia.analisar_documento_usuario("Objeto", [], {}, "arquivo.pdf", "texto qualquer bem longo o suficiente",
-                                      api_key=None)
+def test_verificar_documentos_sem_chave_retorna_sem_ia():
+    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima 12 meses"], {},
+                                        [{"nome": "x.pdf", "texto": "texto qualquer"}], api_key=None)
     assert r == {"status": "sem_ia"}
 
 
-def test_analisar_documento_texto_curto_demais_retorna_sem_texto():
-    r = ia.analisar_documento_usuario("Objeto", [], {}, "arquivo.pdf", "abc", api_key="fake-key")
-    assert r == {"status": "sem_texto"}
+def test_verificar_documentos_sem_documentos_cadastrados():
+    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima 12 meses"], {}, [], api_key="fake-key")
+    assert r == {"status": "sem_documentos"}
 
 
-def test_analisar_documento_feliz_normaliza_resposta(monkeypatch):
-    resposta_ia = json.dumps({
-        "classificacao": "Atende parcialmente",
-        "resumo": "Cobre a maior parte, falta a garantia mínima.",
-        "pontos_atendidos": ["Certificação X"],
-        "pontos_nao_atendidos": ["Garantia mínima de 12 meses"],
-    })
+def test_verificar_documentos_sem_requisitos_do_edital():
+    r = ia.verificar_documentos_usuario("Objeto", [], {}, [{"nome": "x.pdf", "texto": "algo"}], api_key="fake-key")
+    assert r == {"status": "sem_requisitos"}
+
+
+def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "Garantia mínima de 12 meses", "atendido": True,
+         "documento": "ficha_tecnica.pdf", "observacao": ""},
+        {"exigido": "CND Receita Federal", "atendido": False, "documento": "", "observacao": ""},
+    ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
 
-    r = ia.analisar_documento_usuario(
-        "Aquisição de equipamento", ["Garantia mínima de 12 meses"], {},
-        "ficha_tecnica.pdf", "texto extraído do documento do fornecedor " * 3,
+    r = ia.verificar_documentos_usuario(
+        "Aquisição de equipamento", ["Garantia mínima de 12 meses"], {"fiscal_trabalhista": ["CND Receita Federal"]},
+        [{"nome": "ficha_tecnica.pdf", "texto": "texto extraído do documento " * 5}],
         api_key="fake-key")
 
     assert r["status"] == "ok"
-    assert r["classificacao"] == "Atende parcialmente"
-    assert r["pontos_atendidos"] == ["Certificação X"]
-    assert r["pontos_nao_atendidos"] == ["Garantia mínima de 12 meses"]
+    assert len(r["itens"]) == 2
+    assert r["itens"][0]["atendido"] is True
+    assert r["itens"][0]["documento"] == "ficha_tecnica.pdf"
+    assert r["itens"][1]["atendido"] is False
 
 
-def test_analisar_documento_classificacao_invalida_vira_nao_verificavel(monkeypatch):
-    """A IA às vezes foge do enum pedido no prompt — não pode quebrar o
-    front (que só sabe colorir os 3 rótulos + Nao_verificavel)."""
-    resposta_ia = json.dumps({"classificacao": "talvez", "resumo": "", "pontos_atendidos": [], "pontos_nao_atendidos": []})
+def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "", "atendido": True, "documento": "x", "observacao": ""},
+        {"exigido": "Garantia mínima", "atendido": True, "documento": "x.pdf", "observacao": ""},
+    ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima"], {},
+                                        [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
+    assert len(r["itens"]) == 1
+    assert r["itens"][0]["exigido"] == "Garantia mínima"
 
-    r = ia.analisar_documento_usuario("Objeto", [], {}, "x.pdf", "texto qualquer bem longo o suficiente " * 3,
-                                      api_key="fake-key")
-    assert r["classificacao"] == "Nao_verificavel"
 
-
-def test_analisar_documento_erro_ia_propaga_status(monkeypatch):
+def test_verificar_documentos_erro_ia_propaga_status(monkeypatch):
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
-    r = ia.analisar_documento_usuario("Objeto", [], {}, "x.pdf", "texto qualquer bem longo o suficiente " * 3,
-                                      api_key="fake-key")
+    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima"], {},
+                                        [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
 
 
