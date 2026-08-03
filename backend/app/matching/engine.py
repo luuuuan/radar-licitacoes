@@ -178,18 +178,19 @@ class MatchingEngine:
                 and token not in self._STOPWORDS_RAD
                 and token not in self._UNIDADES_RAD)
 
-    def _tfidf_lote(self, textos: list[str]) -> list[tuple[float, int | None]]:
-        """Similaridade TF-IDF de VÁRIOS itens de uma vez (uma chamada só ao
-        vectorizer/cosine em vez de uma por item). O sklearn faz validação de
-        entrada (check_array) a cada chamada — repetir isso item a item numa
-        base com milhares de editais domina o tempo à toa, já que o resultado
-        matemático é idêntico ao de transformar um item por vez (bag-of-words
-        não tem interação entre linhas)."""
+    def _tfidf_lote(self, textos: list[str]):
+        """Similaridade TF-IDF de cada item do LOTE contra TODO o catálogo,
+        numa chamada só ao vectorizer/cosine (em vez de uma por item). O
+        sklearn faz validação de entrada (check_array) a cada chamada —
+        repetir isso item a item numa base com milhares de editais domina o
+        tempo à toa. Retorna a matriz completa (linha i = similaridades do
+        item i contra cada produto) — usada tanto pra decidir o vencedor
+        quanto pra ranquear as candidatas de cada item (ver _pontuar_produtos);
+        None se não há vectorizer (catálogo vazio)."""
         if self._vectorizer is None or self._matriz_prod is None or not textos:
-            return [(0.0, None)] * len(textos)
+            return None
         vecs = self._vectorizer.transform(textos)
-        sims = cosine_similarity(vecs, self._matriz_prod)
-        return [(float(row[j]), int(j)) for row, j in zip(sims, sims.argmax(axis=1))]
+        return cosine_similarity(vecs, self._matriz_prod)
 
     # Piso de similaridade textual (cosseno TF-IDF do texto INTEIRO contra o
     # candidato ESPECÍFICO da palavra-chave, não contra o melhor de qualquer
@@ -202,15 +203,87 @@ class MatchingEngine:
     # exatamente nesse intervalo.
     _PISO_TFIDF_PRA_PALAVRA_ISOLADA = 0.30
 
+    def _sims_item(self, texto_item: str, sims_row=None):
+        """Linha de similaridade TF-IDF do item contra cada produto do
+        catálogo — usa a linha já calculada em lote (sims_row, vinda de
+        _tfidf_lote) quando disponível, senão calcula avulso (uso isolado,
+        ex. testes)."""
+        if sims_row is not None:
+            return sims_row
+        if self._vectorizer is not None and self._matriz_prod is not None:
+            vec_item = self._vectorizer.transform([texto_item])
+            return cosine_similarity(vec_item, self._matriz_prod)[0]
+        return [0.0] * len(self.produtos)
+
+    def _pontuar_produtos(self, texto_item: str, sims_row=None) -> list[tuple[float, int, str]]:
+        """Pontua TODOS os produtos do catálogo contra o texto do item (não
+        só o melhor) — mesma regra de sempre, aplicada a CADA candidato, não
+        só ao vencedor:
+        - similaridade TF-IDF do texto inteiro como base;
+        - palavra-chave substitui quando: 2+ termos específicos (confiança
+          alta o bastante pra dispensar corroboração), OU 0-1 termo mas a
+          similaridade TF-IDF DESSE MESMO produto já corrobora (piso
+          _PISO_TFIDF_PRA_PALAVRA_ISOLADA — achado real: comparar contra o
+          melhor candidato QUALQUER, em vez do candidato específico da
+          keyword, deixava um candidato errado vencer só por "existir algo
+          razoável no catálogo em algum lugar", não por esse candidato em
+          particular fazer sentido — ver histórico no commit que introduziu
+          isso, "Perfurador Papel" x "Grampeador Metal");
+        - anti-coincidência: casamento em só 1 palavra distintiva (ou <10%
+          proporcional) nunca vale mais que 0.34, mesmo com TF-IDF/keyword
+          score alto (ex.: "Pasta L" vs. item odontológico de "pasta").
+
+        Usada tanto pra decidir o vencedor (resultado[0], ver _score_item)
+        quanto pra listar candidatas (resultado[:N]) que o usuário pode
+        escolher — inclusive pra item de confiança alta, já que código
+        NCM/CATMAT exato não é garantia de ser o mesmo produto (código
+        fiscal é amplo; achado real de código batendo com item sem nada a
+        ver com o pedido). Retorna [(score, índice_do_produto, motivo), ...]
+        só com score > 0, ordenado do maior pro menor."""
+        sims = self._sims_item(texto_item, sims_row)
+        kw_todos = self._pontuar_keywords_todos(texto_item)
+        toks_item = {t for t in texto_item.split() if self._distintivo(t)}
+
+        resultado = []
+        for i in range(len(self.produtos)):
+            sim_tfidf = float(sims[i])
+            sc, motivo = sim_tfidf, "similaridade textual"
+            kw = kw_todos.get(i)
+            if kw:
+                sc_kw, motivo_kw, n_kw = kw
+                if sc_kw > sc and (n_kw >= 2 or sim_tfidf >= self._PISO_TFIDF_PRA_PALAVRA_ISOLADA):
+                    sc, motivo = sc_kw, motivo_kw
+            if sc <= 0:
+                continue
+
+            # Anti-coincidência (mesmo raciocínio de sempre, aplicado por
+            # candidato agora — não só no vencedor): casamento apoiado em UMA
+            # única palavra distintiva em comum (ex.: "papel" entre "Papel A4"
+            # e "fragmentadora de papel") nunca é sinal de confiança, mesmo
+            # com score alto (ex.: TF-IDF de "Pasta L" vs. item odontológico
+            # de "pasta" batendo 1.0 só por causa dessa palavra).
+            texto_prod = self._textos_prod[i]
+            toks_prod = {t for t in texto_prod.split() if self._distintivo(t)}
+            comuns = toks_item & toks_prod
+            # item "kit"/"conjunto" com dezenas de peças enumeradas pode ter
+            # 2-3 termos batendo por PURA COINCIDÊNCIA — 2 em mais de 100 é
+            # proporcionalmente nada. Corte por PROPORÇÃO além do absoluto.
+            maior_lado = max(len(toks_item), len(toks_prod), 1)
+            fraco = len(comuns) <= 1 or (len(comuns) / maior_lado) < 0.10
+            if fraco and sc > 0.34:
+                sc = 0.34
+                motivo = f"só {len(comuns)} termo(s) em comum de {maior_lado} — fraco"
+
+            resultado.append((sc, i, motivo))
+
+        resultado.sort(key=lambda x: -x[0])
+        return resultado
+
     # ---- score de um único item do edital contra todo o catálogo ----------
     def _score_item(self, item: ItemEdt, texto_busca: str | None = None,
-                    tfidf: tuple[float, int | None] | None = None,
-                    ) -> tuple[float, ProdutoCat | None, str]:
-        melhor = 0.0
-        melhor_prod: ProdutoCat | None = None
-        motivo = ""
-
-        # 1) match exato de código (sinal mais forte)
+                    sims_row=None) -> tuple[float, ProdutoCat | None, str]:
+        # 1) match exato de código (sinal mais forte — mas não infalível, ver
+        # _pontuar_produtos: o usuário sempre pode trocar mesmo esse caso)
         item_ncm = so_digitos(item.ncm)
         item_cat = so_digitos(item.catalogo_codigo)
         for chave, valor in (("ncm", item_ncm), ("catmat", item_cat), ("catser", item_cat)):
@@ -220,92 +293,13 @@ class MatchingEngine:
 
         texto_item = texto_busca if texto_busca is not None else item.texto_busca()
         if not texto_item:
-            return melhor, melhor_prod, motivo
+            return 0.0, None, ""
 
-        # 2) similaridade TF-IDF — usa o resultado pré-calculado em lote por
-        # avaliar() quando disponível; senão calcula avulso (uso isolado, ex. testes).
-        vec_item = None
-        if tfidf is not None:
-            sim, j = tfidf
-            if j is not None and sim > melhor:
-                melhor, melhor_prod, motivo = sim, self.produtos[j], "similaridade textual"
-        elif self._vectorizer is not None and self._matriz_prod is not None:
-            vec_item = self._vectorizer.transform([texto_item])
-            sims = cosine_similarity(vec_item, self._matriz_prod)[0]
-            j = int(sims.argmax())
-            if sims[j] > melhor:
-                melhor = float(sims[j])
-                melhor_prod = self.produtos[j]
-                motivo = "similaridade textual"
-
-        # 3) reforço por palavra-chave — agora por QUANTIDADE de termos que casam.
-        #    Uma palavra isolada é sinal fraco (evita "papel" casar com
-        #    "fragmentadora de papel"); várias palavras elevam o nível.
-        melhor_kw = self._melhor_por_keywords(texto_item)
-        if melhor_kw and melhor_kw[0] > melhor:
-            sc_kw, prod_kw, motivo_kw, n_kw = melhor_kw
-            if n_kw >= 2:
-                melhor, melhor_prod, motivo = sc_kw, prod_kw, motivo_kw
-            elif self._vectorizer is not None and self._matriz_prod is not None:
-                # Sinal fraco (0-1 palavra-chave ESPECÍFICA) só pode substituir
-                # a similaridade textual quando o PRÓPRIO candidato da keyword
-                # tem corroboração textual — não quando "existe ALGUM produto
-                # razoável no catálogo" (esse era o bug: comparar contra
-                # `melhor`, o argmax de QUALQUER candidato, deixava passar um
-                # candidato ERRADO da keyword sempre que o TF-IDF já sabia a
-                # resposta CERTA mas com score < que o flat da keyword — achado
-                # real em produção: "Perfurador Papel...quantidade furos: 2"
-                # tinha o candidato CERTO via TF-IDF (~0.34, abaixo do flat
-                # 0.35 de "metal") mas o piso antigo comparava contra `melhor`
-                # [a similaridade do candidato CERTO] em vez da similaridade
-                # do candidato ERRADO da keyword [Grampeador, ~0.13] — deixando
-                # o errado vencer só por 0.34 > 0.30 já bastar como "prova de
-                # relevância", mesmo sendo relevância de OUTRO produto).
-                # Mesmos casos reais de antes ("Ribbon"/"Bobina Térmica",
-                # "papel"/"metal"/"kraft" batendo em produtos diferentes)
-                # seguem cortados: a similaridade ESPECÍFICA do candidato
-                # errado da keyword sempre ficava < 0.30 nesses casos; a de
-                # candidatos genuínos (ex.: "clipe" -> "Clips Galvanizado")
-                # sempre ficava > 0.34.
-                if vec_item is None:
-                    vec_item = self._vectorizer.transform([texto_item])
-                idx_kw = self._prod_indice.get(id(prod_kw))
-                sim_kw = (float(cosine_similarity(vec_item, self._matriz_prod[idx_kw])[0][0])
-                         if idx_kw is not None else 0.0)
-                if sim_kw >= self._PISO_TFIDF_PRA_PALAVRA_ISOLADA:
-                    melhor, melhor_prod, motivo = sc_kw, prod_kw, motivo_kw
-
-        # Anti-coincidência: se o casamento se apoia em UMA única palavra
-        # distintiva em comum (ex.: "papel" entre "Papel A4" e "fragmentadora
-        # de papel"), rebaixa abaixo do limiar para não virar item compatível.
-        # Roda sempre que há um candidato — inclusive com score alto: um score
-        # alto sustentado por uma única palavra em comum é o retrato do falso
-        # positivo (ex.: TF-IDF de "Pasta L" vs. item odontológico de "pasta"
-        # batendo 1.0 só por causa da palavra "pasta"), não um sinal de confiança.
-        if melhor_prod is not None:
-            toks_item = {t for t in texto_item.split() if self._distintivo(t)}
-            # usa o texto já pré-computado no __init__ (self._textos_prod) em vez
-            # de chamar melhor_prod.texto_busca() de novo — evita reprocessar
-            # normalizar+sinônimos+stemming a cada item.
-            texto_prod = self._textos_prod[self._prod_indice[id(melhor_prod)]]
-            toks_prod = {t for t in texto_prod.split() if self._distintivo(t)}
-            comuns = toks_item & toks_prod
-            # item "kit"/"conjunto" com dezenas de peças enumeradas (ex.: kit de
-            # ferramentas com 30+ itens na descrição) pode ter 2-3 termos batendo
-            # por PURA COINCIDÊNCIA (ex.: menciona "fita isolante" e "trena 3m"
-            # entre as peças, casando com um produto de fita adesiva) — o corte
-            # absoluto de "≤1 termo" não pega isso porque são 2 termos, só que
-            # 2 em mais de 100 é proporcionalmente nada. Some um corte por
-            # PROPORÇÃO (relativo ao lado com mais termos distintivos) além do
-            # absoluto, pra cobrir os dois casos.
-            maior_lado = max(len(toks_item), len(toks_prod), 1)
-            fraco = len(comuns) <= 1 or (len(comuns) / maior_lado) < 0.10
-            if fraco and melhor > 0.34:
-                termo = next(iter(comuns), "")
-                melhor = 0.34          # < LIMIAR_ITEM -> não conta como compatível
-                motivo = f"só {len(comuns)} termo(s) em comum de {maior_lado} — fraco"
-
-        return melhor, melhor_prod, motivo
+        resultado = self._pontuar_produtos(texto_item, sims_row)
+        if not resultado:
+            return 0.0, None, ""
+        sc, idx, motivo = resultado[0]
+        return sc, self.produtos[idx], motivo
 
     # palavras genéricas demais para casar sozinhas (embalagem/quantidade/etc.)
     _GENERICAS = {
@@ -359,14 +353,16 @@ class MatchingEngine:
     _STOPWORDS_RAD = {radical(w) for w in _STOPWORDS}
     _UNIDADES_RAD = {radical(w) for w in _UNIDADES}
 
-    def _melhor_por_keywords(self, texto_item: str):
-        """Avalia o catálogo contra o texto do item somando palavras-chave que
-        casam. Retorna (score, produto, motivo, n_especificas) ou None — o 4º
-        campo (quantas palavras-chave ESPECÍFICAS bateram, sem contar
-        genéricas) é usado por _score_item pra decidir se esse sinal é forte
-        o bastante pra dispensar corroboração da similaridade textual."""
-        melhor = None
-        for p, kws in zip(self.produtos, self._keywords_prod):
+    def _pontuar_keywords_todos(self, texto_item: str) -> dict[int, tuple[float, str, int]]:
+        """Avalia TODO o catálogo (não só o melhor) contra o texto do item
+        somando palavras-chave que casam. Retorna {índice_do_produto:
+        (score, motivo, n_específicas), ...} só dos produtos com algum
+        termo batendo — o 3º campo da tupla (quantas palavras-chave
+        ESPECÍFICAS bateram, sem contar genéricas) é usado por
+        _pontuar_produtos pra decidir se esse sinal é forte o bastante pra
+        dispensar corroboração da similaridade textual."""
+        resultado: dict[int, tuple[float, str, int]] = {}
+        for idx_p, (p, kws) in enumerate(zip(self.produtos, self._keywords_prod)):
             especificas, genericas = [], 0
             for kw in kws:
                 if not kw or len(kw) < 2:
@@ -422,9 +418,19 @@ class MatchingEngine:
             else:
                 motivo = f"{n} palavras-chave ({', '.join(especificas[:3])})"
 
-            if melhor is None or sc > melhor[0]:
-                melhor = (sc, p, motivo, n)
-        return melhor
+            resultado[idx_p] = (sc, motivo, n)
+        return resultado
+
+    def _melhor_por_keywords(self, texto_item: str):
+        """Retorna (score, produto, motivo, n_especificas) do MELHOR
+        candidato por palavra-chave, ou None — ver _pontuar_keywords_todos
+        pro catálogo inteiro (usado pra ranquear candidatas, não só achar a
+        melhor)."""
+        todos = self._pontuar_keywords_todos(texto_item)
+        if not todos:
+            return None
+        idx_p, (sc, motivo, n) = max(todos.items(), key=lambda kv: kv[1][0])
+        return (sc, self.produtos[idx_p], motivo, n)
 
     # ---- avalia um edital inteiro -----------------------------------------
     def _emb_produtos(self):
@@ -458,8 +464,9 @@ class MatchingEngine:
         #    centenas de itens pagavam a validação de entrada do sklearn a cada
         #    chamada individual, o que domina o tempo numa base grande.
         textos_alvos = [it.texto_busca() for it in alvos]
-        tfidf_lote = self._tfidf_lote(textos_alvos)
-        base = [self._score_item(it, texto_busca=textos_alvos[i], tfidf=tfidf_lote[i])
+        tfidf_lote = self._tfidf_lote(textos_alvos)   # matriz completa ou None
+        base = [self._score_item(it, texto_busca=textos_alvos[i],
+                                 sims_row=(tfidf_lote[i] if tfidf_lote is not None else None))
                for i, it in enumerate(alvos)]   # (sc, prod, motivo)
         max_txt = max((b[0] for b in base), default=0.0)
 
@@ -509,16 +516,57 @@ class MatchingEngine:
                     sc = combinado
 
             scores_itens.append(sc)
+            # nível/score do EDITAL (agregado) continua exatamente como
+            # sempre foi, direto do motor — não passa a depender de
+            # confiança por item nem de confirmação manual (isso é escopo
+            # separado, ver "confianca"/"candidatos" logo abaixo).
             if sc >= settings.LIMIAR_ITEM:
                 compativeis += 1
-                detalhe.append({
-                    "item": it.numero,
-                    "descricao_item": it.descricao[:160],
-                    "produto_id": prod.id if prod else None,
-                    "produto": prod.descricao if prod else None,
-                    "score_item": round(sc, 3),
-                    "motivo": motivo,
-                })
+
+            # confiança POR ITEM + candidatas — cobre uma faixa mais ampla
+            # que só "sc >= LIMIAR_ITEM": é justamente a faixa mais baixa
+            # (LIMIAR_ITEM_SUGESTAO até LIMIAR_ITEM_ALTA) que a UI de
+            # "sugestão, confirme" existe pra cobrir, em vez de simplesmente
+            # não mostrar nada como antes. Código NCM/CATMAT exato não é
+            # garantia de ser o mesmo produto (código fiscal é amplo — achado
+            # real de código batendo com item sem nada a ver com o pedido),
+            # por isso SEMPRE lista candidatas, mesmo pra item de confiança
+            # alta — o usuário pode trocar mesmo esse caso.
+            if sc < settings.LIMIAR_ITEM_SUGESTAO:
+                continue
+
+            codigo_exato = motivo.startswith("código ")
+            confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
+
+            sims_row_i = tfidf_lote[idx] if tfidf_lote is not None else None
+            candidatos_raw = self._pontuar_produtos(textos_alvos[idx], sims_row_i)
+            candidatos: list[dict] = []
+            vistos: set[int] = set()
+            if prod is not None:
+                candidatos.append({"produto_id": prod.id, "produto": prod.descricao,
+                                   "score": round(sc, 3), "motivo": motivo})
+                vistos.add(prod.id)
+            for s_c, i_c, m_c in candidatos_raw:
+                p_c = self.produtos[i_c]
+                if p_c.id in vistos:
+                    continue
+                candidatos.append({"produto_id": p_c.id, "produto": p_c.descricao,
+                                   "score": round(s_c, 3), "motivo": m_c})
+                vistos.add(p_c.id)
+                if len(candidatos) >= 3:
+                    break
+
+            detalhe.append({
+                "item": it.numero,
+                "descricao_item": it.descricao[:160],
+                "produto_id": prod.id if prod else None,
+                "produto": prod.descricao if prod else None,
+                "score_item": round(sc, 3),
+                "motivo": motivo,
+                "confianca": confianca,
+                "candidatos": candidatos,
+                "confirmado_manualmente": False,
+            })
 
         if not scores_itens:
             return ResultadoMatch(0.0, "fraco", 0, [])

@@ -1,0 +1,135 @@
+"""
+Testes da preservação de confirmação manual de item através do recálculo
+(banco sqlite em memória, sem HTTP). Rode com:  cd backend && pytest
+"""
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.models import Base, Usuario, Edital, ItemEdital, Produto, Match
+from app.service import _gerar_matches_usuario, _mesclar_confirmacoes_manuais
+
+
+def _sessao():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+
+def _semear(db):
+    """Catálogo com 2 produtos: `certo` casa por texto com o item (é o que o
+    motor escolheria sozinho); `outro` é um produto qualquer, existente no
+    catálogo, mas que o motor não escolheria pra este item — simula o
+    usuário confirmando manualmente um produto DIFERENTE do palpite do
+    motor (caso real: NCM/score bateu, mas o item físico era outro)."""
+    u = Usuario(nome="Teste", email="t@t.com", senha_hash="x")
+    db.add(u)
+    db.commit()
+    certo = Produto(usuario_id=u.id, descricao="Marcador de texto amarelo",
+                    palavras_chave="marcador, texto, amarelo")
+    outro = Produto(usuario_id=u.id, descricao="Grampeador de mesa metalico",
+                    palavras_chave="grampeador, mesa, metalico")
+    db.add_all([certo, outro])
+    ed = Edital(fonte="PNCP", id_externo="ed1", objeto="Aquisicao de material de escritorio",
+               orgao="Orgao Teste", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Marcador de texto amarelo",
+                      quantidade=10, valor_unitario=2.5))
+    db.commit()
+    return u, ed, certo, outro
+
+
+# --------- _mesclar_confirmacoes_manuais (função pura) --------- #
+
+def test_mesclar_preserva_item_confirmado_quando_produto_ainda_existe():
+    antigo = [{"item": 1, "produto_id": 9, "produto": "Produto X",
+              "confianca": "media", "confirmado_manualmente": True}]
+    novo = [{"item": 1, "produto_id": 5, "produto": "Produto Y",
+            "confianca": "media", "confirmado_manualmente": False}]
+    resultado = _mesclar_confirmacoes_manuais(novo, antigo, produtos_validos_ids={9, 5})
+    assert resultado[0]["produto_id"] == 9
+    assert resultado[0]["confirmado_manualmente"] is True
+
+
+def test_mesclar_ignora_confirmacao_de_produto_excluido_do_catalogo():
+    antigo = [{"item": 1, "produto_id": 9, "produto": "Produto X",
+              "confianca": "media", "confirmado_manualmente": True}]
+    novo = [{"item": 1, "produto_id": 5, "produto": "Produto Y",
+            "confianca": "media", "confirmado_manualmente": False}]
+    # produto 9 não está mais em produtos_validos_ids -> cai pro resultado fresco
+    resultado = _mesclar_confirmacoes_manuais(novo, antigo, produtos_validos_ids={5})
+    assert resultado[0]["produto_id"] == 5
+    assert resultado[0]["confirmado_manualmente"] is False
+
+
+def test_mesclar_preserva_confirmacao_de_nenhum_produto():
+    antigo = [{"item": 1, "produto_id": None, "produto": None,
+              "confianca": "media", "confirmado_manualmente": True}]
+    novo = [{"item": 1, "produto_id": 5, "produto": "Produto Y",
+            "confianca": "media", "confirmado_manualmente": False}]
+    resultado = _mesclar_confirmacoes_manuais(novo, antigo, produtos_validos_ids={5})
+    assert resultado[0]["produto_id"] is None
+    assert resultado[0]["confirmado_manualmente"] is True
+
+
+def test_mesclar_nao_mexe_em_item_nao_confirmado():
+    antigo = [{"item": 1, "produto_id": 9, "confianca": "media", "confirmado_manualmente": False}]
+    novo = [{"item": 1, "produto_id": 5, "confianca": "alta", "confirmado_manualmente": False}]
+    resultado = _mesclar_confirmacoes_manuais(novo, antigo, produtos_validos_ids={5, 9})
+    assert resultado == novo
+
+
+def test_mesclar_sem_detalhe_antigo_retorna_novo_intacto():
+    novo = [{"item": 1, "produto_id": 5, "confianca": "alta", "confirmado_manualmente": False}]
+    assert _mesclar_confirmacoes_manuais(novo, None, produtos_validos_ids={5}) == novo
+
+
+# --------- integração via _gerar_matches_usuario --------- #
+
+def test_recalculo_preserva_confirmacao_manual_mesmo_quando_motor_prefere_outro():
+    """Usuário confirmou manualmente um produto DIFERENTE do que o motor
+    escolheria por conta própria (o `certo`, que casa por texto) — o
+    recálculo não pode sobrescrever essa escolha silenciosamente."""
+    db = _sessao()
+    u, ed, certo, outro = _semear(db)
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio",
+                  detalhe={"itens": [{
+                      "item": 1, "descricao_item": "Marcador de texto amarelo",
+                      "produto_id": outro.id, "produto": outro.descricao,
+                      "score_item": 0.25, "motivo": "confirmado manualmente",
+                      "confianca": "media", "candidatos": [], "confirmado_manualmente": True,
+                  }]})
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True)
+
+    db.refresh(match)
+    item = match.detalhe["itens"][0]
+    assert item["produto_id"] == outro.id
+    assert item["confirmado_manualmente"] is True
+
+
+def test_recalculo_nao_preserva_confirmacao_de_produto_ja_excluido():
+    db = _sessao()
+    u, ed, certo, outro = _semear(db)
+    produto_excluido_id = outro.id + 999   # nunca existiu / foi apagado
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio",
+                  detalhe={"itens": [{
+                      "item": 1, "descricao_item": "Marcador de texto amarelo",
+                      "produto_id": produto_excluido_id, "produto": "Produto apagado",
+                      "score_item": 0.25, "motivo": "texto", "confianca": "media",
+                      "candidatos": [], "confirmado_manualmente": True,
+                  }]})
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True)
+
+    db.refresh(match)
+    item = match.detalhe["itens"][0]
+    # confirmação não sobrevive (produto não existe mais) -> volta pro
+    # palpite fresco do motor, que escolhe `certo` (casa por texto)
+    assert item["produto_id"] == certo.id
+    assert item["confirmado_manualmente"] is False

@@ -2491,6 +2491,9 @@ function _corpoItensEdital(d){
         bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
       }
       bloco += _validacaoTecnicaHTML(it.validacao_tecnica);
+      if(it.confirmado_manualmente){
+        bloco += `<div class="muted" style="margin-top:4px;font-size:11px">${ICN.check||'✓'} produto confirmado manualmente</div>`;
+      }
       // "Adicionar na cotação" fica só nos itens com produto batido — a aba
       // Cotação agora mostra SÓ o que foi adicionado por aqui (em vez de
       // começar com tudo marcado e o usuário ter que desmarcar item por
@@ -2501,16 +2504,40 @@ function _corpoItensEdital(d){
           ${naCotacao ? ICN.check+' Na cotação (remover)' : '+ Adicionar na cotação'}
         </button>
         <button class="btn ghost" style="margin-left:6px" onclick="abrirDetalheItem('${esc(it.numero)}')">${ICN.detalhe} Ver detalhes</button>
+        ${(it.sugestoes&&it.sugestoes.length)?`<button class="btn ghost" style="margin-left:6px" onclick="_toggleTrocarProduto('${esc(it.numero)}')">🔄 trocar produto</button>`:''}
       </div>`;
+      // código NCM/CATMAT exato não garante que é o MESMO produto físico —
+      // por isso mesmo item de confiança alta pode ter o seletor pra trocar,
+      // só que escondido por padrão (não gera fricção nova pro caso comum).
+      if(it.sugestoes && it.sugestoes.length) bloco += _seletorSugestaoHtml(it, true);
     } else {
-      bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>
-        <div style="margin-top:8px"><button class="btn ghost" onclick="abrirDetalheItem('${esc(it.numero)}')">${ICN.detalhe} Ver detalhes</button></div>`;
+      const temSugestoes = it.sugestoes && it.sugestoes.length;
+      bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
+      if(temSugestoes){
+        bloco += `<div style="margin-top:6px;font-size:12px;font-weight:600;color:var(--medio)">⚠ Sugestão — confirme o produto</div>`
+          + _seletorSugestaoHtml(it, false);
+      }
+      bloco += `<div style="margin-top:8px"><button class="btn ghost" onclick="abrirDetalheItem('${esc(it.numero)}')">${ICN.detalhe} Ver detalhes</button></div>`;
     }
     // pendência crítica de especificação: mesmo com produto do catálogo
     // batendo por texto, não é um match confiável — tira o ✓ do topo.
     const naoAtende = it.validacao_tecnica && it.validacao_tecnica.classificacao === 'Não atende';
     return `<div class="item-row ${it.compativel?'match':''}">
       <strong>${(it.compativel && !naoAtende)?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
+  }
+  function _seletorSugestaoHtml(it, escondido){
+    const numero = it.numero;
+    const atualId = it.produto ? it.produto.id : null;
+    const opcoes = it.sugestoes.map(s=>
+      `<option value="${s.produto.id}" ${s.produto.id===atualId?'selected':''}>${esc(s.produto.descricao)}${s.score!=null?` (score ${s.score})`:''}</option>`
+    ).join('');
+    return `<div id="sugestao-${esc(numero)}" style="margin-top:8px;display:${escondido?'none':'flex'};gap:6px;flex-wrap:wrap;align-items:center">
+      <select id="sel-sugestao-${esc(numero)}" style="max-width:100%;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">
+        <option value="">Nenhuma destas</option>
+        ${opcoes}
+      </select>
+      <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="confirmarItemEdital('${esc(numero)}')">Confirmar</button>
+    </div>`;
   }
   function _validacaoTecnicaHTML(vt){
     if(!vt) return '';
@@ -2775,6 +2802,29 @@ function _toggleCotacaoDoItem(numero, btn){
   if(btn){
     btn.innerHTML = marcado ? (ICN.check+' Na cotação (remover)') : '+ Adicionar na cotação';
     btn.style.cssText = _estiloBotaoCotacao(marcado);
+  }
+}
+
+function _toggleTrocarProduto(numero){
+  const el = document.getElementById(`sugestao-${numero}`);
+  if(el) el.style.display = el.style.display==='none' ? 'flex' : 'none';
+}
+
+// Confirma (ou corrige) manualmente o produto de um item — tanto pra
+// confirmar uma sugestão de confiança média quanto pra trocar um item de
+// confiança alta que o motor errou (código NCM/CATMAT exato não garante ser
+// o mesmo produto). Sobrevive a recálculos futuros (backend faz o merge).
+async function confirmarItemEdital(numero){
+  const sel = document.getElementById(`sel-sugestao-${numero}`);
+  const produto_id = sel && sel.value ? Number(sel.value) : null;
+  const r = await api(`/api/editais/${_paginaEditalId}/itens/${numero}/confirmar`,
+    {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({produto_id})});
+  if(r && r.ok){
+    toast('Produto confirmado.', 'ok');
+    _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
+    abaEdital('itens');
+  } else {
+    toast((r && r.detail) || 'Não foi possível confirmar. Tente de novo.', 'erro');
   }
 }
 

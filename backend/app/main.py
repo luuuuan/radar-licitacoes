@@ -1159,11 +1159,25 @@ def mudar_status(match_id: int, dados: StatusIn,
     return {"ok": True}
 
 
+def _produto_json(p: Produto) -> dict:
+    return {
+        "id": p.id, "descricao": p.descricao,
+        "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
+        "unidade_venda": p.unidade_venda,
+        "itens_por_unidade": p.itens_por_unidade,
+        "fornecedor_nome": p.fornecedor_nome,
+        "fornecedor_contato": p.fornecedor_contato,
+        "fornecedor_site": p.fornecedor_site,
+    }
+
+
 @app.get("/api/editais/{edital_id}/detalhe")
 def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
     """Detalhes do edital: cada item com o valor pedido pelo órgão, o produto
-    compatível do seu catálogo, seu preço, a margem e os dados do fornecedor."""
+    (compatível de verdade, ou uma SUGESTÃO a confirmar quando a confiança
+    não é alta — ver matching/engine.py), seu preço, a margem e os dados do
+    fornecedor."""
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
@@ -1172,15 +1186,23 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
 
     from .matching.validacao import validar, classificar
 
-    # item (número) -> produto_id / score_item, a partir do detalhe do match
-    mapa: dict = {}
-    scores_item: dict = {}
+    # item (número) -> dado bruto do detalhe do match
+    itens_match: dict = {}
     if match and match.detalhe:
         for d in (match.detalhe.get("itens") or []):
             if d.get("item") is not None:
-                mapa[d["item"]] = d.get("produto_id")
-                scores_item[d["item"]] = d.get("score_item")
-    prod_ids = {v for v in mapa.values() if v}
+                itens_match[d["item"]] = d
+
+    # busca de uma vez TODOS os produtos referenciados — o selecionado E os
+    # candidatos de cada item (pra "sugestoes" trazer dado ao vivo, não só o
+    # texto congelado no momento do match)
+    prod_ids: set[int] = set()
+    for d in itens_match.values():
+        if d.get("produto_id"):
+            prod_ids.add(d["produto_id"])
+        for c in (d.get("candidatos") or []):
+            if c.get("produto_id"):
+                prod_ids.add(c["produto_id"])
     produtos = {}
     if prod_ids:
         produtos = {p.id: p for p in db.execute(
@@ -1188,11 +1210,21 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
 
     itens = []
     for it in ed.itens:
-        prod = produtos.get(mapa.get(it.numero))
+        d = itens_match.get(it.numero) or {}
+        prod = produtos.get(d.get("produto_id"))
+        confianca = d.get("confianca")
+        confirmado = bool(d.get("confirmado_manualmente"))
+        # "compatível" de verdade (entra em cotação/margem/Inteligência de
+        # Preço) exige confiança alta OU confirmação manual — confiança
+        # média é SUGESTÃO, não vira fato até o usuário confirmar (é
+        # exatamente a faixa onde viviam os bugs reais de matching achados
+        # em auditoria de produção).
+        compativel = prod is not None and (confianca == "alta" or confirmado)
+
         margem = margem_pct = None
         custo_comparavel = None
         alerta_unidade = False
-        if prod and it.valor_unitario is not None and prod.preco_custo is not None:
+        if compativel and it.valor_unitario is not None and prod.preco_custo is not None:
             # custo na MESMA base do órgão: se o produto é vendido em embalagem
             # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
             por_unid = prod.itens_por_unidade if (prod.itens_por_unidade or 0) > 0 else 1
@@ -1204,8 +1236,8 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
                 alerta_unidade = True
         validacao_tecnica = None
-        if prod:
-            score_item = scores_item.get(it.numero)
+        if compativel:
+            score_item = d.get("score_item")
             resultado = validar(it.descricao, prod.descricao, prod.itens_por_unidade)
             # só reporta validação técnica quando havia algo de fato
             # verificável (unidade/característica reconhecida) e um score
@@ -1217,23 +1249,28 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
                     "criticas": [p.descricao for p in resultado.criticas],
                     "avisos": [p.descricao for p in resultado.avisos],
                 }
+
+        # candidatas com dado ao vivo — sempre presente (mesmo pra item de
+        # confiança alta: código NCM/CATMAT exato não é garantia de ser o
+        # mesmo produto, o usuário pode querer trocar mesmo esse caso).
+        sugestoes = []
+        for c in (d.get("candidatos") or []):
+            p_c = produtos.get(c.get("produto_id"))
+            if p_c:
+                sugestoes.append({"score": c.get("score"), "produto": _produto_json(p_c)})
+
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
-            "compativel": prod is not None,
+            "compativel": compativel,
+            "confianca": confianca,
+            "confirmado_manualmente": confirmado,
             "margem": margem, "margem_pct": margem_pct,
             "custo_comparavel": custo_comparavel,
             "alerta_unidade": alerta_unidade,
             "validacao_tecnica": validacao_tecnica,
-            "produto": None if not prod else {
-                "id": prod.id, "descricao": prod.descricao,
-                "preco_custo": prod.preco_custo, "preco_venda": prod.preco_venda,
-                "unidade_venda": prod.unidade_venda,
-                "itens_por_unidade": prod.itens_por_unidade,
-                "fornecedor_nome": prod.fornecedor_nome,
-                "fornecedor_contato": prod.fornecedor_contato,
-                "fornecedor_site": prod.fornecedor_site,
-            },
+            "produto": _produto_json(prod) if (prod and compativel) else None,
+            "sugestoes": sugestoes,
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
 
@@ -1257,6 +1294,44 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         },
         "itens": itens,
     }
+
+
+class ConfirmarItemIn(BaseModel):
+    produto_id: int | None = None
+
+
+@app.post("/api/editais/{edital_id}/itens/{numero}/confirmar")
+def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
+                          user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    """Confirma manualmente (ou corrige) o produto do catálogo pra um item do
+    edital — tanto pra confirmar uma sugestão de confiança média quanto pra
+    trocar um item de confiança alta que o motor errou (código exato não
+    garante ser o mesmo produto). `produto_id: null` = "nenhuma destas".
+    A confirmação sobrevive a recálculos futuros — ver
+    service._mesclar_confirmacoes_manuais."""
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    if not match or not match.detalhe:
+        raise HTTPException(404, "Edital sem match para este usuário")
+
+    produto = None
+    if body.produto_id is not None:
+        produto = _produto_do_usuario(db, body.produto_id, user)
+
+    itens = list(match.detalhe.get("itens") or [])
+    idx = next((i for i, d in enumerate(itens) if d.get("item") == numero), None)
+    if idx is None:
+        raise HTTPException(404, "Item não encontrado neste edital")
+
+    item = dict(itens[idx])
+    item["produto_id"] = produto.id if produto else None
+    item["produto"] = produto.descricao if produto else None
+    item["confirmado_manualmente"] = True
+    itens[idx] = item
+    match.detalhe = {"itens": itens}
+    db.commit()
+    return {"ok": True}
 
 
 # --------------------------- Regras de exclusão ----------------------- #
@@ -1688,7 +1763,11 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     mapa_produto: dict[int, int] = {}
     if match and match.detalhe:
         for d in (match.detalhe.get("itens") or []):
-            if d.get("item") is not None and d.get("produto_id"):
+            # só entra na cotação o que é confiável de fato (código exato /
+            # score alto) ou que o usuário já confirmou manualmente — item
+            # de confiança média ainda não confirmado é só uma sugestão.
+            if (d.get("item") is not None and d.get("produto_id")
+                    and (d.get("confianca") == "alta" or d.get("confirmado_manualmente"))):
                 mapa_produto[d["item"]] = d["produto_id"]
 
     prod_ids = set(mapa_produto.values())
@@ -2224,6 +2303,11 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
             numero, produto_id = d.get("item"), d.get("produto_id")
             if numero is None or produto_id is None:
                 continue
+            # só entra na estatística o que é confiável (código exato/score
+            # alto) ou confirmado manualmente — sugestão não confirmada não
+            # vira "referência de mercado".
+            if not (d.get("confianca") == "alta" or d.get("confirmado_manualmente")):
+                continue
             referencias.append((m.edital_id, numero, produto_id))
             numeros_por_edital.setdefault(m.edital_id, set()).add(numero)
 
@@ -2283,7 +2367,8 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
     referencias = []   # (edital_id, numero do item)
     for m in matches:
         for d in (m.detalhe or {}).get("itens", []):
-            if d.get("produto_id") == produto_id and d.get("item") is not None:
+            if (d.get("produto_id") == produto_id and d.get("item") is not None
+                    and (d.get("confianca") == "alta" or d.get("confirmado_manualmente"))):
                 referencias.append((m.edital_id, d["item"]))
     if not referencias:
         return []

@@ -50,8 +50,24 @@ class Settings(BaseSettings):
     # Matching / pontuação
     LIMIAR_FORTE: float = 0.62
     LIMIAR_MEDIO: float = 0.40
-    # Acima desse score textual o item é considerado compatível
+    # Acima desse score textual o item é considerado compatível — usado só
+    # pro nível/score AGREGADO do edital (decide "forte"/"médio"/notificar),
+    # que continua calculado direto do motor. NÃO decide mais sozinho se um
+    # item individual entra em cotação/margem — ver LIMIAR_ITEM_ALTA/
+    # LIMIAR_ITEM_SUGESTAO logo abaixo, que fazem esse papel por item.
     LIMIAR_ITEM: float = 0.35
+    # Faixas de confiança POR ITEM (não confundir com LIMIAR_ITEM acima, que
+    # é agregado). Score >= ALTA: usado automático, sem pedir confirmação
+    # (mas o usuário sempre pode trocar — código NCM/CATMAT exato não é
+    # garantia de ser o mesmo produto, já teve caso real de código batendo
+    # com item sem nada a ver). Entre SUGESTAO e ALTA: mostra como sugestão,
+    # não entra em cotação/margem/Inteligência de Preço até o usuário
+    # confirmar — é exatamente a faixa (~0.30 pra baixo) onde viveram os
+    # bugs reais de matching encontrados em auditoria de produção (papel/
+    # metal/kraft/térmica batendo em produtos errados). Abaixo de SUGESTAO:
+    # não mostra nada, como sempre foi.
+    LIMIAR_ITEM_ALTA: float = 0.60
+    LIMIAR_ITEM_SUGESTAO: float = 0.20
     # Exige cobertura mínima de itens para classificar como "forte", MAS só
     # para matches fuzzy/textuais — um casamento por código exato (NCM/CATMAT)
     # continua forte mesmo sendo 1 item. 0 = desliga. 0.05 = 5% dos itens.
@@ -103,6 +119,13 @@ class Settings(BaseSettings):
     # coleta — assim a IA pega sinônimos puros sem estourar a cota gratuita.
     IA_EXPLORAR_SEM_SINAL: bool = True
     IA_ORCAMENTO_EXPLORACAO: int = 60   # nº máx. de editais sem sinal que recebem IA por coleta
+
+    # IA semântica extra (BGE-M3 via DeepInfra) — opcional, camada adicional.
+    # Ao contrário da GEMINI_API_KEY (que é a chave do PRÓPRIO usuário, BYOK),
+    # esta é uma chave GLOBAL paga pelo operador do app — vale pra todos os
+    # usuários, mesmo quem não configurou uma chave Gemini pessoal.
+    DEEPINFRA_API_KEY: str = ""
+    DEEPINFRA_MODELO_EMBEDDING: str = "BAAI/bge-m3"
 
     # OCR de PDF escaneado (Tesseract, grátis e local). Pesado: limites apertados.
     # Requer no servidor os pacotes de sistema 'tesseract-ocr', 'tesseract-ocr-por'

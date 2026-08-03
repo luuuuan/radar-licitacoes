@@ -90,6 +90,36 @@ def _usuarios_ativos(db: Session):
     return db.execute(select(Usuario).where(Usuario.ativo == True)).scalars().all()  # noqa: E712
 
 
+def _mesclar_confirmacoes_manuais(detalhe_novo: list[dict], detalhe_antigo: list[dict] | None,
+                                  produtos_validos_ids: set[int]) -> list[dict]:
+    """Preserva itens que o usuário confirmou manualmente (via o endpoint de
+    confirmação) através de um recálculo novo — sem isso, `Match.detalhe`
+    sendo sobrescrito por inteiro a cada rodada apagaria a escolha do
+    usuário sem avisar. Só preserva quando o produto confirmado ainda existe
+    no catálogo; se foi excluído, cai de volta pra sugestão fresca do motor
+    (item some do dict de confirmados, resultado_novo passa direto)."""
+    if not detalhe_antigo:
+        return detalhe_novo
+    confirmados = {
+        it["item"]: it for it in detalhe_antigo
+        if it.get("confirmado_manualmente") and (
+            it.get("produto_id") is None or it.get("produto_id") in produtos_validos_ids)
+    }
+    if not confirmados:
+        return detalhe_novo
+    indice_por_numero = {it["item"]: i for i, it in enumerate(detalhe_novo)}
+    resultado = list(detalhe_novo)
+    for numero, item_confirmado in confirmados.items():
+        if numero in indice_por_numero:
+            resultado[indice_por_numero[numero]] = item_confirmado
+        else:
+            # o motor não achou mais candidata nenhuma pra esse item (ex.:
+            # catálogo mudou bastante) — mesmo assim, o que o usuário
+            # confirmou continua valendo até ele mudar de ideia.
+            resultado.append(item_confirmado)
+    return resultado
+
+
 def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                            forcar_usar_ia: bool | None = None, progresso=None,
                            deve_cancelar=None) -> dict:
@@ -101,6 +131,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     usuário sem perder o que já foi processado até ali."""
     deve_cancelar = deve_cancelar or (lambda: False)
     catalogo = _carregar_catalogo(db, usuario.id)
+    produtos_validos_ids = {p.id for p in catalogo}
     termos_excl, categorias_excl = _carregar_exclusoes(db, usuario.id)
     from . import configuracoes as cfg
     from .auth import decifrar
@@ -207,6 +238,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                 db.delete(existente)
                 existentes_map.pop(ed.id, None)
             continue
+        detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
             db.add(m)
@@ -214,7 +246,8 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         m.score = resultado.score
         m.nivel = resultado.nivel
         m.itens_compativeis = resultado.itens_compativeis
-        m.detalhe = {"itens": resultado.detalhe}
+        m.detalhe = {"itens": _mesclar_confirmacoes_manuais(
+            resultado.detalhe, detalhe_antigo, produtos_validos_ids)}
         resumo["atualizados"] += 1
         if resultado.nivel == "forte":
             resumo["fortes"] += 1
