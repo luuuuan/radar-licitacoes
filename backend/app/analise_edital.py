@@ -476,3 +476,78 @@ def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documen
             "observacao": str(it.get("observacao") or ""),
         })
     return {"status": "ok", "itens": itens}
+
+
+# Prompt pra comparar o CATÁLOGO COMPLETO do usuário contra os itens deste
+# edital — segunda opinião da IA, independente do motor de matching por
+# texto (matching/engine.py, TF-IDF + palavra-chave). Só inclui um item
+# quando a IA está confiante que achou um produto de verdade compatível,
+# não uma categoria parecida.
+_PROMPT_COMPARAR_CATALOGO = """Você é um especialista em compras públicas. Abaixo estão os ITENS que um edital de licitação está pedindo, e o CATÁLOGO de produtos que um fornecedor tem disponível (cada um com um ID).
+
+Para cada item do edital, verifique se ALGUM produto do catálogo é realmente compatível (mesmo tipo de produto/serviço, atende as características principais pedidas — não é só uma categoria parecida). Responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
+- "itens": array — só inclua um item aqui quando encontrar um produto do catálogo genuinamente compatível. Cada entrada:
+  - "numero_item": o número do item do edital (copiado exatamente, é um número).
+  - "produto_id": o ID do produto do catálogo mais compatível (é um número).
+  - "justificativa": string curta (1 frase) explicando por que esse produto atende.
+
+Regras: não invente produto_id que não esteja na lista do catálogo abaixo. Não force compatibilidade só porque a categoria é parecida (ex.: "papel sulfite" não é o mesmo produto que "papel fotográfico"; "álcool em gel" não é o mesmo que "álcool líquido") — se nenhum produto realmente atender, simplesmente não inclua esse item no array. Responda em português.
+
+OBJETO DO EDITAL: {objeto}
+
+ITENS DO EDITAL:
+{itens}
+
+CATÁLOGO DO FORNECEDOR (ID: descrição):
+{catalogo}"""
+
+
+def _formatar_itens_edital(itens: list[dict]) -> str:
+    linhas = [f"- item {it.get('numero')}: {it.get('descricao') or ''}" for it in itens]
+    return "\n".join(linhas) if linhas else "(nenhum item)"
+
+
+def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 400) -> str:
+    linhas = [f"- ID {p.get('id')}: {p.get('descricao') or ''}" for p in catalogo[:max_produtos]]
+    return "\n".join(linhas) if linhas else "(catálogo vazio)"
+
+
+def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: list[dict],
+                              api_key: str | None = None) -> dict:
+    """Manda o CATÁLOGO COMPLETO do usuário (id + descrição) e os itens deste
+    edital pra IA comparar diretamente — segunda opinião independente do
+    motor de matching por texto. NÃO fica em cache: é específico do
+    catálogo do usuário no momento da chamada, não do edital em si."""
+    if not ia_texto_disponivel(api_key):
+        return {"status": "sem_ia"}
+    if not itens_edital:
+        return {"status": "sem_itens"}
+    if not catalogo:
+        return {"status": "sem_catalogo"}
+
+    itens_txt = _formatar_itens_edital(itens_edital)[:12000]
+    catalogo_txt = _formatar_catalogo(catalogo)[:24000]
+    prompt = _PROMPT_COMPARAR_CATALOGO.format(
+        objeto=(objeto or "")[:1000], itens=itens_txt, catalogo=catalogo_txt)
+    txt, st = _gerar(prompt, api_key=api_key, timeout=90)
+    if st != "ok" or not txt:
+        return {"status": "erro_ia", "detalhe": st}
+    data = _parse_json(txt)
+    if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
+        return {"status": "resposta_invalida"}
+
+    ids_validos = {p.get("id") for p in catalogo}
+    itens = []
+    for it in data["itens"]:
+        if not isinstance(it, dict):
+            continue
+        try:
+            numero = int(it.get("numero_item"))
+            produto_id = int(it.get("produto_id"))
+        except (TypeError, ValueError):
+            continue
+        if produto_id not in ids_validos:
+            continue
+        itens.append({"numero": numero, "produto_id": produto_id,
+                      "justificativa": str(it.get("justificativa") or "")})
+    return {"status": "ok", "itens": itens}

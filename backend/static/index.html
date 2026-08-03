@@ -2305,6 +2305,58 @@ function _verificacaoDocumentosIAHTML(v){
   </div>`;
 }
 
+// Segunda opinião da IA comparando TODO o catálogo do usuário com os itens
+// deste edital — independente do motor de matching por texto (TF-IDF/
+// palavra-chave). "Adicionar na cotação" aqui CONFIRMA o produto pro item
+// (mesmo endpoint da sugestão de confiança média) e só depois marca a
+// seleção da cotação — sem confirmar, o item não entraria na cotação.xlsx/
+// margem (mesma regra de confianca/confirmado_manualmente de sempre).
+function _comparacaoCatalogoIAHTML(c){
+  if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
+  if(c.status==='erro_ia'){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
+  }
+  if(c.status!=='ok' || !c.itens || !c.itens.length) return '';
+  const linhas = c.itens.map(it=>{
+    const naCotacao = _cotacaoSelecionados.has(String(it.numero));
+    return `<tr>
+      <td style="white-space:nowrap">${esc(it.numero??'')}</td>
+      <td style="font-size:13px">${esc(it.descricao_item||'')}</td>
+      <td style="font-size:13px">${esc(it.produto||'')}</td>
+      <td class="muted" style="font-size:12px">${esc(it.justificativa||'')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(naCotacao)}"
+          onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${it.produto_id}, this)" ${naCotacao?'disabled':''}>
+          ${naCotacao ? ICN.check+' na cotação' : '+ Adicionar na cotação'}
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+  return `<div style="margin-top:16px">
+    <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
+    <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem.</p>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Item</th><th>Descrição</th><th>Produto sugerido</th><th>Justificativa</th><th></th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+  </div>`;
+}
+
+async function adicionarItemIaNaCotacao(numero, produtoId, btn){
+  if(btn) btn.disabled = true;
+  try{
+    await api(`/api/editais/${_paginaEditalId}/itens/${numero}/confirmar`,
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({produto_id: produtoId})});
+    _marcarSelecaoCotacao(numero, true);
+    _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
+    if(btn){ btn.innerHTML = ICN.check+' na cotação'; btn.style.cssText = _estiloBotaoCotacao(true); }
+    toast('Item confirmado e adicionado à cotação.', 'ok');
+  }catch(e){
+    if(btn) btn.disabled = false;
+    toast('Não foi possível adicionar este item.', 'erro');
+  }
+}
+
 // mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
 // um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
 // pro usuário como se fosse limite diário do plano gratuito, o que confunde.
@@ -2731,6 +2783,7 @@ async function _corpoAnaliseEdital(id, forcar){
         ${_checklistDocsHTML(r.checklist_documentos)}
       </div>`:''}
       ${_verificacaoDocumentosIAHTML(r.verificacao_documentos_ia)}
+      ${_comparacaoCatalogoIAHTML(r.comparacao_catalogo_ia)}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}

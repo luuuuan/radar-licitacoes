@@ -91,3 +91,69 @@ def test_extrair_texto_upload_imagem_sem_ocr_ativo_retorna_vazio(monkeypatch):
     monkeypatch.setattr(ia.settings, "OCR_ATIVO", False)
     texto = ia.extrair_texto_upload("foto.jpg", b"bytes-fake", "image/jpeg")
     assert texto == ""
+
+
+# --------- comparar_catalogo_usuario (segunda opinião da IA sobre itens) --------- #
+
+def test_comparar_catalogo_sem_chave_retorna_sem_ia():
+    r = ia.comparar_catalogo_usuario("Objeto", [{"numero": 1, "descricao": "x"}],
+                                     [{"id": 1, "descricao": "y"}], api_key=None)
+    assert r == {"status": "sem_ia"}
+
+
+def test_comparar_catalogo_sem_itens_do_edital():
+    r = ia.comparar_catalogo_usuario("Objeto", [], [{"id": 1, "descricao": "y"}], api_key="fake-key")
+    assert r == {"status": "sem_itens"}
+
+
+def test_comparar_catalogo_sem_catalogo():
+    r = ia.comparar_catalogo_usuario("Objeto", [{"numero": 1, "descricao": "x"}], [], api_key="fake-key")
+    assert r == {"status": "sem_catalogo"}
+
+
+def test_comparar_catalogo_feliz_normaliza_resposta(monkeypatch):
+    resposta_ia = json.dumps({"itens": [
+        {"numero_item": 1, "produto_id": 7, "justificativa": "mesmo tipo de produto"},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.comparar_catalogo_usuario(
+        "Aquisição de material de escritório",
+        [{"numero": 1, "descricao": "Caneta esferográfica azul"}, {"numero": 2, "descricao": "Grampeador"}],
+        [{"id": 7, "descricao": "Caneta esferográfica azul BIC"}],
+        api_key="fake-key")
+
+    assert r["status"] == "ok"
+    assert r["itens"] == [{"numero": 1, "produto_id": 7, "justificativa": "mesmo tipo de produto"}]
+
+
+def test_comparar_catalogo_ignora_produto_id_inventado(monkeypatch):
+    """A IA não pode inventar um produto_id que não existe no catálogo
+    mandado — isso quebraria o botão "Adicionar na cotação" no front."""
+    resposta_ia = json.dumps({"itens": [
+        {"numero_item": 1, "produto_id": 999, "justificativa": "x"},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.comparar_catalogo_usuario(
+        "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
+    assert r["itens"] == []
+
+
+def test_comparar_catalogo_ignora_item_com_numero_nao_numerico(monkeypatch):
+    resposta_ia = json.dumps({"itens": [
+        {"numero_item": "abc", "produto_id": 1, "justificativa": "x"},
+        {"numero_item": 2, "produto_id": 1, "justificativa": "ok"},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.comparar_catalogo_usuario(
+        "Objeto", [{"numero": 2, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
+    assert r["itens"] == [{"numero": 2, "produto_id": 1, "justificativa": "ok"}]
+
+
+def test_comparar_catalogo_erro_ia_propaga_status(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
+    r = ia.comparar_catalogo_usuario(
+        "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
+    assert r == {"status": "erro_ia", "detalhe": "http_500"}

@@ -1697,6 +1697,49 @@ def _anexar_verificacao_ia_documentos(resultado: dict, user: Usuario, db: Sessio
     return resultado
 
 
+def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
+                                   api_key: str | None) -> dict:
+    """Segunda opinião da IA: manda o CATÁLOGO COMPLETO do usuário e os itens
+    deste edital pra comparação direta — independente do motor de matching
+    por texto (matching/engine.py). Mesma regra do
+    _anexar_verificacao_ia_documentos: só roda numa análise FRESCA (não em
+    cache hit) e não fica em cache (é por usuário, não por edital)."""
+    if resultado.get("status") != "ok":
+        return resultado
+    itens_edital = db.execute(
+        select(ItemEdital).where(ItemEdital.edital_id == ed.id)).scalars().all()
+    catalogo = db.execute(
+        select(Produto).where(Produto.usuario_id == user.id)).scalars().all()
+    if not itens_edital or not catalogo:
+        return resultado
+    from . import analise_edital as ia
+    saida = ia.comparar_catalogo_usuario(
+        resultado.get("objeto") or ed.objeto or "",
+        [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
+        [{"id": p.id, "descricao": p.descricao} for p in catalogo],
+        api_key=api_key,
+    )
+    if saida.get("status") == "ok":
+        # anexa dado ao vivo do produto/item pra tabela do front não precisar
+        # de outra chamada — a IA só devolveu numero_item/produto_id.
+        produtos_map = {p.id: p for p in catalogo}
+        itens_map = {it.numero: it for it in itens_edital}
+        enriquecidos = []
+        for it in saida["itens"]:
+            p = produtos_map.get(it["produto_id"])
+            ie = itens_map.get(it["numero"])
+            if not p or not ie:
+                continue
+            enriquecidos.append({
+                "numero": it["numero"], "descricao_item": ie.descricao,
+                "produto_id": p.id, "produto": p.descricao,
+                "justificativa": it["justificativa"],
+            })
+        saida["itens"] = enriquecidos
+    resultado["comparacao_catalogo_ia"] = saida
+    return resultado
+
+
 @app.get("/api/editais/{edital_id}/analise")
 def analise_edital(edital_id: int, forcar: bool = Query(False),
                    user: Usuario = Depends(_auth.get_current_user),
@@ -1730,6 +1773,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
     resultado = _anexar_verificacao_ia_documentos(resultado, user, db, chave)
+    resultado = _anexar_comparacao_catalogo_ia(resultado, ed, user, db, chave)
     return _anexar_checklist_documentos(resultado, user, db)
 
 
