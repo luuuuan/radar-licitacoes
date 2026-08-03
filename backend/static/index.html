@@ -2286,11 +2286,17 @@ function cadastrarDocumentoChecklist(idx){
 // compara pelo NOME cadastrado. Só existe quando a análise rodou fresca
 // (não em cache hit) e o usuário tem ao menos 1 documento com arquivo.
 function _verificacaoDocumentosIAHTML(v){
-  if(!v || v.status==='sem_documentos' || v.status==='sem_requisitos' || v.status==='sem_ia') return '';
+  if(!v || v.status==='sem_requisitos' || v.status==='sem_ia') return '';
+  if(v.status==='sem_documentos'){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">Nenhum dos seus documentos cadastrados tem arquivo anexado ainda — anexe um PDF/imagem ao editar um documento na aba <b>Documentos</b> pra ativar esta verificação.</div>`;
+  }
   if(v.status==='erro_ia'){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível verificar o conteúdo dos seus documentos contra este edital agora (${esc(_msgErroIA(v.detalhe))}).</div>`;
   }
-  if(v.status!=='ok' || !v.itens || !v.itens.length) return '';
+  if(v.status!=='ok' || !v.itens) return '';
+  if(!v.itens.length){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">Verificação rodou, mas não encontrou exigências de habilitação claras pra cruzar com seus documentos.</div>`;
+  }
   const atendidos = v.itens.filter(i=>i.atendido).length;
   return `<div style="margin-top:14px">
     <strong>Verificação por IA dos seus documentos (${atendidos}/${v.itens.length} atendidos)</strong>
@@ -2316,7 +2322,10 @@ function _comparacaoCatalogoIAHTML(c){
   if(c.status==='erro_ia'){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
   }
-  if(c.status!=='ok' || !c.itens || !c.itens.length) return '';
+  if(c.status!=='ok' || !c.itens) return '';
+  if(!c.itens.length){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
+  }
   const linhas = c.itens.map(it=>{
     const naCotacao = _cotacaoSelecionados.has(String(it.numero));
     return `<tr>
