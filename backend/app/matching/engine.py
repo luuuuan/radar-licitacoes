@@ -296,22 +296,27 @@ class MatchingEngine:
                     sims_row=None) -> tuple[float, ProdutoCat | None, str]:
         texto_item = texto_busca if texto_busca is not None else item.texto_busca()
 
-        # 1) match exato de código (sinal mais forte — mas não infalível: NCM
-        # é uma classificação FISCAL, ampla, não garante ser o MESMO produto
-        # físico. Continua sendo o melhor palpite disponível mesmo sem
-        # corroboração textual nenhuma (motivo "código X"), mas só vira
-        # confiança "alta" automática (ver avaliar()) quando o texto também
-        # corrobora nem que seja fracamente — ver _PISO_TFIDF_CODIGO_EXATO.
+        # 1) match exato de código — sinal forte QUANDO o texto também
+        # corrobora nem que seja fracamente (_PISO_TFIDF_CODIGO_EXATO). NCM
+        # é uma classificação FISCAL ampla, não garante ser o MESMO produto
+        # físico: achado real RECORRENTE — "Álcool Etílico gel 70%" e
+        # "Álcool Etílico hidratado 70%" (itens diferentes entre si) os dois
+        # batendo por NCM com "Desinfetante 5 litros Lavanda" — mesma
+        # família fiscal de produto de limpeza/higiene, zero relação real.
+        # Sem NENHUMA corroboração textual, não trata como vencedor — cai
+        # pro fluxo normal de pontuação (deixa o texto decidir sozinho, em
+        # vez do código sozinho sempre virar "candidato nº1" com score 1.0
+        # mesmo sendo provavelmente errado). Continua checando os OUTROS
+        # tipos de código antes de desistir — ex.: NCM sem corroboração mas
+        # CATMAT do mesmo item com corroboração ainda vence.
         item_ncm = so_digitos(item.ncm)
         item_cat = so_digitos(item.catalogo_codigo)
         for chave, valor in (("ncm", item_ncm), ("catmat", item_cat), ("catser", item_cat)):
             if valor and f"{chave}:{valor}" in self._idx_codigo:
                 idx = self._idx_codigo[f"{chave}:{valor}"][0]
                 sim = float(self._sims_item(texto_item, sims_row)[idx]) if texto_item else 0.0
-                motivo = f"código {chave.upper()} {valor}"
-                if sim < self._PISO_TFIDF_CODIGO_EXATO:
-                    motivo += " (sem sinal textual — confirme)"
-                return 1.0, self.produtos[idx], motivo
+                if sim >= self._PISO_TFIDF_CODIGO_EXATO:
+                    return 1.0, self.produtos[idx], f"código {chave.upper()} {valor}"
 
         if not texto_item:
             return 0.0, None, ""
@@ -556,19 +561,12 @@ class MatchingEngine:
             if sc < settings.LIMIAR_ITEM_SUGESTAO:
                 continue
 
-            # "(sem sinal textual...)" = código bateu mas o texto não corrobora
-            # nem fracamente (ver _score_item) — não confia cego, pede
-            # confirmação, MESMO que sc seja 1.0 (score de código exato é
-            # fixo em 1.0 de propósito, pra não mexer no score/nível agregado
-            # do edital — por isso não pode entrar na comparação normal
-            # `sc >= LIMIAR_ITEM_ALTA`, senão o próprio 1.0 destrava "alta"
-            # de novo por trás, ignorando a falta de corroboração textual).
+            # código exato só chega aqui como motivo quando JÁ teve
+            # corroboração textual (ver _score_item — sem corroboração
+            # nenhuma, nem vira "vencedor" por código, cai pro fluxo normal
+            # de pontuação antes de chegar aqui).
             codigo_exato = motivo.startswith("código ")
-            codigo_sem_corroboracao = codigo_exato and "sem sinal textual" in motivo
-            if codigo_sem_corroboracao:
-                confianca = "media"
-            else:
-                confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
+            confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
 
             sims_row_i = tfidf_lote[idx] if tfidf_lote is not None else None
             candidatos_raw = self._pontuar_produtos(textos_alvos[idx], sims_row_i)

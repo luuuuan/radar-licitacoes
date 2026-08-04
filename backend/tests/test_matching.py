@@ -220,16 +220,19 @@ def test_piso_de_palavra_isolada_compara_o_candidato_certo_nao_qualquer_um():
     assert "Perfurador" in prod.descricao
 
 
-def test_codigo_catmat_exato_nao_e_afetado_pela_anti_coincidencia():
-    """Match por código exato retorna 1.0 antes de chegar na checagem de
-    palavras em comum (return antecipado na etapa 1) — não pode ser rebaixado
-    mesmo que as descrições não compartilhem nenhuma palavra distintiva."""
+def test_codigo_catmat_exato_sem_corroboracao_textual_nao_vira_candidato():
+    """Comportamento mudou de propósito: código exato (CATMAT/CATSER/NCM)
+    batendo SEM nenhuma palavra distintiva em comum com o item não vira mais
+    vencedor automático — mesma correção do caso real de NCM (Álcool
+    Etílico x Desinfetante), aplicada de forma geral a qualquer tipo de
+    código. "Pasta L" (pasta de arquivo) x "CIMENTO de hidroxido de calcio"
+    (material odontológico) compartilhando um CATMAT é exatamente esse tipo
+    de falso positivo — cai pro fluxo normal, que aqui não acha nada."""
     eng = MatchingEngine([ProdutoCat(id=1, descricao="Pasta L", catmat="150123")])
     r = eng.avaliar("Material odontológico",
                      [ItemEdt(1, "CIMENTO de hidroxido de calcio", catalogo_codigo="150123")])
-    assert r.nivel == "forte"
-    assert r.detalhe[0]["score_item"] == 1.0
-    assert r.detalhe[0]["motivo"].startswith("código CATMAT")
+    assert r.nivel == "fraco"
+    assert r.detalhe == []
 
 
 def test_regra_exclusao_por_termo():
@@ -314,24 +317,43 @@ def test_codigo_exato_com_texto_relacionado_e_confianca_alta():
     assert r.detalhe[0]["produto_id"] == 1
 
 
-def test_codigo_exato_sem_relacao_textual_vira_confianca_media():
-    """Caso real de produção: item "Álcool Etílico ... gel ... 70% v/v" bateu
-    por NCM idêntico com "Desinfetante 5 litros Lavanda" — mesmo código
-    fiscal (categoria ampla de produto de limpeza/higiene), mas os textos não
-    têm nada em comum. Código exato sozinho, sem NENHUM sinal textual, não
-    pode virar "compatível" automático — tem que cair pra sugestão (média),
-    pedindo confirmação, mesmo continuando como o melhor palpite disponível
-    (candidatos[0])."""
+def test_codigo_exato_sem_relacao_textual_nao_vira_candidato_nenhum():
+    """Caso real de produção — RECORRENTE: item "Álcool Etílico ... gel ...
+    70% v/v" (e depois também a variante "hidratado") batia por NCM idêntico
+    com "Desinfetante 5 litros Lavanda" — mesmo código fiscal (categoria
+    ampla de produto de limpeza/higiene), mas os textos não têm nada em
+    comum. Isso ainda aparecia como sugestão "média" com score 1.0 (posição
+    nº1), confundindo o usuário mesmo pedindo confirmação. Agora, sem
+    NENHUMA corroboração textual, o código exato nem vira candidato — cai
+    pro fluxo normal de pontuação, que aqui não acha nada (catálogo
+    genuinamente não tem produto de álcool) — resultado honesto: sem
+    sugestão nenhuma, em vez de uma errada com aparência de confiável."""
     catalogo = [ProdutoCat(id=1, descricao="Desinfetante 5 litros Lavanda 9007 Urca",
                            ncm="34029090", palavras_chave="desinfetante, lavanda, limpeza")]
     eng = MatchingEngine(catalogo)
     r = eng.avaliar("Material de limpeza e higiene", [ItemEdt(
         1, "Álcool Etílico composição básica: com emoliente, forma farmacêutica: gel, "
            "teor alcoólico: 70% v/v", ncm="3402.90.90")])
+    assert r.detalhe == []
+    assert r.itens_compativeis == 0
+
+
+def test_codigo_exato_sem_corroboracao_nao_ofusca_match_textual_real():
+    """Quando o código exato bate errado (sem corroboração) mas o catálogo
+    TEM um produto de verdade compatível em outro lugar, esse produto real
+    tem que vencer — o código exato sem suporte nenhum não pode nem
+    aparecer como candidato, muito menos ofuscar o match certo."""
+    catalogo = [
+        ProdutoCat(id=1, descricao="Desinfetante 5 litros Lavanda 9007 Urca", ncm="34029090",
+                   palavras_chave="desinfetante lavanda, desinfetante piso"),
+        ProdutoCat(id=2, descricao="Álcool Etílico Gel 70% Antisséptico 500ml",
+                   palavras_chave="alcool gel, antisseptico, alcool 70"),
+    ]
+    eng = MatchingEngine(catalogo)
+    r = eng.avaliar("Aquisição de álcool", [ItemEdt(
+        1, "Álcool Etílico tipo: hidratado, teor alcoólico: 70% ( 70°gl), "
+           "apresentação: glicerinado, líquido", ncm="3402.90.90")])
     item = r.detalhe[0]
-    assert item["motivo"].startswith("código NCM")
-    assert item["confianca"] == "media"
-    # continua sendo o melhor palpite (é o único produto do catálogo) —
-    # só não confia cego, exige confirmação do usuário.
-    assert item["produto_id"] == 1
-    assert item["candidatos"][0]["produto_id"] == 1
+    assert item["produto_id"] == 2
+    assert item["confianca"] == "alta"
+    assert all(c["produto_id"] != 1 for c in item["candidatos"])
