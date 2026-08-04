@@ -1397,16 +1397,46 @@ _coleta_lock = threading.Lock()
 # parar, não importa quem disparou. Resetada no fim de cada rodada (sucesso,
 # erro ou cancelamento) pra não vazar pro próximo disparo.
 _coleta_cancelar = False
+# Quando a coleta atual começou (None = nenhuma rodando) — usado só pra
+# detectar trava PRESA (ver _coleta_travada), não pro indicador de "travado"
+# do dashboard (esse já usa iniciado_em do LogColeta, não isto aqui).
+_coleta_iniciada_em: datetime | None = None
+# Mesmo limiar do indicador "Última coleta não finalizou" (/api/coleta/status)
+# — uma coleta de verdade sempre termina bem antes disso (histórico real:
+# 50min a ~2h). Achado real: uma coleta manual travou (sem nunca liberar a
+# trava — crash ou hang numa chamada de rede sem timeout) e bloqueou TODAS
+# as coletas automáticas do cron silenciosamente por horas — o disparo do
+# GitHub Actions continuava recebendo 200 (o pedido é só agendado em
+# segundo plano), sem nenhum jeito de saber que nada rodou de verdade.
+_LIMITE_COLETA_TRAVADA = timedelta(hours=3)
+
+
+def _coleta_travada() -> bool:
+    return (_coleta_lock.locked() and _coleta_iniciada_em is not None
+           and (_utcnow_main() - _coleta_iniciada_em) > _LIMITE_COLETA_TRAVADA)
 
 
 def _rodar_coleta_bg(usuario_id: int | None = None):
-    global _coleta_cancelar
+    global _coleta_cancelar, _coleta_iniciada_em
+    import logging
+    if _coleta_travada():
+        # a trava está presa há mais tempo que qualquer coleta legítima
+        # levaria — quase certo que o processo anterior morreu (crash, ou
+        # hang numa chamada sem timeout) sem nunca chegar no finally que
+        # libera. Força a liberação pra não bloquear coletas pra sempre.
+        logging.getLogger("coleta").warning(
+            "Trava de coleta presa há mais de %s — forçando liberação.", _LIMITE_COLETA_TRAVADA)
+        try:
+            _coleta_lock.release()
+        except RuntimeError:
+            pass   # alguém liberou entre a checagem e agora — segue o jogo
+        _coleta_iniciada_em = None
     # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
     if not _coleta_lock.acquire(blocking=False):
-        import logging
         logging.getLogger("coleta").info(
             "Coleta já em andamento — ignorando novo disparo.")
         return
+    _coleta_iniciada_em = _utcnow_main()
     db = SessionLocal()
     try:
         processar_coleta(db, usuario_id=usuario_id, deve_cancelar=lambda: _coleta_cancelar)
@@ -1434,7 +1464,15 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
     finally:
         db.close()
         _coleta_cancelar = False
-        _coleta_lock.release()
+        _coleta_iniciada_em = None
+        # RuntimeError = a trava já tinha sido forçada por outro disparo
+        # (ver _coleta_travada) por essa mesma rodada ter passado de 3h —
+        # janela rara e aceita: o alternativa (travar pra sempre até um
+        # redeploy manual) é bem pior.
+        try:
+            _coleta_lock.release()
+        except RuntimeError:
+            pass
 
 
 @app.post("/api/coletar")
