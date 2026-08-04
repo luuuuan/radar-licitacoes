@@ -1767,6 +1767,41 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
     return resultado
 
 
+# Análise por IA não roda em BackgroundTasks — ao contrário de coleta/
+# recálculo, é uma request síncrona comum, sem "processo de fundo" pra ter
+# uma trava. Só a flag de cancelamento, por usuário, checada ENTRE as até 3
+# chamadas de IA que uma análise faz (edital -> documentos -> catálogo).
+# Nunca interrompe uma chamada já em voo — requests.post dentro de
+# analise_edital.py:_gerar() não tem nenhum hook de cancelamento.
+_analise_cancelar: dict[int, bool] = {}
+
+
+@app.post("/api/editais/{edital_id}/analise/cancelar")
+def analise_cancelar(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
+    """Pede pra parar a análise em andamento deste usuário. Cooperativo: só
+    tem efeito na PRÓXIMA etapa (documentos/catálogo) ou, se pedido antes de
+    a análise-base começar, evita gastar essa chamada — nunca interrompe uma
+    chamada à IA já em curso."""
+    _analise_cancelar[user.id] = True
+    return {"ok": True, "mensagem": "Cancelamento solicitado — a análise vai parar assim que possível."}
+
+
+def _rodar_extras_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
+                     api_key: str | None, deve_cancelar) -> dict:
+    """Roda verificação de documentos + comparação de catálogo, checando
+    cancelamento ENTRE as duas etapas (nunca no meio de uma chamada já em
+    voo). Usado tanto no cache hit quanto numa análise fresca — mesma
+    checagem nos dois lugares."""
+    if deve_cancelar():
+        resultado["cancelado"] = True
+        return resultado
+    resultado = _anexar_verificacao_ia_documentos(resultado, user, db, api_key)
+    if deve_cancelar():
+        resultado["cancelado"] = True
+        return resultado
+    return _anexar_comparacao_catalogo_ia(resultado, ed, user, db, api_key)
+
+
 @app.get("/api/editais/{edital_id}/analise")
 def analise_edital(edital_id: int, forcar: bool = Query(False),
                    user: Usuario = Depends(_auth.get_current_user),
@@ -1779,6 +1814,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
     chave = _auth.decifrar(user.gemini_key_cifrada)
+    _analise_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
+    deve_cancelar = lambda: _analise_cancelar.get(user.id, False)  # noqa: E731
     # análise já feita: mostra do cache (é leitura, não consome IA pro texto
     # do edital em si), desde que tenha sido gerada com a versão atual do
     # prompt. Versão antiga -> refaz. Verificação de documentos/comparação de
@@ -1792,8 +1829,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             cache = _json.loads(ed.analise_ia)
             if cache.get("versao") == ia.VERSAO_PROMPT:
                 cache["cache"] = True
-                cache = _anexar_verificacao_ia_documentos(cache, user, db, chave)
-                cache = _anexar_comparacao_catalogo_ia(cache, ed, user, db, chave)
+                cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar)
                 return _anexar_checklist_documentos(cache, user, db)
             # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
@@ -1801,14 +1837,15 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
     if not ia.ia_texto_disponivel(chave):
         return {"status": "sem_ia"}
+    if deve_cancelar():
+        return {"status": "cancelado"}
     docs = _listar_arquivos_pncp(ed)
     resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
     if resultado.get("status") == "ok":
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
-    resultado = _anexar_verificacao_ia_documentos(resultado, user, db, chave)
-    resultado = _anexar_comparacao_catalogo_ia(resultado, ed, user, db, chave)
+    resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar)
     return _anexar_checklist_documentos(resultado, user, db)
 
 

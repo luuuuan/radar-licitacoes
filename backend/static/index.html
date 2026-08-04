@@ -109,7 +109,13 @@
     color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
   .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
     border-radius:7px;cursor:pointer;font-size:13px}
-  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  /* .ghost hoje É AZUL SÓLIDO (igual a .btn) de propósito — só existe pra não
+     precisar tocar nos ~55 lugares que já usam essa classe no HTML. O visual
+     "fundo transparente" que .ghost tinha antes agora é .discreto, aplicado
+     só nos botões que EXCLUEM ou que CANCELAM/INTERROMPEM algo em andamento
+     (ver _setBtn*Ocupado e os botões "excluir"/"Cancelar" de formulário). */
+  .btn.ghost{background:var(--accent);border:none;color:#fff}
+  .btn.discreto{background:transparent;border:1px solid var(--line);color:var(--muted)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:16px;margin-bottom:12px}
@@ -683,7 +689,7 @@
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div id="bulk-produtos" style="display:none;gap:8px;align-items:center">
           <span id="bulk-produtos-count" class="muted" style="font-size:13px"></span>
-          <button class="btn ghost" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
+          <button class="btn ghost discreto" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
         </div>
         <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="filtrarProdutos()">
         <select id="filtro-fornecedor" onchange="filtrarProdutos()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
@@ -755,7 +761,7 @@
 
         <div class="toolbar" style="margin-top:8px">
           <button class="btn" onclick="salvarProduto()" id="btn-salvar-prod">Salvar produto</button>
-          <button class="btn ghost" onclick="fecharFormProduto()">Cancelar</button>
+          <button class="btn ghost discreto" onclick="fecharFormProduto()">Cancelar</button>
         </div>
       </div>
     </div>
@@ -797,7 +803,7 @@
           <input id="fn-obs" style="width:100%" placeholder="ex: entrega em 3 dias úteis"></div>
         <div class="toolbar" style="margin-top:8px">
           <button class="btn" onclick="salvarFornecedor()" id="btn-salvar-forn">Salvar fornecedor</button>
-          <button class="btn ghost" onclick="fecharFormFornecedor()">Cancelar</button>
+          <button class="btn ghost discreto" onclick="fecharFormFornecedor()">Cancelar</button>
           <span id="forn-msg" class="muted" style="font-size:12px"></span>
         </div>
       </div>
@@ -866,7 +872,7 @@
         <div class="muted" id="d-arquivo-atual" style="font-size:11px;margin-top:2px"></div></div>
       <div class="toolbar" style="margin-top:8px">
         <button class="btn" onclick="salvarDocumento()" id="btn-salvar-doc">Salvar documento</button>
-        <button class="btn ghost" onclick="fecharFormDocumento()">Cancelar</button>
+        <button class="btn ghost discreto" onclick="fecharFormDocumento()">Cancelar</button>
       </div>
     </div>
   </div>
@@ -1526,7 +1532,7 @@ function filtrarProdutos(){
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
-      <button class="btn ghost" onclick="delProduto(${p.id})">excluir</button>
+      <button class="btn ghost discreto" onclick="delProduto(${p.id})">excluir</button>
     </td></tr>`).join('')
     : `<tr><td colspan=6 class="muted">${(q||forn) ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
   const chkTodos = $('#chk-todos-produtos');
@@ -1723,7 +1729,7 @@ async function loadFornecedores(){
     <td>${site?`<a class="btn ghost" href="${esc(site)}" target="_blank">Site ↗</a>`:'—'}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarFornecedor(${f.id})">editar</button>
-      <button class="btn ghost" onclick="delFornecedor(${f.id})">excluir</button>
+      <button class="btn ghost discreto" onclick="delFornecedor(${f.id})">excluir</button>
     </td></tr>`;
   }).join('');
 }
@@ -1774,7 +1780,7 @@ async function delFornecedor(id){
 async function loadRegras(){
   const rs=await api('/api/regras');
   $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${esc(r.tipo)}</td><td>${esc(r.valor)}</td>
-    <td><button class="btn ghost" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
+    <td><button class="btn ghost discreto" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
     ||'<tr><td colspan=3 class="muted">Nenhuma regra.</td></tr>';
 }
 async function salvarRegra(){
@@ -1803,7 +1809,7 @@ async function loadDocumentos(){
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
         <button class="btn ghost" onclick="editarDocumento(${d.id})">editar</button>
-        <button class="btn ghost" onclick="delDocumento(${d.id})">excluir</button>
+        <button class="btn ghost discreto" onclick="delDocumento(${d.id})">excluir</button>
       </td></tr>`;
   }).join('');
 }
@@ -2001,7 +2007,7 @@ function confirmarExclusao(msg, textoBotao='Excluir'){
         <h3 style="margin-top:0">Confirmar exclusão</h3>
         <p id="confirmar-msg" class="muted" style="font-size:14px;line-height:1.5"></p>
         <div class="toolbar" style="margin-top:18px;justify-content:flex-end">
-          <button class="btn ghost" id="confirmar-btn-cancelar">Cancelar</button>
+          <button class="btn ghost discreto" id="confirmar-btn-cancelar">Cancelar</button>
           <button class="btn" id="confirmar-btn-ok" style="background:var(--destructive)">Excluir</button>
         </div>
       </div>`;
@@ -2078,10 +2084,12 @@ function _setBtnRecalcularOcupado(ocupado){
       btn.onclick=cancelarRecalculo;
       btn.title='Para o recálculo em andamento (mantém o que já foi processado até aqui)';
       btn.disabled=false;
+      btn.classList.add('discreto');   // botão de CANCELAR fica discreto, não azul
     } else {
       if(btn.dataset.rotuloOriginal!==undefined) btn.innerHTML=btn.dataset.rotuloOriginal;
       btn.onclick=abrirRecalcular;
       btn.title='Reavalia os editais já coletados contra o catálogo atual';
+      btn.classList.remove('discreto');
     }
   }
   // enquanto recalcula, não dá pra coletar (os dois mexem nos matches ao mesmo tempo)
@@ -2116,10 +2124,12 @@ function _setBtnColetarOcupado(ocupado){
     btn.onclick=cancelarColeta;
     btn.title='Para a busca de editais em andamento (mantém o que já foi salvo até aqui)';
     btn.disabled=false;
+    btn.classList.add('discreto');   // botão de CANCELAR fica discreto, não azul
   } else {
     if(btn.dataset.rotuloOriginal!==undefined) btn.innerHTML=btn.dataset.rotuloOriginal;
     btn.onclick=coletar;
     btn.title='';
+    btn.classList.remove('discreto');
   }
 }
 async function cancelarColeta(){
@@ -2411,8 +2421,7 @@ let _abaEditalAtual = 'itens';
 // está sendo mostrado agora.
 let _abaEditalToken = 0;
 let _analiseCache = null;
-// true enquanto uma análise por IA está rodando em segundo plano (a análise
-// continua mesmo se o usuário trocar de aba/edital — não é abortável). A aba
+// true enquanto uma análise por IA está rodando em segundo plano. A aba
 // Cotação usa isso pra saber "já pedi, só falta esperar" em vez de mostrar
 // o botão de novo (que disparava outra análise em paralelo). _analiseEmAndamentoId
 // guarda DE QUAL edital é essa análise — sem isso, trocar de edital enquanto uma
@@ -2420,9 +2429,16 @@ let _analiseCache = null;
 // andamento" por engano (nenhuma análise foi pedida pra ele).
 let _analiseEmAndamento = false;
 let _analiseEmAndamentoId = null;
+// controller da análise em voo — permite abortar a ESPERA no navegador na
+// hora (cancelarAnalise()). O servidor não tem como interromper uma chamada
+// à IA já em andamento (requests.post sem hook de cancelamento), mas o
+// endpoint /analise/cancelar pede pra ele parar ANTES da próxima etapa
+// (documentos/catálogo) — cooperativo, igual coleta/recálculo, só que sem
+// trava/BackgroundTasks porque a análise é uma request síncrona comum.
+let _analiseAbortController = null;
 
-function _spinnerHTML(texto){
-  return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0"><span class="spinner-inline"></span>${esc(texto)}</p>`;
+function _spinnerHTML(texto, extra){
+  return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0;flex-wrap:wrap"><span class="spinner-inline"></span>${esc(texto)}${extra||''}</p>`;
 }
 
 function abrirPaginaEdital(editalId, aba='itens'){
@@ -2530,7 +2546,8 @@ async function abaEdital(nome, forcar){
     const emAndamentoAqui = _analiseEmAndamento && _analiseEmAndamentoId === id;
     if(_analiseCache){ cont.innerHTML = _analiseCache; return; }
     if(emAndamentoAqui){
-      cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+      cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.',
+        ` <button class="btn discreto" style="padding:3px 10px;font-size:12px" onclick="cancelarAnalise()">Cancelar análise</button>`);
       return;
     }
     const jaAnalisado = _paginaEditalDetalhe && _paginaEditalDetalhe.edital && _paginaEditalDetalhe.edital.analisado;
@@ -2575,14 +2592,17 @@ async function _rodarAnaliseEdital(forcar){
   // sempre que ele trocasse de aba). Em vez disso, checa se ele ainda está
   // olhando pra esta mesma aba deste mesmo edital quando a resposta chegar.
   const aindaAqui = () => _abaEditalAtual === 'analise' && _paginaEditalId === id;
+  const controller = new AbortController();
+  _analiseAbortController = controller;
+  const btnCancelar = ` <button class="btn discreto" style="padding:3px 10px;font-size:12px" onclick="cancelarAnalise()">Cancelar análise</button>`;
   // troca pra aba Análise por IA de verdade (inclusive quando chamada a
   // partir da Cotação) — o progresso e o resultado sempre aparecem aqui,
   // nunca na aba de onde a análise foi disparada.
-  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.', btnCancelar);
   _analiseEmAndamento = true;
   _analiseEmAndamentoId = id;
   try{
-    const {html, sucesso} = await _corpoAnaliseEdital(id, forcar);
+    const {html, sucesso} = await _corpoAnaliseEdital(id, forcar, controller.signal);
     _analiseCache = html;
     // só marca "analisado" quando a IA de fato respondeu com sucesso — um
     // erro passageiro (ex.: "serviço de IA sobrecarregado") não pode contar
@@ -2592,11 +2612,30 @@ async function _rodarAnaliseEdital(forcar){
     if(sucesso && _paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
     if(aindaAqui()) cont.innerHTML = html;
   }catch(e){
-    if(aindaAqui()) cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
-      + '<button class="btn ghost" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">tentar novamente</button>';
+    if(e && e.name === 'AbortError'){
+      // NÃO mexe em _analiseCache: se já existia um resultado válido de
+      // antes (ex.: usuário clicou "Realizar nova análise" e cancelou no
+      // meio), ele continua bom — cancelar não deve apagar o que já tinha.
+      if(aindaAqui()) cont.innerHTML = '<p class="muted">Análise cancelada.</p>'
+        + '<button class="btn" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">Realizar nova análise</button>';
+    } else if(aindaAqui()){
+      cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
+        + '<button class="btn ghost" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">tentar novamente</button>';
+    }
   }finally{
     _analiseEmAndamento = false;
+    _analiseAbortController = null;
   }
+}
+
+// Aborta a ESPERA no navegador na hora (feedback instantâneo) e avisa o
+// servidor pra parar antes da próxima etapa (documentos/catálogo) — não
+// interrompe uma chamada à IA já em curso, só evita começar a seguinte.
+// fetch avulso (não usa api()) de propósito: é fire-and-forget, não deve
+// mexer na barra de carregamento global nem esperar resposta.
+function cancelarAnalise(){
+  if(_analiseAbortController) _analiseAbortController.abort();
+  if(_paginaEditalId) fetch(`/api/editais/${_paginaEditalId}/analise/cancelar`, {method:'POST'}).catch(()=>{});
 }
 
 function _corpoItensEdital(d){
@@ -2771,8 +2810,8 @@ function baixarTodosDocumentos(){
   });
 }
 
-async function _corpoAnaliseEdital(id, forcar){
-  const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`);
+async function _corpoAnaliseEdital(id, forcar, signal){
+  const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`, signal?{signal}:undefined);
   if(r.status==='ok'){
     const flags=[];
     if(r.exige_amostra) flags.push('Exige amostra');
@@ -2835,6 +2874,7 @@ async function _corpoAnaliseEdital(id, forcar){
     sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
     vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
     sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
+    cancelado:'Análise cancelada antes de começar.',
     erro_ia:_msgErroIA(r.detalhe),
     resposta_invalida:'A IA respondeu num formato inesperado. Tente refazer.'};
   const portal = linkSeguro(r.portal);
@@ -3045,7 +3085,7 @@ function renderProposta(){
       <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
       <td style="white-space:nowrap;color:${margItem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margItem)}</td>
-      <td><button class="btn ghost" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
+      <td><button class="btn ghost discreto" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
     </tr>`;
   }).join('');
   const margem=tv-tc, pct=tv?(margem/tv*100):0;
