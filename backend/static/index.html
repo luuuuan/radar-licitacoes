@@ -2518,16 +2518,24 @@ async function abaEdital(nome, forcar){
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
 
-  // análise por IA não roda sozinha: mostra um botão (ou o resultado já
-  // buscado nesta sessão da página) em vez de disparar a IA a cada clique
-  // na aba. Se já tem uma análise rodando em segundo plano (usuário saiu e
-  // voltou pra aba), mostra o progresso em vez do botão — senão o clique
-  // dispararia uma SEGUNDA análise em paralelo da mesma.
+  // 1ª análise de um edital não roda sozinha (é cara: baixa PDF, roda OCR,
+  // chama a IA pra ler o edital inteiro) — mostra um botão em vez de
+  // disparar automaticamente. Mas se o edital JÁ foi analisado antes
+  // (server tem cache), busca e mostra direto ao abrir a aba, sem precisar
+  // clicar em nada — só a "Realizar nova análise" continua exigindo clique
+  // explícito. Se já tem uma análise rodando em segundo plano (usuário saiu
+  // e voltou pra aba), mostra o progresso em vez de disparar de novo.
   if(nome==='analise'){
     if(forcar) return _rodarAnaliseEdital(true);
     const emAndamentoAqui = _analiseEmAndamento && _analiseEmAndamentoId === id;
-    cont.innerHTML = _analiseCache
-      || (emAndamentoAqui ? _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.') : _corpoAnaliseIntro());
+    if(_analiseCache){ cont.innerHTML = _analiseCache; return; }
+    if(emAndamentoAqui){
+      cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.');
+      return;
+    }
+    const jaAnalisado = _paginaEditalDetalhe && _paginaEditalDetalhe.edital && _paginaEditalDetalhe.edital.analisado;
+    if(jaAnalisado) return _rodarAnaliseEdital(false);
+    cont.innerHTML = _corpoAnaliseIntro();
     return;
   }
 
@@ -2818,7 +2826,7 @@ async function _corpoAnaliseEdital(id, forcar){
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
       <div class="muted" style="font-size:11px;margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
         Análise automática por IA${r.fonte?` · fonte: ${esc(r.fonte)}`:''}${r.cache?' · em cache':''}. Pode conter erros ou omissões — confira sempre no edital original.
-        <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">refazer</button>
+        <button class="btn ghost" style="margin-left:8px;font-size:11px;padding:3px 8px" onclick="abaEdital('analise',true)">Realizar nova análise</button>
       </div>`};
   }
   const msgs={sem_ia:'A análise por IA está desativada. Para ativar, vá em <b>Meu perfil</b> e informe a sua chave da IA (Gemini) — é gratuita e há um link lá para criar a sua.',

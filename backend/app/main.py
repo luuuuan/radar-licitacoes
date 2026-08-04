@@ -1778,19 +1778,27 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    # análise já feita: mostra do cache (é leitura, não consome IA), desde que
-    # tenha sido gerada com a versão atual do prompt. Versão antiga -> refaz.
+    chave = _auth.decifrar(user.gemini_key_cifrada)
+    # análise já feita: mostra do cache (é leitura, não consome IA pro texto
+    # do edital em si), desde que tenha sido gerada com a versão atual do
+    # prompt. Versão antiga -> refaz. Verificação de documentos/comparação de
+    # catálogo rodam de novo AQUI TAMBÉM (mesmo em cache hit) — são por
+    # usuário, não por edital, e catálogo/documentos podem ter mudado desde
+    # a última vez; sem isso, só apareciam na 1ª análise de cada edital e
+    # sumiam depois (achado real: usuário via os itens sugeridos só na
+    # primeira vez que clicava "Realizar análise com IA").
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
             if cache.get("versao") == ia.VERSAO_PROMPT:
                 cache["cache"] = True
+                cache = _anexar_verificacao_ia_documentos(cache, user, db, chave)
+                cache = _anexar_comparacao_catalogo_ia(cache, ed, user, db, chave)
                 return _anexar_checklist_documentos(cache, user, db)
             # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
             pass
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
-    chave = _auth.decifrar(user.gemini_key_cifrada)
     if not ia.ia_texto_disponivel(chave):
         return {"status": "sem_ia"}
     docs = _listar_arquivos_pncp(ed)
