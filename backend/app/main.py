@@ -1317,6 +1317,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             # só indica SE já existe análise em cache — não dispara uma nova
             # (evitar acionar a IA sem o usuário pedir explicitamente).
             "analisado": bool(ed.analise_ia),
+            "itens_completados": bool(ed.itens_completados_em),
         },
         "itens": itens,
     }
@@ -1885,6 +1886,47 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         db.commit()
     resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar)
     return _anexar_checklist_documentos(resultado, user, db)
+
+
+@app.post("/api/editais/{edital_id}/itens/completar-descricao")
+def completar_descricao_itens(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                              db: Session = Depends(get_session)):
+    """Lê o(s) PDF(s) do edital publicados no PNCP pra tentar completar a
+    descrição de itens que a API estruturada do PNCP trouxe cortada — usa
+    uma IA paga pelo OPERADOR (DeepInfra/DeepSeek, ver app/itens_pdf.py),
+    não a chave Gemini pessoal do usuário. Sobrescreve ItemEdital.descricao
+    quando encontra o texto completo com confiança; precisa de recálculo
+    depois pra refletir no motor de matching."""
+    import logging
+    from . import itens_pdf
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    if not itens_pdf.ia_disponivel(settings.DEEPINFRA_API_KEY):
+        return {"status": "sem_ia"}
+
+    itens_edital = db.execute(
+        select(ItemEdital).where(ItemEdital.edital_id == edital_id)).scalars().all()
+    docs = _listar_arquivos_pncp(ed)
+    resultado = itens_pdf.extrair_itens_completos(
+        ed.objeto or "", docs.get("arquivos") or [],
+        [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
+    )
+    if resultado.get("status") == "ok":
+        mapa = {it.numero: it for it in itens_edital}
+        atualizados = 0
+        for r in resultado["itens"]:
+            alvo = mapa.get(r["numero"])
+            if alvo and r["descricao_completa"] and r["descricao_completa"] != alvo.descricao:
+                logging.getLogger("itens_pdf").info(
+                    "Item %s do edital %s completado via PDF (%d -> %d chars)",
+                    r["numero"], edital_id, len(alvo.descricao or ""), len(r["descricao_completa"]))
+                alvo.descricao = r["descricao_completa"]
+                atualizados += 1
+        resultado["atualizados"] = atualizados
+    ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+    db.commit()
+    return resultado
 
 
 # --------------------------- Cotação (planilha) ------------------------ #

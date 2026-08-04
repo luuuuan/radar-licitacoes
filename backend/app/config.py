@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     # usuários, mesmo quem não configurou uma chave Gemini pessoal.
     DEEPINFRA_API_KEY: str = ""
     DEEPINFRA_MODELO_EMBEDDING: str = "BAAI/bge-m3"
+    # Modelo de CHAT (não embedding) na mesma DeepInfra/mesma chave global —
+    # usado só pra completar a descrição de itens lendo o PDF do edital
+    # (ver app/itens_pdf.py). Ajustar o nome do modelo se a DeepInfra
+    # descontinuar/renomear; conferir preço antes de habilitar em produção.
+    DEEPINFRA_MODELO_CHAT: str = "deepseek-ai/DeepSeek-V3"
 
     # OCR de PDF escaneado (Tesseract, grátis e local). Pesado: limites apertados.
     # Requer no servidor os pacotes de sistema 'tesseract-ocr', 'tesseract-ocr-por'

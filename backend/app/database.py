@@ -61,6 +61,7 @@ _COLUNAS_NOVAS = {
     "editais": [
         ("analise_ia", "TEXT"),
         ("analise_em", "TIMESTAMP"),
+        ("itens_completados_em", "TIMESTAMP"),
     ],
     "produtos_user": [("usuario_id", "INTEGER")],
 }

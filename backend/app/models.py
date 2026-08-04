@@ -127,6 +127,10 @@ class Edital(Base):
     analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # já tentou completar a descrição dos itens lendo o PDF (ver
+    # app/itens_pdf.py) — marca mesmo sem sucesso, só pra não deixar o botão
+    # "buscar de novo" disparando à toa a cada visita à página.
+    itens_completados_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     itens: Mapped[list["ItemEdital"]] = relationship(
         back_populates="edital", cascade="all, delete-orphan"
