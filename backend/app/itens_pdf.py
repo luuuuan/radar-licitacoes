@@ -55,6 +55,7 @@ def _gerar(prompt: str, api_key: str, timeout: int = 90) -> tuple[str | None, st
         "model": settings.DEEPINFRA_MODELO_CHAT,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
+        "response_format": {"type": "json_object"},
     }
     try:
         r = requests.post(_DEEPINFRA_CHAT_URL, json=body, timeout=timeout,
