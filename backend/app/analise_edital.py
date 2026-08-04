@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 
 import requests
 
@@ -235,7 +236,15 @@ def _ocr_pdf(conteudo: bytes) -> str:
     return texto
 
 
-def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70):
+def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2):
+    """Chama o Gemini. Reforçado com 1 retentativa curta (backoff simples)
+    pra falha TRANSIENTE (timeout/rede, 5xx) — mesmo espírito do
+    PNCPConnector._get_com_retry, que já existia só do lado do PNCP; achado
+    real: usuário clicando "Realizar nova análise" e caindo direto em "não
+    foi possível conectar" numa falha passageira, sem nenhuma segunda
+    chance. NÃO tenta de novo em 429 (rate limit — retentar na hora só
+    reforça o limite, já tem mensagem própria) nem outros 4xx (não é
+    transiente, retentar não ajuda)."""
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
@@ -244,20 +253,35 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    try:
-        r = requests.post(url, json=body, timeout=timeout,
-                         headers={"x-goog-api-key": chave,
-                                  "Content-Type": "application/json"})
-    except requests.RequestException as e:
-        return None, f"rede:{e}"
-    if r.status_code != 200:
-        log.warning("Gemini texto HTTP %s: %s", r.status_code, r.text[:200])
-        return None, f"http_{r.status_code}"
-    try:
-        dados = r.json()
-        return dados["candidates"][0]["content"]["parts"][0]["text"], "ok"
-    except (ValueError, KeyError, IndexError):
-        return None, "sem_resposta"
+    ultimo_erro = "sem_resposta"
+    for tentativa in range(1, max(1, tentativas) + 1):
+        try:
+            r = requests.post(url, json=body, timeout=timeout,
+                             headers={"x-goog-api-key": chave,
+                                      "Content-Type": "application/json"})
+        except requests.RequestException as e:
+            ultimo_erro = f"rede:{e}"
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code in (500, 502, 503, 504):
+            ultimo_erro = f"http_{r.status_code}"
+            log.warning("Gemini texto HTTP %s (tentativa %d/%d): %s",
+                       r.status_code, tentativa, tentativas, r.text[:200])
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code != 200:
+            log.warning("Gemini texto HTTP %s: %s", r.status_code, r.text[:200])
+            return None, f"http_{r.status_code}"
+        try:
+            dados = r.json()
+            return dados["candidates"][0]["content"]["parts"][0]["text"], "ok"
+        except (ValueError, KeyError, IndexError):
+            return None, "sem_resposta"
+    return None, ultimo_erro
 
 
 def _parse_json(txt: str):

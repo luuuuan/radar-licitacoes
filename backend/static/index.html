@@ -1222,6 +1222,10 @@ function tab(name){
     if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   });
   ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  // KPIs (Editais do dia/ativos/compatibilidade/etc) só fazem sentido na
+  // tela inicial (lista de editais ativos) — em qualquer outra aba, ou
+  // dentro da página de um edital específico, só ocupam espaço.
+  $('#kpis').classList.toggle('hidden', name!=='editais');
   // a página de um edital (#t-edital) não faz parte da lista acima — sem
   // isso, ir para qualquer aba normal a partir dela (inclusive pelos cards
   // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
@@ -2471,8 +2475,12 @@ async function _renderPaginaEdital(editalId, aba){
   ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
+  $('#kpis').classList.add('hidden');   // KPIs (Editais do dia/ativos/etc) só na tela inicial
   $('#edital-cabecalho').innerHTML = _spinnerHTML('Carregando…');
   $('#edital-conteudo').innerHTML = '';
+  // barra de abas só aparece depois que /detalhe termina — clicar numa aba
+  // antes disso quebraria (usa _paginaEditalDetalhe, que ainda não existe).
+  document.querySelector('.edital-abas').classList.add('hidden');
   // reseta a aba (destaque do botão) JÁ AQUI, antes de buscar os dados do
   // edital novo — senão, enquanto a busca não termina, a barra de abas
   // fica mostrando por um instante a aba em que o edital ANTERIOR estava.
@@ -2481,6 +2489,7 @@ async function _renderPaginaEdital(editalId, aba){
   try{
     _paginaEditalDetalhe = await api(`/api/editais/${editalId}/detalhe`);
     _renderCabecalhoEdital();
+    document.querySelector('.edital-abas').classList.remove('hidden');
     abaEdital(aba);
   }catch(e){
     $('#edital-cabecalho').innerHTML = '<div class="card"><p>Não consegui carregar este edital agora.</p></div>';
