@@ -1180,6 +1180,44 @@ def _produto_json(p: Produto) -> dict:
     }
 
 
+def _custo_e_margem(valor_unitario: float | None, produto: Produto) -> dict:
+    """Custo/margem de UM produto contra o valor unitário que o órgão paga
+    por um item — mesmo cálculo usado em /detalhe, reaproveitado onde quer
+    que a gente precise comparar preço (ex.: sugestão da IA de catálogo)."""
+    if valor_unitario is None or produto.preco_custo is None:
+        return {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
+    # custo na MESMA base do órgão: se o produto é vendido em embalagem
+    # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
+    por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
+    custo_comparavel = round(produto.preco_custo / por_unid, 4)
+    margem = round(valor_unitario - custo_comparavel, 4)
+    margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
+    # se a margem ainda é absurda, provavelmente as unidades não batem
+    alerta_unidade = margem_pct is not None and (margem_pct < -300 or margem_pct > 300)
+    return {"margem": margem, "margem_pct": margem_pct, "custo_comparavel": custo_comparavel,
+           "alerta_unidade": alerta_unidade}
+
+
+def _validacao_tecnica_json(descricao_item: str, produto: Produto, score_semantico: float) -> dict | None:
+    """Validação técnica (medidas/material/características) de um produto
+    contra a descrição de um item — mesmo mecanismo determinístico usado em
+    /detalhe pros itens que o motor de matching já compatibilizou.
+    score_semantico: usado só como piso pro classificar() (< 0.35 já mata
+    de saída) — quem já vem de um match confiante (código exato, ou uma
+    sugestão que outra fonte já validou como relevante) passa 1.0 aqui, pra
+    a palavra final ficar 100% com a validação de características (a parte
+    que realmente pega os casos de "categoria certa, medida errada")."""
+    from .matching.validacao import validar, classificar
+    resultado = validar(descricao_item, produto.descricao, produto.itens_por_unidade)
+    if not resultado.verificavel:
+        return None
+    return {
+        "classificacao": classificar(score_semantico, resultado),
+        "criticas": [p.descricao for p in resultado.criticas],
+        "avisos": [p.descricao for p in resultado.avisos],
+    }
+
+
 @app.get("/api/editais/{edital_id}/detalhe")
 def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
@@ -1192,8 +1230,6 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         raise HTTPException(404, "Edital não encontrado")
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
-
-    from .matching.validacao import validar, classificar
 
     # item (número) -> dado bruto do detalhe do match
     itens_match: dict = {}
@@ -1230,34 +1266,17 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         # em auditoria de produção).
         compativel = prod is not None and (confianca == "alta" or confirmado)
 
-        margem = margem_pct = None
-        custo_comparavel = None
-        alerta_unidade = False
-        if compativel and it.valor_unitario is not None and prod.preco_custo is not None:
-            # custo na MESMA base do órgão: se o produto é vendido em embalagem
-            # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
-            por_unid = prod.itens_por_unidade if (prod.itens_por_unidade or 0) > 0 else 1
-            custo_comparavel = round(prod.preco_custo / por_unid, 4)
-            margem = round(it.valor_unitario - custo_comparavel, 4)
-            if it.valor_unitario:
-                margem_pct = round(margem / it.valor_unitario * 100, 1)
-            # se a margem ainda é absurda, provavelmente as unidades não batem
-            if margem_pct is not None and (margem_pct < -300 or margem_pct > 300):
-                alerta_unidade = True
+        margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
         validacao_tecnica = None
         if compativel:
+            margem_dados = _custo_e_margem(it.valor_unitario, prod)
+            # só reporta validação técnica quando havia um score por item
+            # disponível — senão fica sem opinião, em vez de inventar um
+            # "Atende" sem nenhuma checagem por trás (_validacao_tecnica_json
+            # já filtra também por "verificavel" internamente).
             score_item = d.get("score_item")
-            resultado = validar(it.descricao, prod.descricao, prod.itens_por_unidade)
-            # só reporta validação técnica quando havia algo de fato
-            # verificável (unidade/característica reconhecida) e um score
-            # por item disponível — senão fica sem opinião, em vez de
-            # inventar um "Atende" sem nenhuma checagem por trás.
-            if resultado.verificavel and score_item is not None:
-                validacao_tecnica = {
-                    "classificacao": classificar(score_item, resultado),
-                    "criticas": [p.descricao for p in resultado.criticas],
-                    "avisos": [p.descricao for p in resultado.avisos],
-                }
+            if score_item is not None:
+                validacao_tecnica = _validacao_tecnica_json(it.descricao, prod, score_item)
 
         # candidatas com dado ao vivo — sempre presente (mesmo pra item de
         # confiança alta: código NCM/CATMAT exato não é garantia de ser o
@@ -1274,10 +1293,8 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "compativel": compativel,
             "confianca": confianca,
             "confirmado_manualmente": confirmado,
-            "margem": margem, "margem_pct": margem_pct,
-            "custo_comparavel": custo_comparavel,
-            "alerta_unidade": alerta_unidade,
             "validacao_tecnica": validacao_tecnica,
+            **margem_dados,
             "produto": _produto_json(prod) if (prod and compativel) else None,
             "sugestoes": sugestoes,
         })
@@ -1721,7 +1738,15 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
     )
     if saida.get("status") == "ok":
         # anexa dado ao vivo do produto/item pra tabela do front não precisar
-        # de outra chamada — a IA só devolveu numero_item/produto_id.
+        # de outra chamada — a IA só devolveu numero_item/produto_id. Também
+        # roda a MESMA validação técnica determinística (medidas/material/
+        # características) usada pros itens que o motor de matching já
+        # compatibilizou — achado real: a IA sugeriu "Fita ... 48mm x 50m"
+        # pra um item que pedia "largura: 50mm" — mesma categoria de
+        # produto, medida diferente, e a IA sozinha não percebeu. score=1.0
+        # porque quem decide "atende"/"não atende" aqui é a validação de
+        # características, não mais um score textual (a IA já vouched pela
+        # relevância geral).
         produtos_map = {p.id: p for p in catalogo}
         itens_map = {it.numero: it for it in itens_edital}
         enriquecidos = []
@@ -1732,8 +1757,10 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
                 continue
             enriquecidos.append({
                 "numero": it["numero"], "descricao_item": ie.descricao,
-                "produto_id": p.id, "produto": p.descricao,
+                "produto_id": p.id, "produto": _produto_json(p),
                 "justificativa": it["justificativa"],
+                "validacao_tecnica": _validacao_tecnica_json(ie.descricao, p, 1.0),
+                **_custo_e_margem(ie.valor_unitario, p),
             })
         saida["itens"] = enriquecidos
     resultado["comparacao_catalogo_ia"] = saida

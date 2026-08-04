@@ -2328,24 +2328,44 @@ function _comparacaoCatalogoIAHTML(c){
   }
   const linhas = c.itens.map(it=>{
     const naCotacao = _cotacaoSelecionados.has(String(it.numero));
+    const p = it.produto || {};
+    const vt = it.validacao_tecnica;
+    // badge compacta de specs: reaproveita a MESMA validação determinística
+    // (medidas/material/características) que já roda pros itens que o motor
+    // de matching compatibilizou — pega exatamente o caso real que motivou
+    // isso ("Fita ... largura 50mm" vs sugestão "... 48mm x 50m": categoria
+    // certa, medida errada, e a IA sozinha não tinha percebido).
+    let specsBadge = '';
+    if(vt){
+      const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
+      const icone = vt.classificacao==='Não atende' ? '✗' : (vt.classificacao==='Atende' ? '✓' : '⚠');
+      const pendencias = [...vt.criticas, ...vt.avisos];
+      specsBadge = `<div title="${esc(pendencias.join(' | '))}" style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`;
+    }
+    let mg='—', mgCls='';
+    if(it.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
+    else if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); mgCls=it.margem>=0?'margem-pos':'margem-neg'; }
+    const siteForn = linkSeguro(p.fornecedor_site);
     return `<tr>
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td style="font-size:13px">${esc(it.descricao_item||'')}</td>
-      <td style="font-size:13px">${esc(it.produto||'')}</td>
+      <td style="font-size:13px">${esc(p.descricao||'')}${specsBadge}</td>
+      <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
       <td class="muted" style="font-size:12px">${esc(it.justificativa||'')}</td>
       <td style="white-space:nowrap">
         <button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(naCotacao)}"
           onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${it.produto_id}, this)" ${naCotacao?'disabled':''}>
           ${naCotacao ? ICN.check+' na cotação' : '+ Adicionar na cotação'}
         </button>
+        ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:4px;padding:2px 8px;font-size:11px">fornecedor ↗</a>`:''}
       </td>
     </tr>`;
   }).join('');
   return `<div style="margin-top:16px">
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
-    <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem.</p>
+    <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem. A validação de medidas/características abaixo do produto é automática (não é a IA) — confira sempre antes de confirmar.</p>
     <div style="overflow-x:auto"><table>
-      <thead><tr><th>Item</th><th>Descrição</th><th>Produto sugerido</th><th>Justificativa</th><th></th></tr></thead>
+      <thead><tr><th>Item</th><th>Descrição</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
       <tbody>${linhas}</tbody>
     </table></div>
   </div>`;
