@@ -2708,8 +2708,16 @@ function _corpoItensEdital(d){
     // pendência crítica de especificação: mesmo com produto do catálogo
     // batendo por texto, não é um match confiável — tira o ✓ do topo.
     const naoAtende = it.validacao_tecnica && it.validacao_tecnica.classificacao === 'Não atende';
+    // descrição completa vai no título só até um tamanho legível — o
+    // restante (quando existir) fica no modal "Ver detalhes", não aqui.
+    // Alguns itens do PNCP já chegam com a descrição cortada NA FONTE
+    // (o órgão esbarrou num limite de caracteres do próprio sistema deles
+    // ao preencher) — não tem texto a mais pra mostrar nesses casos, mas o
+    // corte aqui evita o título ficar gigante mesmo quando tem.
+    const descBruta = it.descricao||'';
+    const descTitulo = descBruta.length > 140 ? esc(descBruta.slice(0, 140)) + '…' : esc(descBruta);
     return `<div class="item-row ${it.compativel?'match':''}">
-      <strong>${(it.compativel && !naoAtende)?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${esc(it.descricao)}${bloco}</div>`;
+      <strong>${(it.compativel && !naoAtende)?ICN.check+' ':''}Item ${esc(it.numero??'')}</strong> — ${descTitulo}${bloco}</div>`;
   }
   function _seletorSugestaoHtml(it, escondido){
     const numero = it.numero;
