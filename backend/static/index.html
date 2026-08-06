@@ -2749,47 +2749,9 @@ function _corpoItensEdital(d){
   if(!d.itens.length) return '<p class="muted">Este edital não trouxe itens detalhados.</p>';
   const compativeis = d.itens.filter(it=>it.compativel);
   const semMatch = d.itens.filter(it=>!it.compativel);
-  const jaCompletou = d.edital && d.edital.itens_completados;
   return `
-    <div style="margin-bottom:12px">
-      <button class="btn ghost" id="btn-completar-descricao" style="font-size:12px;padding:4px 10px" onclick="completarDescricaoItens()">📄 ${jaCompletou?'Buscar descrição completa no PDF de novo':'Buscar descrição completa no PDF'}</button>
-      <span class="muted" style="font-size:11px;margin-left:6px">Lê o PDF do edital pra completar descrições que a API do PNCP trouxe cortadas${jaCompletou?' — já usado neste edital':''}. Depois, recalcule pra refletir no catálogo.</span>
-    </div>
     ${compativeis.length?`<h3 style="margin:0 0 4px;font-size:14px">Itens compatíveis com seu catálogo (${compativeis.length})</h3>${compativeis.map(_itemRowHtml).join('')}`:''}
     ${semMatch.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens sem produto compatível (${semMatch.length})</h3>${semMatch.map(_itemRowHtml).join('')}`:''}`;
-}
-
-// Botão "Buscar descrição completa no PDF" (aba Itens/margem) — usa uma IA
-// paga pelo OPERADOR (DeepInfra/DeepSeek, não a chave Gemini pessoal do
-// usuário) pra ler o PDF do edital e completar descrições que a API
-// estruturada do PNCP trouxe cortadas. Sobrescreve ItemEdital.descricao no
-// servidor; recarrega o /detalhe pra refletir na tela.
-async function completarDescricaoItens(){
-  const id = _paginaEditalId;
-  const btn = document.getElementById('btn-completar-descricao');
-  if(btn){ btn.disabled = true; btn.textContent = 'Lendo o PDF do edital…'; }
-  try{
-    const r = await api(`/api/editais/${id}/itens/completar-descricao`, {method:'POST'});
-    if(r && r.status === 'ok'){
-      toast(r.atualizados ? `${r.atualizados} descrição(ões) completada(s) a partir do PDF.` : 'Nenhuma descrição precisou ser completada.', 'ok');
-      _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
-      if(_paginaEditalId===id) abaEdital('itens');
-    } else if(r && r.status === 'sem_arquivo'){
-      toast('Não foi possível encontrar o PDF do edital.', 'erro');
-    } else if(r && r.status === 'sem_texto'){
-      toast('Não foi possível extrair texto do PDF do edital.', 'erro');
-    } else if(r && r.status === 'sem_ia'){
-      toast('Este recurso ainda não está disponível.', 'erro');
-    } else {
-      toast('Não foi possível completar as descrições agora. Tente de novo.', 'erro');
-    }
-  } finally {
-    const btnAgora = document.getElementById('btn-completar-descricao');
-    if(btnAgora){ btnAgora.disabled = false; btnAgora.textContent = `📄 ${jaCompletouAgora()?'Buscar descrição completa no PDF de novo':'Buscar descrição completa no PDF'}`; }
-  }
-}
-function jaCompletouAgora(){
-  return !!(_paginaEditalDetalhe && _paginaEditalDetalhe.edital && _paginaEditalDetalhe.edital.itens_completados);
 }
 
 // Modal "Ver detalhes" de um item — junta o que veio do EDITAL (descrição,
