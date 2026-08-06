@@ -155,6 +155,12 @@
       transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
   @keyframes spin{to{transform:rotate(360deg)}}
   #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
+  /* mesmo radar do splash, só que pequeno e contido (não tela cheia) —
+     usado em carregamentos internos, ex.: abrir a página de um edital */
+  .radar.pequeno{width:36px;height:36px}
+  .radar-carregando{display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:10px;padding:32px 0}
+  .radar-carregando .t{font-size:13px;color:var(--muted)}
   /* spinner pequeno pra estados de carregamento inline (reaproveita o mesmo
      @keyframes spin do splash) */
   .spinner-inline{display:inline-block;width:15px;height:15px;flex-shrink:0;
@@ -224,6 +230,11 @@
   .forn a{color:var(--accent);text-decoration:none}
   /* abas internas da página do edital (itens/documentos/análise/proposta) */
   .edital-abas{display:flex;gap:4px;flex-wrap:wrap;margin:16px 0 0;border-bottom:1px solid var(--line)}
+  /* .hidden vem ANTES no CSS (linha ~137) — sem isso, "display:flex" acima
+     ganha da cascata (mesma especificidade, ordem de declaração decide) e
+     classList.add('hidden') na barra de abas não tem efeito nenhum: as abas
+     ficavam visíveis o tempo todo, inclusive enquanto o edital carregava. */
+  .edital-abas.hidden{display:none}
   .edital-abas button{background:none;border:none;border-bottom:2px solid transparent;
     color:var(--muted);padding:10px 14px;min-height:44px;font-size:14px;font-family:inherit;
     cursor:pointer;transition:color .15s,border-color .15s}
@@ -2445,6 +2456,14 @@ function _spinnerHTML(texto, extra){
   return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0;flex-wrap:wrap"><span class="spinner-inline"></span>${esc(texto)}${extra||''}</p>`;
 }
 
+// Mesmo radar do splash de abertura do app, só que pequeno e contido no
+// lugar onde o conteúdo vai aparecer (não tela cheia) — usado ao abrir a
+// página de um edital, pra dar uma sensação mais "do app" que o spinner
+// genérico de texto.
+function _radarCarregandoHTML(texto){
+  return `<div class="radar-carregando"><div class="radar pequeno"></div><div class="t">${esc(texto)}</div></div>`;
+}
+
 function abrirPaginaEdital(editalId, aba='itens'){
   history.pushState({view:'edital', editalId}, '', '/edital/'+editalId);
   _renderPaginaEdital(editalId, aba);
@@ -2476,7 +2495,7 @@ async function _renderPaginaEdital(editalId, aba){
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
   $('#kpis').classList.add('hidden');   // KPIs (Editais do dia/ativos/etc) só na tela inicial
-  $('#edital-cabecalho').innerHTML = _spinnerHTML('Carregando…');
+  $('#edital-cabecalho').innerHTML = _radarCarregandoHTML('Carregando o edital…');
   $('#edital-conteudo').innerHTML = '';
   // barra de abas só aparece depois que /detalhe termina — clicar numa aba
   // antes disso quebraria (usa _paginaEditalDetalhe, que ainda não existe).
