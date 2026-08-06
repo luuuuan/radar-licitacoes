@@ -29,7 +29,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ..config import settings
-from .embeddings import embeddings as _ia_embeddings, cosseno as _ia_cosseno, ia_disponivel
+from .embeddings import (
+    embeddings as _ia_embeddings_gemini,
+    embeddings_deepinfra as _ia_embeddings_deepinfra,
+    cosseno as _ia_cosseno,
+    ia_disponivel,
+)
 from .sinonimos import aplicar_sinonimos
 from .stemming import radical, stemizar_texto
 
@@ -135,7 +140,21 @@ class MatchingEngine:
                  gemini_key: str | None = None):
         self.produtos = produtos
         self.gemini_key = gemini_key
-        self.usar_ia = bool(usar_ia) and ia_disponivel(gemini_key) and len(produtos) > 0
+        # Camada semântica (embeddings): usa a chave PESSOAL do usuário
+        # (Gemini) quando existir; senão cai pro BGE-M3/DeepInfra (chave
+        # GLOBAL do operador, settings.DEEPINFRA_API_KEY) — assim quem não
+        # configurou uma chave Gemini própria também ganha essa camada
+        # extra, em vez de ficar só no textual. Os dois provedores nunca são
+        # comparados entre si (vetores de espaços diferentes); a escolha é
+        # feita uma vez aqui e usada de forma consistente pro edital inteiro.
+        if ia_disponivel(gemini_key):
+            self._ia_embeddings = lambda textos: _ia_embeddings_gemini(textos, api_key=gemini_key)
+        elif settings.DEEPINFRA_API_KEY:
+            self._ia_embeddings = lambda textos: _ia_embeddings_deepinfra(
+                textos, api_key=settings.DEEPINFRA_API_KEY)
+        else:
+            self._ia_embeddings = None
+        self.usar_ia = bool(usar_ia) and self._ia_embeddings is not None and len(produtos) > 0
         # orçamento de exploração de sinônimos por coleta (editais sem sinal textual)
         self._orcamento_exploracao = (
             settings.IA_ORCAMENTO_EXPLORACAO
@@ -461,7 +480,7 @@ class MatchingEngine:
     # ---- avalia um edital inteiro -----------------------------------------
     def _emb_produtos(self):
         if self._prod_emb is None:
-            self._prod_emb = _ia_embeddings(self._textos_prod_naturais, api_key=self.gemini_key)
+            self._prod_emb = self._ia_embeddings(self._textos_prod_naturais)
         return self._prod_emb
 
     def _ia_score_item(self, item_emb) -> tuple[float, ProdutoCat | None]:
@@ -513,7 +532,7 @@ class MatchingEngine:
         if usar_ia_aqui:
             idxs = [i for i, (sc, _, _) in enumerate(base) if sc < settings.LIMIAR_FORTE]
             textos = [(alvos[i].texto_natural() or preparar_natural(objeto or "")) for i in idxs]
-            embs = _ia_embeddings(textos, api_key=self.gemini_key)
+            embs = self._ia_embeddings(textos)
             for k, i in enumerate(idxs):
                 item_embs[i] = embs[k]
 

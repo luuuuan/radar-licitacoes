@@ -266,7 +266,7 @@ def _ligar_ia_falsa(monkeypatch, ia_score, ia_prod):
     similaridade semântica por valores controlados, sem tocar na rede."""
     monkeypatch.setattr(engine_mod, "ia_disponivel", lambda key: True)
     monkeypatch.setattr(
-        engine_mod, "_ia_embeddings",
+        engine_mod, "_ia_embeddings_gemini",
         lambda textos, timeout=30, api_key=None: [[1.0]] * len(textos))
     monkeypatch.setattr(
         MatchingEngine, "_ia_score_item",
@@ -306,6 +306,46 @@ def test_ia_com_sinal_combina_score(monkeypatch):
     assert r.detalhe[0]["score_item"] == pytest.approx(esperado, abs=1e-3)
     assert r.detalhe[0]["produto_id"] == produto_ia.id
     assert "IA" in r.detalhe[0]["motivo"]
+
+
+# ---------------------------------------------------------------------------
+# Escolha do provedor de embeddings: Gemini (chave pessoal) quando existir,
+# senão BGE-M3/DeepInfra (chave GLOBAL do operador) — assim quem não tem
+# chave Gemini própria também ganha a camada semântica extra.
+# ---------------------------------------------------------------------------
+def test_sem_gemini_e_sem_deepinfra_usar_ia_fica_desligado(monkeypatch):
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "")
+    eng = MatchingEngine(_catalogo(), usar_ia=True, gemini_key=None)
+    assert eng.usar_ia is False
+    assert eng._ia_embeddings is None
+
+
+def test_sem_gemini_mas_com_deepinfra_usa_bge_m3(monkeypatch):
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "chave-global-fake")
+    chamadas = {}
+    def _fake_deepinfra(textos, timeout=30, api_key=None):
+        chamadas["api_key"] = api_key
+        return [[1.0]] * len(textos)
+    monkeypatch.setattr(engine_mod, "_ia_embeddings_deepinfra", _fake_deepinfra)
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True, gemini_key=None)
+    assert eng.usar_ia is True
+    eng._ia_embeddings(["texto qualquer"])
+    assert chamadas["api_key"] == "chave-global-fake"
+
+
+def test_com_gemini_ignora_deepinfra_mesmo_configurado(monkeypatch):
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "chave-global-fake")
+    monkeypatch.setattr(engine_mod, "ia_disponivel", lambda key: bool(key))
+    chamadas = {"gemini": False, "deepinfra": False}
+    monkeypatch.setattr(engine_mod, "_ia_embeddings_gemini",
+                        lambda textos, timeout=30, api_key=None: chamadas.__setitem__("gemini", True) or [[1.0]] * len(textos))
+    monkeypatch.setattr(engine_mod, "_ia_embeddings_deepinfra",
+                        lambda textos, timeout=30, api_key=None: chamadas.__setitem__("deepinfra", True) or [[1.0]] * len(textos))
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True, gemini_key="chave-gemini-fake")
+    eng._ia_embeddings(["texto qualquer"])
+    assert chamadas == {"gemini": True, "deepinfra": False}
 
 
 def test_codigo_exato_com_texto_relacionado_e_confianca_alta():
