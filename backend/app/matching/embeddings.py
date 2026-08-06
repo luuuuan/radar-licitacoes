@@ -1,15 +1,17 @@
 """
-Similaridade semântica via embeddings (Gemini e, opcionalmente, BGE-M3/DeepInfra).
+Similaridade semântica via embeddings (Gemini/BGE-M3) e reranking (DeepInfra).
 
-Gera um "vetor de significado" para cada texto e compara por cosseno. Pega
-sinônimos e linguagem de edital que o casamento por texto puro (TF-IDF) erra.
+`embeddings()`/`embeddings_deepinfra()`: geram um "vetor de significado" para
+cada texto, comparado por cosseno. `embeddings()` é BYOK (chave pessoal do
+usuário, GEMINI_API_KEY) — hoje usada só pela Análise por IA do edital
+(analise_edital.py), não mais pelo motor de matching. `embeddings_deepinfra()`
+usa o BGE-M3 com a chave GLOBAL do operador (DEEPINFRA_API_KEY).
 
-Dois provedores independentes, ambos OPCIONAIS:
-- Gemini (`embeddings()`): BYOK — só liga se o usuário tiver a própria
-  GEMINI_API_KEY. Sem isso, o sistema funciona normalmente só com o textual.
-- BGE-M3 via DeepInfra (`embeddings_deepinfra()`): chave GLOBAL
-  (DEEPINFRA_API_KEY, paga pelo operador) — camada extra que vale pra todos os
-  usuários, mesmo sem chave Gemini pessoal.
+`rerank()`: cross-encoder (Qwen3-Reranker via DeepInfra, mesma chave global)
+— julga a relevância de um texto contra vários outros DIRETAMENTE (em vez de
+comparar embeddings isolados por cosseno), muito mais preciso pra "isso é a
+mesma coisa?". É o que o motor de matching (matching/engine.py) usa hoje como
+sinal principal de compatibilidade item↔produto.
 
 Proteção de cota: a API tem limite. Quando estoura (HTTP 429), um "disjuntor"
 pausa as chamadas daquela chave por algumas horas (até a cota resetar), usando
@@ -187,3 +189,65 @@ def embeddings_deepinfra(textos: list[str], timeout: int = 30,
             return [_cache_deepinfra.get(t) for t in textos]
 
     return [_cache_deepinfra.get(t) for t in textos]
+
+
+_RERANKER_URL_TPL = "https://api.deepinfra.com/v1/inference/{modelo}"
+
+
+def rerank(query: str, documentos: list[str], timeout: int = 30,
+          api_key: str | None = None, tentativas: int = 2) -> list[float] | None:
+    """Pontua a relevância de cada item de `documentos` contra `query`
+    (cross-encoder, DeepInfra) — mesma chave global de embeddings_deepinfra.
+
+    IMPORTANTE, testado contra a API real: ela só aceita `queries` e
+    `documents` do MESMO TAMANHO, e usar mais de 1 query DISTINTA por
+    chamada dá resultado ERRADO silenciosamente (o score parece depender só
+    do índice do documento, ignorando qual query foi pareada — nada indica
+    isso na resposta, só comparando os números). Por isso esta função só
+    aceita UMA query por chamada — a API faz o broadcast dela contra todos
+    os documentos automaticamente quando `queries` tem 1 elemento só. NUNCA
+    chame com mais de uma query por request.
+
+    Retorna None em qualquer falha (sem chave, cota estourada, rede, HTTP
+    != 200, resposta com contagem de scores diferente do esperado) — quem
+    chama trata como "sem sinal disponível", não deixa a exceção subir."""
+    chave = api_key or settings.DEEPINFRA_API_KEY
+    if not chave or not documentos:
+        return None
+    if ia_bloqueada(chave):
+        return None
+    url = _RERANKER_URL_TPL.format(modelo=settings.DEEPINFRA_MODELO_RERANKER)
+    body = {"queries": [query], "documents": documentos}
+    for tentativa in range(1, max(1, tentativas) + 1):
+        try:
+            r = requests.post(url, json=body, timeout=timeout,
+                              headers={"Authorization": f"bearer {chave}",
+                                       "Content-Type": "application/json"})
+        except requests.RequestException as e:
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            log.warning("Reranker falha de rede: %s", e)
+            return None
+        if r.status_code == 429:
+            _pausar(chave, _COOLDOWN_429, "cota/limite de taxa atingido (reranker)")
+            return None
+        if r.status_code in (500, 502, 503, 504):
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            log.warning("Reranker HTTP %s", r.status_code)
+            return None
+        if r.status_code != 200:
+            log.warning("Reranker HTTP %s: %s", r.status_code, r.text[:200])
+            return None
+        try:
+            scores = r.json()["scores"]
+        except (ValueError, KeyError):
+            return None
+        if len(scores) != len(documentos):
+            log.warning("Reranker retornou %d scores pra %d documentos",
+                       len(scores), len(documentos))
+            return None
+        return scores
+    return None

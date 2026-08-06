@@ -3,7 +3,7 @@
 Sistema que **busca diariamente editais de licitação pública** e identifica
 automaticamente aqueles cujos itens batem com os produtos/serviços que sua
 empresa vende. Faz correspondência por **código** (NCM, CATMAT/CATSER, EAN) e
-por **similaridade de texto** (TF-IDF + cosseno + fuzzy), classifica cada edital
+por **similaridade semântica** (reranker de IA), classifica cada edital
 em **forte / médio / fraco**, avisa por **e-mail/Telegram** e mostra tudo num
 **dashboard web**.
 
@@ -58,11 +58,16 @@ Depois é só abrir o dashboard, filtrar por **Match forte** e começar a trabal
 
 Para cada item de cada edital, o motor escolhe o melhor sinal disponível:
 
-1. **Código exato** (NCM, CATMAT/CATSER, EAN) → score 1.0. É o sinal mais
-   confiável; ignora pontuação/formatação (`4802.55.90` = `48025590`).
-2. **Similaridade textual** (TF-IDF + cosseno) entre descrição do item e do
-   produto/keywords.
-3. **Fuzzy de palavras-chave** (rapidfuzz) para pegar variações de grafia.
+1. **Código exato** (NCM, CATMAT/CATSER) → score 1.0, mas só quando o
+   reranker (item 2) também corrobora que os textos têm relação real —
+   código fiscal é uma classificação ampla, não garante ser o MESMO produto
+   físico (achado real: "Álcool Etílico gel 70%" batia por NCM idêntico com
+   "Desinfetante 5 litros", mesma família fiscal, produtos sem nada a ver).
+2. **Reranker de IA** (cross-encoder, Qwen3-Reranker via DeepInfra) julga a
+   relevância de cada produto do catálogo contra o texto do item — muito
+   mais preciso que TF-IDF/embeddings pra decidir "isso é a mesma coisa?".
+   Sem `DEEPINFRA_API_KEY` configurada, só o código exato funciona (sem
+   corroboração, então nem esse vira vencedor automático).
 
 O **score do edital** combina o melhor item (70%) com a fração de itens
 compatíveis (30%). Limiares (ajustáveis no `.env`):
@@ -171,18 +176,17 @@ Actions roda direto no banco (não passa pela API), então não precisa de senha
 cd backend && pytest
 ```
 
-Cobrem o motor de matching (código exato, similaridade, palavra-chave, regras
-de exclusão e o viés de editais grandes) — sem banco e sem HTTP.
+Cobrem o motor de matching (código exato, reranker mockado, regras de
+exclusão e o viés de editais grandes) — sem banco e sem HTTP.
 
 ---
 
 O núcleo já entrega os requisitos centrais. Próximos passos, em ordem de retorno:
 
-1. **Busca semântica real (pgvector + embeddings)** — descomente
-   `sentence-transformers` no `requirements.txt`, gere o embedding da descrição
-   de cada produto/item e use a coluna `vector` para casar sinônimos que o
-   TF-IDF não pega (“notebook” ≈ “computador portátil”). A infra (pgvector) já
-   está no Compose.
+1. ~~Busca semântica real~~ — feito: reranker de IA (Qwen3-Reranker via
+   DeepInfra) julga a compatibilidade item↔produto diretamente, pega
+   sinônimos que casamento por texto puro erra (“notebook” ≈ “computador
+   portátil”). Ver "Como funciona o matching" acima.
 2. **Conectores adicionais** (BEC/SP, portais municipais sem PNCP): criar uma
    classe que herda de `BaseConnector` e registrar em `service.py`. O resto
    (matching, score, dashboard, notificação) funciona sem alteração.

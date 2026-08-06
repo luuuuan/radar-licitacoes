@@ -5,8 +5,21 @@ Testes da preservação de confirmação manual de item através do recálculo
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
+from app.matching import engine as engine_mod
 from app.models import Base, Usuario, Edital, ItemEdital, Produto, Match
 from app.service import _gerar_matches_usuario, _mesclar_confirmacoes_manuais
+
+
+def _mockar_reranker_acha_marcador(monkeypatch):
+    """O motor real (`certo`, "Marcador de texto amarelo") precisa achar o
+    item por conta própria nesses testes de integração — sem isso, sem
+    DEEPINFRA_API_KEY (zerada por padrão em todo teste, ver conftest.py) o
+    motor não acha sinal nenhum e o edital nem vira Match."""
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "fake-key")
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+        return [0.95 if "marcador" in d.lower() else 0.0 for d in documentos]
+    monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
 
 
 def _sessao():
@@ -87,10 +100,11 @@ def test_mesclar_sem_detalhe_antigo_retorna_novo_intacto():
 
 # --------- integração via _gerar_matches_usuario --------- #
 
-def test_recalculo_preserva_confirmacao_manual_mesmo_quando_motor_prefere_outro():
+def test_recalculo_preserva_confirmacao_manual_mesmo_quando_motor_prefere_outro(monkeypatch):
     """Usuário confirmou manualmente um produto DIFERENTE do que o motor
     escolheria por conta própria (o `certo`, que casa por texto) — o
     recálculo não pode sobrescrever essa escolha silenciosamente."""
+    _mockar_reranker_acha_marcador(monkeypatch)
     db = _sessao()
     u, ed, certo, outro = _semear(db)
     match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio",
@@ -103,7 +117,7 @@ def test_recalculo_preserva_confirmacao_manual_mesmo_quando_motor_prefere_outro(
     db.add(match)
     db.commit()
 
-    _gerar_matches_usuario(db, u, recalcular_todos=True)
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=True)
 
     db.refresh(match)
     item = match.detalhe["itens"][0]
@@ -111,7 +125,8 @@ def test_recalculo_preserva_confirmacao_manual_mesmo_quando_motor_prefere_outro(
     assert item["confirmado_manualmente"] is True
 
 
-def test_recalculo_nao_preserva_confirmacao_de_produto_ja_excluido():
+def test_recalculo_nao_preserva_confirmacao_de_produto_ja_excluido(monkeypatch):
+    _mockar_reranker_acha_marcador(monkeypatch)
     db = _sessao()
     u, ed, certo, outro = _semear(db)
     produto_excluido_id = outro.id + 999   # nunca existiu / foi apagado
@@ -125,7 +140,7 @@ def test_recalculo_nao_preserva_confirmacao_de_produto_ja_excluido():
     db.add(match)
     db.commit()
 
-    _gerar_matches_usuario(db, u, recalcular_todos=True)
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=True)
 
     db.refresh(match)
     item = match.detalhe["itens"][0]

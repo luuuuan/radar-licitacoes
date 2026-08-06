@@ -134,12 +134,10 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     produtos_validos_ids = {p.id for p in catalogo}
     termos_excl, categorias_excl = _carregar_exclusoes(db, usuario.id)
     from . import configuracoes as cfg
-    from .auth import decifrar
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
     if forcar_usar_ia is not None:   # recálculo pode forçar sem IA (rápido)
         usar_ia = forcar_usar_ia
-    gemini_key = decifrar(usuario.gemini_key_cifrada)   # chave do próprio usuário
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia, gemini_key=gemini_key)
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
 
     # Só considera editais que aparecem em ALGUM lugar da tela: ativos (prazo em
     # aberto) ou encerrados que o usuário está acompanhando (proposta enviada/

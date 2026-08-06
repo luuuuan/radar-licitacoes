@@ -50,24 +50,27 @@ class Settings(BaseSettings):
     # Matching / pontuação
     LIMIAR_FORTE: float = 0.62
     LIMIAR_MEDIO: float = 0.40
-    # Acima desse score textual o item é considerado compatível — usado só
-    # pro nível/score AGREGADO do edital (decide "forte"/"médio"/notificar),
-    # que continua calculado direto do motor. NÃO decide mais sozinho se um
-    # item individual entra em cotação/margem — ver LIMIAR_ITEM_ALTA/
+    # Acima desse score o item é considerado compatível — usado só pro
+    # nível/score AGREGADO do edital (decide "forte"/"médio"/notificar), que
+    # continua calculado direto do motor. NÃO decide mais sozinho se um item
+    # individual entra em cotação/margem — ver LIMIAR_ITEM_ALTA/
     # LIMIAR_ITEM_SUGESTAO logo abaixo, que fazem esse papel por item.
-    LIMIAR_ITEM: float = 0.35
+    LIMIAR_ITEM: float = 0.5
     # Faixas de confiança POR ITEM (não confundir com LIMIAR_ITEM acima, que
     # é agregado). Score >= ALTA: usado automático, sem pedir confirmação
     # (mas o usuário sempre pode trocar — código NCM/CATMAT exato não é
     # garantia de ser o mesmo produto, já teve caso real de código batendo
     # com item sem nada a ver). Entre SUGESTAO e ALTA: mostra como sugestão,
     # não entra em cotação/margem/Inteligência de Preço até o usuário
-    # confirmar — é exatamente a faixa (~0.30 pra baixo) onde viveram os
-    # bugs reais de matching encontrados em auditoria de produção (papel/
-    # metal/kraft/térmica batendo em produtos errados). Abaixo de SUGESTAO:
-    # não mostra nada, como sempre foi.
-    LIMIAR_ITEM_ALTA: float = 0.60
-    LIMIAR_ITEM_SUGESTAO: float = 0.20
+    # confirmar. Abaixo de SUGESTAO: não mostra nada.
+    # Calibrado com o score do RERANKER (Qwen3-Reranker via DeepInfra, ver
+    # matching/engine.py) — testes reais mostraram matches genuínos sempre
+    # >=0.89 (chegando a 0.9999) e falsos positivos (ex.: mesmo código fiscal
+    # amplo, produtos sem relação nenhuma) sempre <=0.014. Ainda é um chute
+    # inicial (poucos dados reais até agora) — recalibrar com produção
+    # depois, mesmo espírito de quando esses limiares foram criados.
+    LIMIAR_ITEM_ALTA: float = 0.85
+    LIMIAR_ITEM_SUGESTAO: float = 0.3
     # Exige cobertura mínima de itens para classificar como "forte", MAS só
     # para matches fuzzy/textuais — um casamento por código exato (NCM/CATMAT)
     # continua forte mesmo sendo 1 item. 0 = desliga. 0.05 = 5% dos itens.
@@ -101,34 +104,31 @@ class Settings(BaseSettings):
     LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
     LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
 
-    # IA semântica (Gemini embeddings) — opcional
+    # IA semântica (Gemini embeddings) — usada só pela Análise por IA do
+    # edital hoje (analise_edital.py); o motor de matching usa o reranker
+    # da DeepInfra (ver DEEPINFRA_MODELO_RERANKER, abaixo).
     GEMINI_API_KEY: str = ""
     # gemini-embedding-001 será desligado em 14/07/2026 -> gemini-embedding-2
     IA_MODELO_EMBEDDING: str = "gemini-embedding-2"
     # gemini-2.5-flash será desligado em 16/10/2026 -> gemini-3.5-flash
     IA_MODELO_TEXTO: str = "gemini-3.5-flash"   # análise de editais (texto)
-    # peso da IA no score final (0..1). 0.4 = 60% texto + 40% IA.
-    IA_PESO: float = 0.4
-    # piso de similaridade: cosseno abaixo disso conta como 0 (evita que a
-    # "linha de base" alta dos embeddings infle itens sem relação).
-    IA_FLOOR: float = 0.5
-    # sinal textual mínimo do edital para a IA REFINAR um candidato (já tem texto).
-    IA_MIN_SINAL: float = 0.12
-    # Exploração de SINÔNIMOS: editais sem sinal textual (ex.: "notebook" vs
-    # "computador portátil", TF-IDF ~0) também recebem IA, mas só até um teto por
-    # coleta — assim a IA pega sinônimos puros sem estourar a cota gratuita.
-    IA_EXPLORAR_SEM_SINAL: bool = True
-    IA_ORCAMENTO_EXPLORACAO: int = 60   # nº máx. de editais sem sinal que recebem IA por coleta
 
-    # IA semântica extra (BGE-M3 via DeepInfra) — opcional, camada adicional.
-    # Ao contrário da GEMINI_API_KEY (que é a chave do PRÓPRIO usuário, BYOK),
-    # esta é uma chave GLOBAL paga pelo operador do app — vale pra todos os
-    # usuários, mesmo quem não configurou uma chave Gemini pessoal.
+    # IA extra (DeepInfra) — opcional. Ao contrário da GEMINI_API_KEY (chave
+    # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador
+    # do app — vale pra todos os usuários, mesmo quem não configurou uma
+    # chave Gemini pessoal.
     DEEPINFRA_API_KEY: str = ""
     DEEPINFRA_MODELO_EMBEDDING: str = "BAAI/bge-m3"
-    # Modelo de CHAT (não embedding) na mesma DeepInfra/mesma chave global —
-    # usado só pra completar a descrição de itens lendo o PDF do edital
-    # (ver app/itens_pdf.py). Testado contra a API real: DeepSeek-V3-0324
+    # Reranker (cross-encoder) usado pelo motor de matching pra julgar a
+    # compatibilidade item↔produto — ver matching/engine.py. Substituiu
+    # TF-IDF + palavras-chave + embeddings bi-encoder: testado contra a API
+    # real, separa com muito mais clareza match genuíno (score ~0.9-1.0) de
+    # coincidência textual/código fiscal amplo sem relação real (~0.0-0.01)
+    # do que qualquer heurística ou cosseno de embeddings conseguia.
+    DEEPINFRA_MODELO_RERANKER: str = "Qwen/Qwen3-Reranker-0.6B"
+    # Modelo de CHAT (não embedding/reranker) na mesma DeepInfra/mesma chave
+    # global — usado só pra completar a descrição de itens lendo o PDF do
+    # edital (ver app/itens_pdf.py). Testado contra a API real: DeepSeek-V3-0324
     # tinha latência MUITO inconsistente (de 1s a >180s/timeout, mesmo em
     # prompts pequenos) — Llama-3.3-70B-Instruct-Turbo, testado repetidas
     # vezes com o mesmo edital/itens, ficou sempre entre 17-64s e sempre
