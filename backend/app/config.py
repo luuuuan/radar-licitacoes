@@ -128,10 +128,13 @@ class Settings(BaseSettings):
     DEEPINFRA_MODELO_EMBEDDING: str = "BAAI/bge-m3"
     # Modelo de CHAT (não embedding) na mesma DeepInfra/mesma chave global —
     # usado só pra completar a descrição de itens lendo o PDF do edital
-    # (ver app/itens_pdf.py). V3-0324 é o checkpoint atualizado do V3 (mais
-    # barato, suporta modo JSON nativo). Ajustar o nome do modelo se a
-    # DeepInfra descontinuar/renomear.
-    DEEPINFRA_MODELO_CHAT: str = "deepseek-ai/DeepSeek-V3-0324"
+    # (ver app/itens_pdf.py). Testado contra a API real: DeepSeek-V3-0324
+    # tinha latência MUITO inconsistente (de 1s a >180s/timeout, mesmo em
+    # prompts pequenos) — Llama-3.3-70B-Instruct-Turbo, testado repetidas
+    # vezes com o mesmo edital/itens, ficou sempre entre 17-64s e sempre
+    # achou os itens certos. Mais barato também. Ajustar o nome do modelo
+    # se a DeepInfra descontinuar/renomear.
+    DEEPINFRA_MODELO_CHAT: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
     # OCR de PDF escaneado (Tesseract, grátis e local). Pesado: limites apertados.
     # Requer no servidor os pacotes de sistema 'tesseract-ocr', 'tesseract-ocr-por'

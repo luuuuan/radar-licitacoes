@@ -20,11 +20,13 @@ enriquecer ItemEdital.descricao, nunca uma dependência obrigatória.
 from __future__ import annotations
 import json
 import logging
+import time
 
 import requests
 
 from .config import settings
 from .analise_edital import _baixar_texto_pdf
+from .matching.embeddings import embeddings_deepinfra, cosseno
 
 log = logging.getLogger("ia.itens_pdf")
 
@@ -50,27 +52,52 @@ def ia_disponivel(api_key: str | None = None) -> bool:
     return bool(api_key)
 
 
-def _gerar(prompt: str, api_key: str, timeout: int = 90) -> tuple[str | None, str]:
+def _gerar(prompt: str, api_key: str, timeout: int = 120, tentativas: int = 2) -> tuple[str | None, str]:
+    # response_format json_object testado contra a API real e descartado: em
+    # vez de forçar JSON válido, fazia o modelo (DeepSeek-V3-0324) devolver
+    # respostas curtas e sem sentido tipo "[1.1]" com prompts grandes — o
+    # texto livre (com fallback de extração de chaves em _parse_json) saiu
+    # bem mais confiável nos mesmos testes.
+    #
+    # Retentativa (mesmo padrão de analise_edital.py._gerar): testes reais
+    # contra a API mostraram latência bem inconsistente pra prompts grandes
+    # (o MESMO prompt, sem mudar nada, ora respondeu em ~25s ora estourou
+    # 180s) — parece instabilidade do lado da DeepInfra, não do tamanho do
+    # prompt em si. Uma segunda tentativa reduz bastante a chance do usuário
+    # cair direto num erro por causa de uma lentidão passageira.
     body = {
         "model": settings.DEEPINFRA_MODELO_CHAT,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "response_format": {"type": "json_object"},
     }
-    try:
-        r = requests.post(_DEEPINFRA_CHAT_URL, json=body, timeout=timeout,
-                          headers={"Authorization": f"Bearer {api_key}",
-                                   "Content-Type": "application/json"})
-    except requests.RequestException as e:
-        return None, f"rede:{e}"
-    if r.status_code != 200:
-        log.warning("DeepInfra chat HTTP %s: %s", r.status_code, r.text[:200])
-        return None, f"http_{r.status_code}"
-    try:
-        dados = r.json()
-        return dados["choices"][0]["message"]["content"], "ok"
-    except (ValueError, KeyError, IndexError):
-        return None, "sem_resposta"
+    ultimo_erro = "sem_resposta"
+    for tentativa in range(1, max(1, tentativas) + 1):
+        try:
+            r = requests.post(_DEEPINFRA_CHAT_URL, json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {api_key}",
+                                       "Content-Type": "application/json"})
+        except requests.RequestException as e:
+            ultimo_erro = f"rede:{e}"
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code in (500, 502, 503, 504):
+            ultimo_erro = f"http_{r.status_code}"
+            log.warning("DeepInfra chat HTTP %s (tentativa %d/%d): %s",
+                       r.status_code, tentativa, tentativas, r.text[:200])
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code != 200:
+            log.warning("DeepInfra chat HTTP %s: %s", r.status_code, r.text[:200])
+            return None, f"http_{r.status_code}"
+        try:
+            dados = r.json()
+            return dados["choices"][0]["message"]["content"], "ok"
+        except (ValueError, KeyError, IndexError):
+            return None, "sem_resposta"
 
 
 def _parse_json(txt: str):
@@ -85,6 +112,47 @@ def _parse_json(txt: str):
             except Exception:
                 return None
     return None
+
+
+_CHUNK_TAM = 2500       # ~1 página de edital
+_CHUNK_TOP_K = 2         # nº de trechos mais parecidos considerados por item
+_JANELA_MAX_CHARS = 80000  # orçamento final mandado pro modelo de CHAT
+
+
+def _selecionar_trechos_relevantes(texto: str, itens_atuais: list[dict], api_key: str) -> str:
+    """Em vez de mandar o documento inteiro pro modelo de chat ler (lento e
+    pouco confiável em editais grandes — testado contra a API real: o MESMO
+    prompt de ~150k chars ora respondia em segundos, ora estourava o
+    timeout, provavelmente pelo tanto de texto jurídico/boilerplate ANTES
+    da tabela de itens), usa embeddings (BGE-M3/DeepInfra, já usados no
+    motor de matching — ver matching/embeddings.py) pra achar só os
+    trechos do documento mais parecidos com cada item. Validado num teste
+    real: achou o chunk certo (contendo a descrição completa do item) em
+    ~3s, contra 20-240s (e às vezes timeout) mandando o texto inteiro."""
+    partes = [texto[i:i + _CHUNK_TAM] for i in range(0, len(texto), _CHUNK_TAM)]
+    if len(partes) <= 2:
+        return texto[:_JANELA_MAX_CHARS]
+
+    consultas = [f"item {it['numero']}: {it.get('descricao') or ''}" for it in itens_atuais]
+    vetores = embeddings_deepinfra(partes + consultas, api_key=api_key)
+    vetores_partes, vetores_consultas = vetores[:len(partes)], vetores[len(partes):]
+    if not any(vetores_partes):
+        # embeddings indisponíveis (cota/erro) — cai pro corte simples do
+        # início do documento, mesmo comportamento de antes dessa mudança.
+        return texto[:_JANELA_MAX_CHARS]
+
+    indices: set[int] = set()
+    for vq in vetores_consultas:
+        if not vq:
+            continue
+        melhores = sorted(range(len(partes)),
+                          key=lambda i: cosseno(vq, vetores_partes[i]) if vetores_partes[i] else -1,
+                          reverse=True)[:_CHUNK_TOP_K]
+        for idx in melhores:
+            indices.update((idx - 1, idx, idx + 1))   # vizinhos: item pode cruzar a borda do chunk
+    ordenados = sorted(i for i in indices if 0 <= i < len(partes))
+    trecho = "\n\n".join(partes[i] for i in ordenados)
+    return trecho[:_JANELA_MAX_CHARS]
 
 
 def extrair_itens_completos(objeto: str, arquivos: list[dict], itens_atuais: list[dict],
@@ -113,23 +181,27 @@ def extrair_itens_completos(objeto: str, arquivos: list[dict], itens_atuais: lis
         return 2
     candidatos = sorted(arquivos, key=_prioridade)
 
-    # janela de contexto bem maior que a usada pro resumo geral do edital
-    # (Gemini, 24000 chars): a tabela de itens pode estar em qualquer página
-    # de documentos longos, e o custo por token aqui tende a ser bem menor.
-    MAX_TOTAL = 70000
+    # Extrai bem mais texto bruto do que antes — a tabela de itens pode
+    # estar em qualquer página de documentos longos (achado real: só
+    # aparecia a partir do char ~74000 de um edital de 59 páginas). Esse
+    # texto NÃO vai inteiro pro modelo de chat: _selecionar_trechos_relevantes
+    # usa embeddings pra achar só os trechos relevantes antes disso (ver lá
+    # o porquê — mandar tudo pro chat se mostrou lento/instável).
+    MAX_BRUTO = 400000
     partes = []
     for a in candidatos[:5]:
-        if sum(len(p) for p in partes) >= MAX_TOTAL:
+        if sum(len(p) for p in partes) >= MAX_BRUTO:
             break
         if not a.get("url"):
             continue
-        t = _baixar_texto_pdf(a["url"], max_paginas=80, max_chars=MAX_TOTAL)
+        t = _baixar_texto_pdf(a["url"], max_paginas=200, max_chars=MAX_BRUTO)
         if len(t) > 300:
             partes.append(t)
-    texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
-    if len(texto) < 300:
+    texto_bruto = "\n\n---\n\n".join(partes)[:MAX_BRUTO]
+    if len(texto_bruto) < 300:
         return {"status": "sem_texto"}
 
+    texto = _selecionar_trechos_relevantes(texto_bruto, itens_atuais, api_key)
     itens_ref = "\n".join(f"- item {it['numero']}: {it.get('descricao') or ''}" for it in itens_atuais)
     prompt = _PROMPT.format(itens_referencia=itens_ref[:8000], texto=texto)
     txt, st = _gerar(prompt, api_key=api_key)

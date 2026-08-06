@@ -10,7 +10,10 @@ from unittest.mock import patch
 from app import itens_pdf as ip
 
 
-def test_extrair_sem_chave_retorna_sem_ia():
+def test_extrair_sem_chave_retorna_sem_ia(monkeypatch):
+    # força "sem chave" independente do .env local (dev pode ter uma chave
+    # real configurada pra testar manualmente contra a API de verdade)
+    monkeypatch.setattr(ip.settings, "DEEPINFRA_API_KEY", "")
     r = ip.extrair_itens_completos("Objeto", [{"titulo": "Edital", "url": "http://x"}],
                                    [{"numero": 1, "descricao": "curta"}], api_key=None)
     assert r == {"status": "sem_ia"}

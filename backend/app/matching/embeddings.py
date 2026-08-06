@@ -1,14 +1,18 @@
 """
-Similaridade semântica via Gemini embeddings (free tier).
+Similaridade semântica via embeddings (Gemini e, opcionalmente, BGE-M3/DeepInfra).
 
 Gera um "vetor de significado" para cada texto e compara por cosseno. Pega
 sinônimos e linguagem de edital que o casamento por texto puro (TF-IDF) erra.
 
-É OPCIONAL: só liga se houver GEMINI_API_KEY e a chave estiver ativa. Sem isso,
-o sistema funciona normalmente apenas com o matching textual.
+Dois provedores independentes, ambos OPCIONAIS:
+- Gemini (`embeddings()`): BYOK — só liga se o usuário tiver a própria
+  GEMINI_API_KEY. Sem isso, o sistema funciona normalmente só com o textual.
+- BGE-M3 via DeepInfra (`embeddings_deepinfra()`): chave GLOBAL
+  (DEEPINFRA_API_KEY, paga pelo operador) — camada extra que vale pra todos os
+  usuários, mesmo sem chave Gemini pessoal.
 
-Proteção de cota (free tier): a API tem limite diário. Quando estoura (HTTP 429),
-um "disjuntor" pausa as chamadas por algumas horas (até a cota resetar), usando
+Proteção de cota: a API tem limite. Quando estoura (HTTP 429), um "disjuntor"
+pausa as chamadas daquela chave por algumas horas (até a cota resetar), usando
 só o cache em memória, e registra UM aviso em vez de inundar o log.
 """
 from __future__ import annotations
@@ -24,8 +28,12 @@ from ..config import settings
 log = logging.getLogger("ia.embeddings")
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-# cache simples em memória: texto -> vetor (evita re-embeddar o mesmo texto)
+_DEEPINFRA_URL = "https://api.deepinfra.com/v1/openai/embeddings"
+# cache simples em memória: texto -> vetor (evita re-embeddar o mesmo texto).
+# Separado por provedor porque vetores de modelos diferentes não são
+# comparáveis entre si (dimensão/espaço semântico distintos).
 _cache: dict[str, list[float]] = {}
+_cache_deepinfra: dict[str, list[float]] = {}
 
 # disjuntor: por CHAVE (cada usuário tem sua própria cota no free tier).
 # epoch (segundos) até quando as chamadas daquela chave ficam pausadas.
@@ -133,3 +141,49 @@ def embeddings(textos: list[str], timeout: int = 30,
             return [_cache.get(t) for t in textos]
 
     return [_cache.get(t) for t in textos]
+
+
+def embeddings_deepinfra(textos: list[str], timeout: int = 30,
+                         api_key: str | None = None) -> list[list[float] | None]:
+    """Gera embeddings via BGE-M3 na DeepInfra (endpoint compatível com a API
+    de embeddings da OpenAI). Camada EXTRA opcional, independente da IA do
+    Gemini: a chave é GLOBAL (paga pelo operador do app), por isso cai para
+    `settings.DEEPINFRA_API_KEY` quando não vier explícita — ao contrário do
+    Gemini, não é bring-your-own-key por usuário. Mesmo formato de retorno,
+    cache e disjuntor de cota da função `embeddings()`."""
+    chave = api_key or settings.DEEPINFRA_API_KEY
+    if not chave:
+        return [None] * len(textos)
+
+    if ia_bloqueada(chave):
+        return [_cache_deepinfra.get(t) for t in textos]
+
+    faltando = [t for t in textos if t and t not in _cache_deepinfra]
+    faltando = list(dict.fromkeys(faltando))
+
+    if faltando:
+        body = {
+            "input": faltando,
+            "model": settings.DEEPINFRA_MODELO_EMBEDDING,
+            "encoding_format": "float",
+        }
+        try:
+            r = requests.post(_DEEPINFRA_URL, json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {chave}",
+                                       "Content-Type": "application/json"})
+            if r.status_code == 429:
+                _pausar(chave, _COOLDOWN_429, "cota/limite de taxa atingido")
+                return [_cache_deepinfra.get(t) for t in textos]
+            if r.status_code != 200:
+                _pausar(chave, _COOLDOWN_ERRO, f"HTTP {r.status_code}")
+                return [_cache_deepinfra.get(t) for t in textos]
+            dados = r.json().get("data", [])
+            for t, item in zip(faltando, dados):
+                vec = item.get("embedding") if isinstance(item, dict) else None
+                if vec:
+                    _cache_deepinfra[t] = vec
+        except (requests.RequestException, ValueError) as e:
+            _pausar(chave, _COOLDOWN_ERRO, f"falha de rede ({type(e).__name__})")
+            return [_cache_deepinfra.get(t) for t in textos]
+
+    return [_cache_deepinfra.get(t) for t in textos]
