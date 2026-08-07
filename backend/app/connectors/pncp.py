@@ -257,6 +257,7 @@ class PNCPConnector(BaseConnector):
                 catalogo_codigo=str(it.get("codigoItemCatalogo") or it.get("catalogoCodigoItem") or ""),
                 quantidade=it.get("quantidade"),
                 valor_unitario=it.get("valorUnitarioEstimado"),
+                unidade_medida=it.get("unidadeMedida"),
             ))
         time.sleep(self.delay)
         return itens

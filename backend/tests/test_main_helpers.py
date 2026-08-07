@@ -3,8 +3,10 @@ Testes de funções puras de main.py usadas tanto por /detalhe quanto pela
 comparação de catálogo por IA (custo/margem, validação técnica). Rode com:
 cd backend && pytest
 """
+import pytest
+
 from app.models import Produto
-from app.main import _custo_e_margem, _validacao_tecnica_json
+from app.main import _custo_e_margem, _qtd_embalagem_pncp, _validacao_tecnica_json
 
 
 def _produto(**kwargs):
@@ -42,6 +44,46 @@ def test_custo_e_margem_sem_dado_suficiente_retorna_none():
 def test_custo_e_margem_marca_alerta_unidade_quando_absurda():
     p = _produto(preco_custo=1000.0, itens_por_unidade=None)
     r = _custo_e_margem(1.0, p)
+    assert r["alerta_unidade"] is True
+
+
+def test_qtd_embalagem_pncp_extrai_numero():
+    assert _qtd_embalagem_pncp("Embalagem 500 FL") == 500
+    assert _qtd_embalagem_pncp("Unidade") is None
+    assert _qtd_embalagem_pncp(None) is None
+    assert _qtd_embalagem_pncp("Caixa com 12 UN") == 12
+
+
+def test_custo_e_margem_nao_divide_quando_orgao_ja_cota_por_embalagem():
+    """Caso real de produção: edital de papel A4 cotava R$24,50 por RESMA
+    de 500 folhas (unidadeMedida="Embalagem 500 FL" do PNCP), igual à
+    embalagem do produto do catálogo (itens_por_unidade=500, R$29,57 por
+    resma). Dividir o custo do catálogo por 500 comparava preço por resma
+    com preço por folha — "margem" de 99,8% fictícia, quando na real era
+    prejuízo (24,50 < 29,57 por resma)."""
+    p = _produto(preco_custo=29.57, itens_por_unidade=500)
+    r = _custo_e_margem(24.50, p, unidade_medida_item="Embalagem 500 FL")
+    assert r["custo_comparavel"] == 29.57
+    assert r["margem"] == pytest.approx(24.50 - 29.57, abs=1e-2)
+    assert r["margem_pct"] < 0   # é prejuízo, não 99,8% de lucro
+    assert r["alerta_unidade"] is False
+
+
+def test_custo_e_margem_sem_unidade_medida_mantem_comportamento_anterior():
+    """Sem unidadeMedida (item coletado antes desse campo existir, ou fonte
+    que não fornece), continua dividindo como sempre — mesmo comportamento
+    de test_custo_e_margem_divide_pela_embalagem, só que passando o novo
+    parâmetro como None explicitamente."""
+    p = _produto(preco_custo=25.0, itens_por_unidade=500)
+    r = _custo_e_margem(0.10, p, unidade_medida_item=None)
+    assert r["custo_comparavel"] == 0.05
+
+
+def test_custo_e_margem_embalagens_de_tamanhos_diferentes_marca_alerta():
+    """Órgão cota por caixa de 12, produto vendido em pacote de 24 — nem
+    dividir nem comparar direto é confiável; sinaliza pro usuário conferir."""
+    p = _produto(preco_custo=48.0, itens_por_unidade=24)
+    r = _custo_e_margem(2.50, p, unidade_medida_item="Caixa com 12 UN")
     assert r["alerta_unidade"] is True
 
 
