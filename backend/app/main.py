@@ -1767,8 +1767,23 @@ def _rodar_backfill_unidade_bg():
     import logging
     db = SessionLocal()
     try:
+        # mesmo filtro de "edital relevante" usado em _gerar_matches_usuario:
+        # ativo (prazo em aberto) OU encerrado mas com algum usuário
+        # acompanhando (proposta enviada/ganho/perdido). Sem isso, o backfill
+        # perdia tempo com o histórico inteiro (dezenas de milhares de
+        # editais encerrados que ninguém mais vê) em vez de só os que ainda
+        # importam pro cálculo de margem de alguém.
+        hoje = date.today()
+        sub_acompanhados = select(Match.edital_id).where(
+            Match.status.in_(("proposta_enviada", "ganho", "perdido")))
         eds = db.execute(
-            select(Edital).where(Edital.itens.any(ItemEdital.unidade_medida.is_(None)))
+            select(Edital)
+            .where(Edital.itens.any(ItemEdital.unidade_medida.is_(None)))
+            .where(
+                (Edital.data_encerramento.is_(None))
+                | (Edital.data_encerramento >= hoje)
+                | (Edital.id.in_(sub_acompanhados))
+            )
         ).scalars().unique().all()
         _backfill_unidade_status.update(
             {"rodando": True, "feito": 0, "total": len(eds), "itens_atualizados": 0, "erro": None})
