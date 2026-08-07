@@ -1218,6 +1218,21 @@ def _validacao_tecnica_json(descricao_item: str, produto: Produto, score_semanti
     }
 
 
+@app.get("/api/admin/debug-colunas")
+def debug_colunas(tabela: str, user: Usuario = Depends(_auth.get_current_user),
+                  db: Session = Depends(get_session)):
+    """Diagnóstico temporário, só leitura (SQL bruto via information_schema,
+    não toca no ORM/modelo) — usado pra confirmar se uma migração de coluna
+    nova realmente aplicou no banco de produção antes de reativar código que
+    depende dela."""
+    from sqlalchemy import text
+    linhas = db.execute(text(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = :t ORDER BY ordinal_position"
+    ), {"t": tabela}).all()
+    return {"tabela": tabela, "colunas": [{"nome": r[0], "tipo": r[1]} for r in linhas]}
+
+
 @app.get("/api/editais/{edital_id}/detalhe")
 def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
