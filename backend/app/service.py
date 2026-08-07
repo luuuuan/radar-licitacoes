@@ -79,7 +79,7 @@ def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
             numero=it.numero, descricao=it.descricao,
             material_ou_servico=it.material_ou_servico, ncm=it.ncm,
             catalogo_codigo=it.catalogo_codigo, quantidade=it.quantidade,
-            valor_unitario=it.valor_unitario, unidade_medida=it.unidade_medida,
+            valor_unitario=it.valor_unitario,
         ))
     db.add(ed)
     db.flush()

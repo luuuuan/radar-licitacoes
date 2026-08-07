@@ -99,9 +99,6 @@ for _c in (("unidade_venda", "VARCHAR(20)"), ("itens_por_unidade", "FLOAT"),
            ("marca", "VARCHAR(160)"), ("modelo", "VARCHAR(160)")):
     if _c not in _COLUNAS_NOVAS["produtos"]:
         _COLUNAS_NOVAS["produtos"].append(_c)
-_COLUNAS_NOVAS.setdefault("itens_edital", [])
-if ("unidade_medida", "VARCHAR(60)") not in _COLUNAS_NOVAS["itens_edital"]:
-    _COLUNAS_NOVAS["itens_edital"].append(("unidade_medida", "VARCHAR(60)"))
 
 
 def _migrar_colunas_novas() -> None:

@@ -22,7 +22,6 @@ import base64
 import re
 import secrets
 import threading
-import time
 import requests
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
@@ -1181,52 +1180,20 @@ def _produto_json(p: Produto) -> dict:
     }
 
 
-def _qtd_embalagem_pncp(unidade_medida: str | None) -> int | None:
-    """Extrai a quantidade de uma embalagem do texto `unidadeMedida` que o
-    PNCP manda por item (ex.: "Embalagem 500 FL" -> 500). None quando não
-    há número (ex.: "Unidade", "Caixa" sem quantidade, ou campo ausente —
-    comum em itens coletados antes desse campo existir)."""
-    if not unidade_medida:
-        return None
-    m = re.search(r"\d+", unidade_medida)
-    return int(m.group()) if m else None
-
-
-def _custo_e_margem(valor_unitario: float | None, produto: Produto,
-                    unidade_medida_item: str | None = None) -> dict:
+def _custo_e_margem(valor_unitario: float | None, produto: Produto) -> dict:
     """Custo/margem de UM produto contra o valor unitário que o órgão paga
     por um item — mesmo cálculo usado em /detalhe, reaproveitado onde quer
-    que a gente precise comparar preço (ex.: sugestão da IA de catálogo).
-
-    Achado real (edital de papel A4): o órgão às vezes já cota o preço na
-    MESMA embalagem que o produto do catálogo usa (ex.: R$24,50 por RESMA
-    de 500 folhas, igual ao produto vendido em resmas de 500) — dividir o
-    custo do catálogo por itens_por_unidade nesse caso comparava preço por
-    resma com preço por folha, gerando uma "margem" de 99%+ fictícia (era na
-    verdade prejuízo). O PNCP manda o texto da unidade por item
-    (`unidadeMedida`, ex.: "Embalagem 500 FL") — quando o número bate com
-    itens_por_unidade do produto, o valor já está na mesma base, não divide
-    de novo."""
+    que a gente precise comparar preço (ex.: sugestão da IA de catálogo)."""
     if valor_unitario is None or produto.preco_custo is None:
         return {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
+    # custo na MESMA base do órgão: se o produto é vendido em embalagem
+    # (ex.: resma = 500 folhas), divide o custo pela qtd por unidade.
     por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
-    qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
-    embalagem_incompativel = False
-    if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
-        # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
-        custo_comparavel = round(produto.preco_custo, 4)
-    else:
-        if por_unid > 1 and qtd_embalagem_item is not None:
-            # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
-            # produto vendido em pacote de 24) — não dá pra comparar direto
-            # com confiança nenhuma das duas formas.
-            embalagem_incompativel = True
-        custo_comparavel = round(produto.preco_custo / por_unid, 4)
+    custo_comparavel = round(produto.preco_custo / por_unid, 4)
     margem = round(valor_unitario - custo_comparavel, 4)
     margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
     # se a margem ainda é absurda, provavelmente as unidades não batem
-    alerta_unidade = embalagem_incompativel or (
-        margem_pct is not None and (margem_pct < -300 or margem_pct > 300))
+    alerta_unidade = margem_pct is not None and (margem_pct < -300 or margem_pct > 300)
     return {"margem": margem, "margem_pct": margem_pct, "custo_comparavel": custo_comparavel,
            "alerta_unidade": alerta_unidade}
 
@@ -1302,7 +1269,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
         validacao_tecnica = None
         if compativel:
-            margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida)
+            margem_dados = _custo_e_margem(it.valor_unitario, prod)
             # só reporta validação técnica quando havia um score por item
             # disponível — senão fica sem opinião, em vez de inventar um
             # "Atende" sem nenhuma checagem por trás (_validacao_tecnica_json
@@ -1685,102 +1652,6 @@ def _listar_arquivos_pncp(ed: Edital) -> dict:
             "arquivos": arquivos, "portal": ed.link}
 
 
-def _backfill_unidade_medida(ed: Edital) -> int:
-    """Busca no PNCP a unidadeMedida de cada item do edital e preenche nos
-    que ainda estão sem (achado real: esse campo não era capturado antes —
-    ver _custo_e_margem — causando cálculo de margem errado quando o órgão
-    já cota o preço na mesma embalagem do produto do catálogo). Idempotente
-    (só toca item com unidade_medida None) e best-effort: falha de rede/PNCP
-    não quebra, só não atualiza nada nesse edital. Retorna quantos itens
-    foram atualizados — NÃO comita, quem chama decide quando."""
-    ref = _ref_pncp(ed)
-    if not ref:
-        return 0
-    cnpj, ano, seq = ref
-    base = settings.PNCP_ITENS_BASE_URL.rstrip("/")
-    url = f"{base}/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens"
-    try:
-        r = requests.get(url, params={"pagina": 1, "tamanhoPagina": 100}, timeout=30,
-                         headers={"Accept": "application/json", "User-Agent": "RadarLicitacoes/1.0"})
-    except requests.RequestException:
-        return 0
-    if r.status_code != 200:
-        return 0
-    try:
-        dados = r.json()
-    except ValueError:
-        return 0
-    lista = dados if isinstance(dados, list) else (dados.get("data") or [])
-    unidades_por_numero = {it.get("numeroItem"): it.get("unidadeMedida")
-                           for it in lista if isinstance(it, dict)}
-    atualizados = 0
-    for item in ed.itens:
-        if item.unidade_medida is not None:
-            continue
-        nova = unidades_por_numero.get(item.numero)
-        if nova:
-            item.unidade_medida = nova
-            atualizados += 1
-    return atualizados
-
-
-_backfill_unidade_status: dict = {"rodando": False, "feito": 0, "total": 0,
-                                  "itens_atualizados": 0, "erro": None}
-
-
-def _rodar_backfill_unidade_bg():
-    import logging
-    db = SessionLocal()
-    try:
-        eds = db.execute(
-            select(Edital).where(Edital.itens.any(ItemEdital.unidade_medida.is_(None)))
-        ).scalars().unique().all()
-        _backfill_unidade_status.update(
-            {"rodando": True, "feito": 0, "total": len(eds), "itens_atualizados": 0, "erro": None})
-        for i, ed in enumerate(eds):
-            n = _backfill_unidade_medida(ed)
-            _backfill_unidade_status["itens_atualizados"] += n
-            _backfill_unidade_status["feito"] = i + 1
-            if (i + 1) % 50 == 0:
-                db.commit()
-            time.sleep(settings.PNCP_DELAY)
-        db.commit()
-    except Exception as e:
-        logging.getLogger("backfill_unidade").exception("Erro no backfill de unidade_medida")
-        _backfill_unidade_status["erro"] = str(e)
-    finally:
-        _backfill_unidade_status["rodando"] = False
-        db.close()
-
-
-@app.post("/api/admin/backfill-unidade-medida")
-def backfill_unidade_medida_endpoint(bg: BackgroundTasks, edital_id: int | None = Query(None),
-                                     user: Usuario = Depends(_auth.get_current_user),
-                                     db: Session = Depends(get_session)):
-    """Busca no PNCP a unidadeMedida de itens já coletados antes desse campo
-    existir (ver _custo_e_margem). Com edital_id: roda na hora, só nesse
-    edital (rápido). Sem edital_id: roda em segundo plano pra TODOS os
-    editais com algum item sem essa informação (1 chamada ao PNCP por
-    edital, pode demorar bastante numa base grande — acompanhar em
-    /api/admin/backfill-unidade-medida/status)."""
-    if edital_id is not None:
-        ed = db.get(Edital, edital_id)
-        if not ed:
-            raise HTTPException(404, "Edital não encontrado")
-        n = _backfill_unidade_medida(ed)
-        db.commit()
-        return {"editais_atualizados": 1 if n else 0, "itens_atualizados": n}
-    if _backfill_unidade_status["rodando"]:
-        return {"ok": False, "mensagem": "Já tem um backfill rodando."}
-    bg.add_task(_rodar_backfill_unidade_bg)
-    return {"ok": True, "mensagem": "Backfill iniciado em segundo plano."}
-
-
-@app.get("/api/admin/backfill-unidade-medida/status")
-def backfill_unidade_medida_status(user: Usuario = Depends(_auth.get_current_user)):
-    return _backfill_unidade_status
-
-
 @app.get("/api/editais/{edital_id}/documentos")
 def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                       db: Session = Depends(get_session)):
@@ -1928,7 +1799,7 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
                 "produto_id": p.id, "produto": _produto_json(p),
                 "justificativa": it["justificativa"],
                 "validacao_tecnica": _validacao_tecnica_json(ie.descricao, p, 1.0),
-                **_custo_e_margem(ie.valor_unitario, p, ie.unidade_medida),
+                **_custo_e_margem(ie.valor_unitario, p),
             })
         saida["itens"] = enriquecidos
     resultado["comparacao_catalogo_ia"] = saida

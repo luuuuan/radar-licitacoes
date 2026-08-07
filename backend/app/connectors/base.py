@@ -13,7 +13,6 @@ class ItemColetado:
     catalogo_codigo: str | None = None
     quantidade: float | None = None
     valor_unitario: float | None = None
-    unidade_medida: str | None = None
 
 
 @dataclass

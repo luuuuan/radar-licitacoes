@@ -152,10 +152,6 @@ class ItemEdital(Base):
     catalogo_codigo: Mapped[str | None] = mapped_column(String(40), nullable=True)  # CATMAT/CATSER
     quantidade: Mapped[float | None] = mapped_column(Float, nullable=True)
     valor_unitario: Mapped[float | None] = mapped_column(Float, nullable=True)
-    # texto livre do PNCP (ex.: "Embalagem 500 FL", "Unidade") — usado pra
-    # saber se valor_unitario já vem na mesma embalagem do produto do
-    # catálogo (ver _custo_e_margem em main.py) antes de dividir o custo.
-    unidade_medida: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
     edital: Mapped["Edital"] = relationship(back_populates="itens")
 
