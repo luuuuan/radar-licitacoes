@@ -2470,7 +2470,16 @@ function _radarCarregandoHTML(texto){
   return `<div class="radar-carregando"><div class="radar pequeno"></div><div class="t">${esc(texto)}</div></div>`;
 }
 
+// Guarda o quanto a página tinha rolado ANTES de entrar no edital — sem
+// isso, "Voltar" perdia a posição (achado real): a página do edital costuma
+// ser mais curta que a lista rolada, e o navegador CLAMPA o scroll pro novo
+// tamanho enquanto ela está visível; simplesmente reexibir a lista depois
+// não devolve a posição sozinha, porque o valor já foi perdido nesse meio
+// tempo, não só escondido.
+let _scrollAoAbrirEdital = 0;
+
 function abrirPaginaEdital(editalId, aba='itens'){
+  _scrollAoAbrirEdital = window.scrollY;
   history.pushState({view:'edital', editalId}, '', '/edital/'+editalId);
   _renderPaginaEdital(editalId, aba);
 }
@@ -2482,6 +2491,12 @@ function abrirPaginaEdital(editalId, aba='itens'){
 function voltarDoEdital(){
   history.pushState({view:'dashboard'}, '', '/');
   _fecharPaginaEdital();
+  // requestAnimationFrame, não direto: o navegador só termina o layout da
+  // lista (agora visível de novo, alta) depois desse ponto — chamar
+  // scrollTo() na mesma tick via classList.remove('hidden') ainda vê a
+  // página com a altura antiga (curta) e CLAMPA a posição pra baixo do
+  // valor salvo (achado real: sem isso, "Voltar" sempre ia pro topo).
+  requestAnimationFrame(() => window.scrollTo(0, _scrollAoAbrirEdital));
 }
 function _fecharPaginaEdital(){
   $('#t-edital').classList.add('hidden');
