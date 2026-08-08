@@ -66,7 +66,10 @@ class Settings(BaseSettings):
     # Calibrado com o score do RERANKER (Qwen3-Reranker via DeepInfra, ver
     # matching/engine.py) — testes reais mostraram matches genuínos sempre
     # >=0.89 (chegando a 0.9999) e falsos positivos (ex.: mesmo código fiscal
-    # amplo, produtos sem relação nenhuma) sempre <=0.014. Ainda é um chute
+    # amplo, produtos sem relação nenhuma) sempre <=0.014. Recalibração
+    # reconfirmada em ago/2026 na troca pro modelo 4B + instrução no prompt
+    # (ver DEEPINFRA_MODELO_RERANKER): matches genuínos continuaram >=0.9 nos
+    # casos auditados, sem precisar mexer nesses limiares. Ainda é um chute
     # inicial (poucos dados reais até agora) — recalibrar com produção
     # depois, mesmo espírito de quando esses limiares foram criados.
     LIMIAR_ITEM_ALTA: float = 0.85
@@ -133,7 +136,16 @@ class Settings(BaseSettings):
     # real, separa com muito mais clareza match genuíno (score ~0.9-1.0) de
     # coincidência textual/código fiscal amplo sem relação real (~0.0-0.01)
     # do que qualquer heurística ou cosseno de embeddings conseguia.
-    DEEPINFRA_MODELO_RERANKER: str = "Qwen/Qwen3-Reranker-0.6B"
+    # 4B (não o 0.6B menor/mais barato) — achado real em auditoria de
+    # produção (ago/2026): o 0.6B dava "alta" (automático) pra pares sem
+    # relação real quando o catálogo não tinha nada equivalente (remédio
+    # batendo com produto de limpeza, fralda com copo, etc). Teste A/B
+    # contra a API real (9 casos graves): 0.6B só corrigiu 3/9, 4B corrigiu
+    # 9/9 — empatado com o 8B, que custa o dobro sem ganho adicional medido.
+    # Ver `MatchingEngine._INSTRUCAO_RERANKER` em matching/engine.py — a
+    # instrução no prompt é parte necessária dessa correção, não só o
+    # tamanho do modelo (0.6B + instrução ainda deixava passar 6 dos 9).
+    DEEPINFRA_MODELO_RERANKER: str = "Qwen/Qwen3-Reranker-4B"
     # Modelo de CHAT (não embedding/reranker) na mesma DeepInfra/mesma chave
     # global — usado só pra completar a descrição de itens lendo o PDF do
     # edital (ver app/itens_pdf.py). Testado contra a API real: DeepSeek-V3-0324

@@ -71,6 +71,29 @@ def test_reranker_encontra_match_semantico(monkeypatch):
     assert r.nivel in ("medio", "forte")
 
 
+def test_query_do_reranker_leva_instrucao_de_mesmo_produto(monkeypatch):
+    """Achado real em produção: sem uma instrução explícita, o reranker
+    tratava "mesma categoria" como "mesmo produto" quando o catálogo não
+    tinha nada genuinamente equivalente (remédio batendo com produto de
+    limpeza, fralda com copo descartável etc — ver comentário no topo de
+    engine.py). A instrução precisa ir em toda chamada, não só quando o
+    catálogo "parece" arriscado."""
+    catalogo = _catalogo()
+    queries_recebidas = []
+
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+        queries_recebidas.append(query)
+        return [0.0 for _ in documentos]
+    monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
+
+    eng = MatchingEngine(catalogo, usar_ia=True)
+    eng.avaliar("Material de escritório", [ItemEdt(1, "Grampeador de mesa")])
+
+    assert queries_recebidas
+    assert queries_recebidas[0].startswith(MatchingEngine._INSTRUCAO_RERANKER)
+    assert queries_recebidas[0].endswith("Grampeador de mesa")
+
+
 def test_item_irrelevante_nao_bate(monkeypatch):
     catalogo = _catalogo()
     eng = _engine(catalogo, monkeypatch, {})   # nada corrobora — tudo fica no default 0.0

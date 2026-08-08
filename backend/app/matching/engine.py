@@ -21,6 +21,21 @@ Estratégia:
    coincidência textual ou de código fiscal amplo (~0.0-0.01) do que
    qualquer heurística de palavra-chave ou cosseno de embeddings conseguia.
 
+   Achado real em auditoria de produção (ago/2026): mesmo SEM código fiscal
+   em comum, o reranker "0.6B" dava score alto (>=0.9, "alta"/automático)
+   pra pares sem relação real nenhuma sempre que o catálogo não tinha
+   nenhum produto genuinamente equivalente — ex.: remédio (Mesalazina,
+   Pregabalina) batendo com cola em spray/sabonete líquido; fralda batendo
+   com copo descartável; soro fisiológico batendo com água sanitária (o
+   MESMO padrão do caso Álcool Etílico acima, só que sem precisar de código
+   fiscal compartilhado pra acontecer). Teste A/B real contra a API
+   (9 casos graves reais) mostrou 2 mudanças que resolvem isso: (a) prefixar
+   a query com uma instrução explícita pedindo "mesmo item físico, não só
+   mesma categoria" (ver `_INSTRUCAO_RERANKER` abaixo); (b) subir de
+   Qwen3-Reranker-0.6B pra 4B — o 0.6B com a instrução ainda deixava passar
+   6 dos 9 casos graves, o 4B corrigiu os 9 (empatado com o 8B, que custa o
+   dobro sem ganho adicional nesses casos).
+
 Cada item do edital recebe o melhor score contra o catálogo. O edital recebe
 um score agregado e um nível: fraco | medio | forte.
 
@@ -125,6 +140,20 @@ class MatchingEngine:
 
     _MOTIVO_SEMELHANCA = "semelhança (IA)"
 
+    # Prefixo mandado junto com o texto do item em toda chamada ao reranker.
+    # Sem isso, o modelo trata "mesma categoria geral" como se fosse "mesmo
+    # produto" quando o catálogo não tem nada genuinamente equivalente (ver
+    # achado de produção no topo do arquivo) — testado A/B contra a API
+    # real: com essa instrução + Qwen3-Reranker-4B, os 9 casos graves reais
+    # auditados (remédio↔produto de limpeza, fralda↔copo, etc.) foram
+    # corretamente rejeitados, sem baixar o score dos matches genuínos
+    # (que continuaram >=0.9 nos casos conferidos).
+    _INSTRUCAO_RERANKER = (
+        "Instrução: considere relevante APENAS um produto que seja o MESMO "
+        "item físico do texto abaixo (mesmo tipo de objeto e uso prático), "
+        "NÃO um item apenas parecido ou da mesma categoria geral.\n\nItem: "
+    )
+
     def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False):
         self.produtos = produtos
         self._textos_prod = [p.texto() for p in produtos]
@@ -147,7 +176,8 @@ class MatchingEngine:
         "sem sinal disponível", nunca deixa a exceção subir."""
         if not self.usar_ia or not texto_item or not self._textos_prod:
             return None
-        return _rerank(texto_item, self._textos_prod, api_key=settings.DEEPINFRA_API_KEY)
+        return _rerank(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
+                       api_key=settings.DEEPINFRA_API_KEY)
 
     def _score_item(self, item: ItemEdt, texto_item: str | None = None,
                     scores: list[float] | None = None) -> tuple[float, ProdutoCat | None, str]:
