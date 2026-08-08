@@ -1197,6 +1197,7 @@ const ICN = {
   proposta:   _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/>'),
   relogio:    _svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
+  trocar:     _svg('<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>'),
 };
 // usado tanto na aba Itens/margem quanto no card da lista de editais
 const CORES_VALIDACAO = {'Atende':'var(--forte)', 'Atende parcialmente':'var(--medio)', 'Não atende':'var(--destructive)'};
@@ -2709,12 +2710,12 @@ function _corpoItensEdital(d){
       // começar com tudo marcado e o usuário ter que desmarcar item por
       // item entre dezenas de itens compatíveis).
       const naCotacao = _cotacaoSelecionados.has(String(it.numero));
-      bloco += `<div style="margin-top:8px">
+      bloco += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn ghost" id="cotacao-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(naCotacao)}" onclick="_toggleCotacaoDoItem('${esc(it.numero)}', this)">
           ${naCotacao ? ICN.check+' Na cotação (remover)' : '+ Adicionar na cotação'}
         </button>
-        <button class="btn ghost" style="margin-left:6px" onclick="abrirDetalheItem('${esc(it.numero)}')">${ICN.detalhe} Ver detalhes</button>
-        ${(it.sugestoes&&it.sugestoes.length)?`<button class="btn ghost" style="margin-left:6px" onclick="_toggleTrocarProduto('${esc(it.numero)}')">🔄 trocar produto</button>`:''}
+        <button class="btn ghost" onclick="abrirDetalheItem('${esc(it.numero)}')">${ICN.detalhe} Ver detalhes</button>
+        ${(it.sugestoes&&it.sugestoes.length)?`<button class="btn ghost" onclick="_toggleTrocarProduto('${esc(it.numero)}')">${ICN.trocar} trocar produto</button>`:''}
       </div>`;
       // código NCM/CATMAT exato não garante que é o MESMO produto físico —
       // por isso mesmo item de confiança alta pode ter o seletor pra trocar,
