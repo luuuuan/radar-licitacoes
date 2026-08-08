@@ -139,6 +139,40 @@ def test_so_digitos():
 
 
 # ---------------------------------------------------------------------------
+# Empate técnico entre os 2 melhores candidatos = ambíguo, mesmo com score
+# alto — caso real: item "GRAMPEADOR" bateu com "Grampo para Grampeador"
+# (score 1.0) em vez do grampeador de verdade no catálogo (score 0.999).
+# ---------------------------------------------------------------------------
+def test_top2_quase_empatados_vira_confianca_media_mesmo_com_score_alto(monkeypatch):
+    catalogo = [
+        ProdutoCat(id=196, descricao="Grampo para Grampeador 26/6 Galvanizado 2094 Maxprint"),
+        ProdutoCat(id=197, descricao="Grampeador Metal 20 Folhas MX-G20C 714465 Maxprint"),
+    ]
+    eng = _engine(catalogo, monkeypatch, {0: 1.0, 1: 0.999})
+    r = eng.avaliar("Material de escritório", [ItemEdt(
+        21, "GRAMPEADOR em metal, com mínimo 20cm de base para 20 folhas, "
+            "compatível com os formatos 26/6.")])
+    item = r.detalhe[0]
+    assert item["confianca"] == "media"
+    # continua mostrando o "vencedor" técnico como 1ª opção — só não confia
+    # cego nele; o usuário vê os dois e confirma manualmente qual é certo.
+    assert item["produto_id"] == 196
+    assert {c["produto_id"] for c in item["candidatos"]} == {196, 197}
+
+
+def test_score_alto_com_folga_do_2o_colocado_continua_confianca_alta(monkeypatch):
+    """A trava é só pra empate técnico — uma vitória clara (folga bem maior
+    que a margem) continua confiando automático, sem virar sugestão à toa."""
+    catalogo = [
+        ProdutoCat(id=1, descricao="Grampeador Metal 20 Folhas MX-G20C"),
+        ProdutoCat(id=2, descricao="Clips Galvanizado N4/0"),
+    ]
+    eng = _engine(catalogo, monkeypatch, {0: 0.98, 1: 0.3})
+    r = eng.avaliar("Material de escritório", [ItemEdt(1, "Grampeador de mesa 20 folhas")])
+    assert r.detalhe[0]["confianca"] == "alta"
+
+
+# ---------------------------------------------------------------------------
 # Corroboração de código exato pelo reranker — casos reais de produção que
 # motivaram a regra (código fiscal amplo não garante ser o MESMO produto).
 # ---------------------------------------------------------------------------

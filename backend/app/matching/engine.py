@@ -212,7 +212,25 @@ class MatchingEngine:
             # corroboração do reranker (ver _score_item) — sem corroboração
             # nenhuma, nem vira "vencedor" por código.
             codigo_exato = motivo.startswith("código ")
-            confianca = "alta" if (codigo_exato or sc >= settings.LIMIAR_ITEM_ALTA) else "media"
+            if codigo_exato:
+                confianca = "alta"
+            elif sc >= settings.LIMIAR_ITEM_ALTA:
+                # empate técnico com o 2º colocado = ambíguo mesmo com score
+                # alto (achado real: "Grampo para Grampeador" x "Grampeador"
+                # pontuaram 1.0 e 0.999 — a IA não tinha certeza de verdade,
+                # só um dos dois precisava ganhar por decimais). Sem código
+                # exato pra desempatar com um sinal diferente, é mais seguro
+                # pedir confirmação do que confiar cego numa margem mínima.
+                segundo_melhor = 0.0
+                if scores:
+                    for i_s, s in enumerate(scores):
+                        if prod is not None and self.produtos[i_s].id == prod.id:
+                            continue
+                        if s > segundo_melhor:
+                            segundo_melhor = s
+                confianca = "media" if (sc - segundo_melhor) < settings.MARGEM_AMBIGUA_ITEM else "alta"
+            else:
+                confianca = "media"
 
             candidatos: list[dict] = []
             if scores:

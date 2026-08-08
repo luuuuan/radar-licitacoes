@@ -2765,12 +2765,20 @@ function _corpoItensEdital(d){
     const opcoes = it.sugestoes.map(s=>
       `<option value="${s.produto.id}" ${s.produto.id===atualId?'selected':''}>${esc(s.produto.descricao)}${s.score!=null?` (score ${s.score})`:''}</option>`
     ).join('');
+    // "Cancelar" só faz sentido quando o seletor É um reveal opcional (o
+    // "trocar produto" de um item já resolvido) — tem pra onde fechar de
+    // volta. Na sugestão pendente (confiança média, sempre visível) não tem
+    // estado anterior nenhum pra voltar, então não mostra o botão.
+    const btnCancelar = escondido
+      ? `<button class="btn discreto" style="padding:4px 10px;font-size:12px" onclick="_toggleTrocarProduto('${esc(numero)}')">Cancelar</button>`
+      : '';
     return `<div id="sugestao-${esc(numero)}" style="margin-top:8px;display:${escondido?'none':'flex'};gap:6px;flex-wrap:wrap;align-items:center">
       <select id="sel-sugestao-${esc(numero)}" style="max-width:100%;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">
         <option value="">Nenhuma destas</option>
         ${opcoes}
       </select>
       <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="confirmarItemEdital('${esc(numero)}')">Confirmar</button>
+      ${btnCancelar}
     </div>`;
   }
   function _validacaoTecnicaHTML(vt){

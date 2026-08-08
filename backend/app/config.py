@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # depois, mesmo espírito de quando esses limiares foram criados.
     LIMIAR_ITEM_ALTA: float = 0.85
     LIMIAR_ITEM_SUGESTAO: float = 0.3
+    # Achado real: item "GRAMPEADOR" bateu com "Grampo para Grampeador"
+    # (score 1.0) em vez do grampeador de verdade que existia no catálogo
+    # (score 0.999) — diferença de 0.001, um empate técnico que o reranker
+    # claramente não tinha certeza (o nome do produto errado contém a
+    # palavra "grampeador", confundindo o modelo). Quando o 2º colocado fica
+    # a menos que essa margem do 1º, não confia automático mesmo com score
+    # alto — vira sugestão (confiança "média"), pedindo confirmação.
+    MARGEM_AMBIGUA_ITEM: float = 0.02
     # Exige cobertura mínima de itens para classificar como "forte", MAS só
     # para matches fuzzy/textuais — um casamento por código exato (NCM/CATMAT)
     # continua forte mesmo sendo 1 item. 0 = desliga. 0.05 = 5% dos itens.
