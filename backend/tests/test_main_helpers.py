@@ -6,7 +6,9 @@ cd backend && pytest
 import pytest
 
 from app.models import Produto
-from app.main import _custo_e_margem, _qtd_embalagem_pncp, _validacao_tecnica_json
+from app.main import (
+    _custo_e_margem, _qtd_embalagem_pncp, _e_unidade_embalagem_pncp, _validacao_tecnica_json,
+)
 
 
 def _produto(**kwargs):
@@ -85,6 +87,41 @@ def test_custo_e_margem_embalagens_de_tamanhos_diferentes_marca_alerta():
     p = _produto(preco_custo=48.0, itens_por_unidade=24)
     r = _custo_e_margem(2.50, p, unidade_medida_item="Caixa com 12 UN")
     assert r["alerta_unidade"] is True
+
+
+def test_e_unidade_embalagem_pncp_reconhece_abreviacoes():
+    assert _e_unidade_embalagem_pncp("PCTE") is True
+    assert _e_unidade_embalagem_pncp("Caixa") is True
+    assert _e_unidade_embalagem_pncp("resma") is True
+    assert _e_unidade_embalagem_pncp("UN") is False
+    assert _e_unidade_embalagem_pncp("Unidade") is False
+    assert _e_unidade_embalagem_pncp(None) is False
+
+
+def test_custo_e_margem_unidade_embalagem_sem_numero_nao_divide_mas_alerta():
+    """Caso real de produção: item "PACOTE DE 500 FOLHAS DE PAPEL SULFITE"
+    cotado pelo órgão a R$21,69/PCTE (sem número na unidadeMedida, só a
+    abreviação) — produto do catálogo vendido em resmas de 500 a R$30,75.
+    Sem reconhecer "PCTE" como embalagem, o app dividia 30,75 por 500 e
+    mostrava 99,7% de "lucro" fictício; o real é prejuízo de -41,8%."""
+    p = _produto(preco_custo=30.75, itens_por_unidade=500)
+    r = _custo_e_margem(21.69, p, unidade_medida_item="PCTE")
+    assert r["custo_comparavel"] == 30.75
+    assert r["margem"] == pytest.approx(-9.06, abs=1e-2)
+    assert r["margem_pct"] < 0
+    # sem número pra confirmar o TAMANHO da embalagem — pede conferência,
+    # ao contrário do caso com número ("Embalagem 500 FL"), que não alerta.
+    assert r["alerta_unidade"] is True
+
+
+def test_custo_e_margem_unidade_sem_relacao_com_embalagem_continua_dividindo():
+    """Unidade que não é nem número nem abreviação de embalagem conhecida
+    (ex.: campo ausente, ou algo fora do vocabulário) — mantém o
+    comportamento padrão (divide), sem alerta extra por causa disso."""
+    p = _produto(preco_custo=25.0, itens_por_unidade=500)
+    r = _custo_e_margem(0.10, p, unidade_medida_item="Unidade")
+    assert r["custo_comparavel"] == 0.05
+    assert r["alerta_unidade"] is False
 
 
 def test_validacao_tecnica_fita_adesiva_largura_divergente_nao_passa_silenciosa():

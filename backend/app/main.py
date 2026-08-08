@@ -1192,6 +1192,30 @@ def _qtd_embalagem_pncp(unidade_medida: str | None) -> int | None:
     return int(m.group()) if m else None
 
 
+# Achado real (edital "PACOTE DE 500 FOLHAS DE PAPEL SULFITE"): o PNCP às
+# vezes manda só a ABREVIAÇÃO da unidade, sem número junto (unidadeMedida
+# = "PCTE", sem o "500" — diferente do caso "Embalagem 500 FL", que já tem
+# o número embutido). _qtd_embalagem_pncp não reconhece esses casos, e o
+# cálculo caía de volta pra divisão errada. Lista de unidades do domínio do
+# PNCP que representam uma EMBALAGEM/agrupamento (não uma peça avulsa) —
+# quando bate uma dessas SEM número, assume mesma base do produto (que já
+# é vendido em embalagem, itens_por_unidade > 1), mas sem a certeza que o
+# número dá — por isso entra com alerta_unidade=True, pedindo conferência.
+_UNIDADES_EMBALAGEM_PNCP = {
+    "pacote", "pcte", "pct", "caixa", "cx", "resma", "fardo", "frd",
+    "duzia", "dz", "cento", "ct", "rolo", "rl", "kit", "conjunto", "conj",
+    "bloco", "bl", "galao", "jogo", "par", "embalagem", "emb",
+    "saco", "sacola", "frasco", "pote", "garrafa", "balde", "bombona",
+}
+
+
+def _e_unidade_embalagem_pncp(unidade_medida: str | None) -> bool:
+    if not unidade_medida:
+        return False
+    from .matching.engine import normalizar
+    return normalizar(unidade_medida).strip() in _UNIDADES_EMBALAGEM_PNCP
+
+
 def _custo_e_margem(valor_unitario: float | None, produto: Produto,
                     unidade_medida_item: str | None = None) -> dict:
     """Custo/margem de UM produto contra o valor unitário que o órgão paga
@@ -1206,15 +1230,21 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
     verdade prejuízo). O PNCP manda o texto da unidade por item
     (`unidadeMedida`, ex.: "Embalagem 500 FL") — quando o número bate com
     itens_por_unidade do produto, o valor já está na mesma base, não divide
-    de novo."""
+    de novo. Quando a unidade é só uma abreviação de embalagem sem número
+    (ex.: "PCTE"), assume a mesma coisa mas com alerta_unidade=True (sem
+    como confirmar o TAMANHO, só que não é peça avulsa)."""
     if valor_unitario is None or produto.preco_custo is None:
         return {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
     por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
     qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
     embalagem_incompativel = False
+    embalagem_nao_confirmada = False
     if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
         # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
         custo_comparavel = round(produto.preco_custo, 4)
+    elif por_unid > 1 and qtd_embalagem_item is None and _e_unidade_embalagem_pncp(unidade_medida_item):
+        custo_comparavel = round(produto.preco_custo, 4)
+        embalagem_nao_confirmada = True
     else:
         if por_unid > 1 and qtd_embalagem_item is not None:
             # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
@@ -1225,7 +1255,7 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
     margem = round(valor_unitario - custo_comparavel, 4)
     margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
     # se a margem ainda é absurda, provavelmente as unidades não batem
-    alerta_unidade = embalagem_incompativel or (
+    alerta_unidade = embalagem_incompativel or embalagem_nao_confirmada or (
         margem_pct is not None and (margem_pct < -300 or margem_pct > 300))
     return {"margem": margem, "margem_pct": margem_pct, "custo_comparavel": custo_comparavel,
            "alerta_unidade": alerta_unidade}
