@@ -108,7 +108,12 @@
   select,input,textarea{background:var(--panel2);border:1px solid var(--line);
     color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
   .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
-    border-radius:7px;cursor:pointer;font-size:13px}
+    border-radius:7px;cursor:pointer;font-size:13px;display:inline-block}
+  /* <button> já é inline-block por padrão do navegador, mas <a class="btn">
+     (11 usos no app) é "inline" por padrão — sem isso, texto longo (ex.:
+     "abrir página do item ↗") podia quebrar NO MEIO do botão em telas
+     estreitas, com cada linha ganhando seu próprio fundo/borda arredondada
+     (o "↗" sozinho virava uma caixinha azul solta, achado real no mobile). */
   /* .ghost hoje É AZUL SÓLIDO (igual a .btn) de propósito — só existe pra não
      precisar tocar nos ~55 lugares que já usam essa classe no HTML. O visual
      "fundo transparente" que .ghost tinha antes agora é .discreto, aplicado
@@ -3006,8 +3011,12 @@ function _marcarSelecaoCotacao(numero, marcado){
 // Cor do botão "Adicionar na cotação" quando o item já foi adicionado —
 // usa --forte (verde), já calibrada separadamente pros temas claro/escuro
 // no :root do CSS, em vez de fixar um tom que só funciona bem num dos dois.
+// O fundo tem que ser explicitamente sobrescrito: .btn.ghost hoje é azul
+// sólido (--accent) por padrão, então só trocar cor do texto/borda pra
+// verde deixava "verde em cima de azul" — contraste ruim (achado real no
+// mobile). Mesmo tom de fundo já usado pelas pill "forte" no resto do app.
 function _estiloBotaoCotacao(marcado){
-  return marcado ? 'color:var(--forte);border-color:var(--forte)' : '';
+  return marcado ? 'color:var(--forte);border-color:var(--forte);background:rgba(34,197,94,.15)' : '';
 }
 // Botão "Adicionar na cotação" da aba Itens/margem — alterna o item dentro/
 // fora de _cotacaoSelecionados e atualiza só o próprio botão (não precisa
