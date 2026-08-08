@@ -2427,9 +2427,17 @@ def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
     total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     margem = total_venda - total_custo
     margem_pct = (margem / total_venda * 100) if total_venda else 0
+    # itens do edital (TODOS, não só os já incluídos na proposta) — usado
+    # pelo front pra montar o modal de "adicionar item", restrito ao que o
+    # edital de fato pede, em vez de deixar digitar qualquer coisa.
+    itens_edital = [{
+        "numero": it.numero, "descricao": it.descricao,
+        "quantidade": it.quantidade or 0, "valor_unitario": it.valor_unitario or 0,
+    } for it in ed.itens]
     return {
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
-        "itens": itens, "observacoes": prop.observacoes if prop else "",
+        "itens": itens, "itens_edital": itens_edital,
+        "observacoes": prop.observacoes if prop else "",
         "total_venda": round(total_venda, 2), "total_custo": round(total_custo, 2),
         "margem": round(margem, 2), "margem_pct": round(margem_pct, 1),
         "existe": prop is not None,

@@ -3126,6 +3126,9 @@ async function _montarPropostaEdital(id, ativo){
   window._propItens = (p.itens||[]).map(i=>({
     descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
+  // itens que o edital de fato pede — usado só pra montar o modal de
+  // "adicionar item" (propAbrirModalAdd), restrito ao que existe no edital.
+  window._propItensEdital = p.itens_edital||[];
   $('#edital-conteudo').innerHTML = `
     <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
     <div id="prop-tabela"></div>
@@ -3162,7 +3165,7 @@ function renderProposta(){
     <thead><tr><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
     <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
   </table></div>
-  <button class="btn ghost" style="margin-top:8px" onclick="propAdd()">+ adicionar item</button>
+  <button class="btn ghost" style="margin-top:8px" onclick="propAbrirModalAdd()">+ adicionar item</button>
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
     <div><div class="muted" style="font-size:11px">Total da proposta</div><strong style="font-size:18px">${fmtMoeda(tv)}</strong></div>
     <div><div class="muted" style="font-size:11px">Custo total</div><strong style="font-size:18px">${fmtMoeda(tc)}</strong></div>
@@ -3175,7 +3178,38 @@ function propSet(idx,campo,val){
   it[campo] = campo==='descricao' ? val : (parseFloat(val)||0);
   renderProposta();
 }
-function propAdd(){ window._propItens.push({descricao:'',quantidade:1,custo_unit:0,preco_unit:0}); renderProposta(); }
+// "adicionar item" mostra só o que o edital de fato pede (window._propItensEdital,
+// carregado junto com a proposta) e some da lista o que já está na proposta —
+// antes dava pra digitar qualquer descrição livre, inclusive item que o
+// edital nem pede.
+function propAbrirModalAdd(){
+  const jaTem = new Set((window._propItens||[]).map(i=>(i.descricao||'').trim().toLowerCase()));
+  const disponiveis = (window._propItensEdital||[]).filter(it=>!jaTem.has((it.descricao||'').trim().toLowerCase()));
+  const linhas = disponiveis.map(it=>`<tr>
+      <td>${esc(it.descricao)}</td>
+      <td style="white-space:nowrap">${it.quantidade}</td>
+      <td><button class="btn" style="padding:4px 10px;font-size:12px" onclick="propAddDoEdital(${it.numero})">+ adicionar</button></td>
+    </tr>`).join('');
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:560px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Adicionar item do edital</h2>
+      ${disponiveis.length ? `
+      <div style="overflow-x:auto;max-height:400px;overflow-y:auto;margin-top:10px"><table>
+        <thead><tr><th>Item</th><th>Qtd</th><th></th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table></div>` : `<p class="muted" style="margin-top:10px">Todos os itens do edital já estão na proposta.</p>`}
+    </div>
+  </div>`;
+}
+function propAddDoEdital(numero){
+  const it = (window._propItensEdital||[]).find(i=>i.numero===numero);
+  if(!it) return;
+  window._propItens.push({descricao:it.descricao||'', quantidade:+it.quantidade||1,
+    custo_unit:0, preco_unit:+it.valor_unitario||0});
+  renderProposta();
+  propAbrirModalAdd();  // re-render com o item recém-adicionado já fora da lista
+}
 function propDel(idx){ window._propItens.splice(idx,1); renderProposta(); }
 
 async function salvarProposta(){
