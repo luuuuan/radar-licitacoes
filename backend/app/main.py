@@ -1251,41 +1251,6 @@ def _validacao_tecnica_json(descricao_item: str, produto: Produto, score_semanti
     }
 
 
-@app.get("/api/admin/debug-colunas")
-def debug_colunas(tabela: str, user: Usuario = Depends(_auth.get_current_user),
-                  db: Session = Depends(get_session)):
-    """Diagnóstico temporário, só leitura (SQL bruto via information_schema,
-    não toca no ORM/modelo) — usado pra confirmar se uma migração de coluna
-    nova realmente aplicou no banco de produção antes de reativar código que
-    depende dela."""
-    from sqlalchemy import text
-    linhas = db.execute(text(
-        "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_name = :t ORDER BY ordinal_position"
-    ), {"t": tabela}).all()
-    return {"tabela": tabela, "colunas": [{"nome": r[0], "tipo": r[1]} for r in linhas]}
-
-
-@app.post("/api/admin/debug-migrar-coluna")
-def debug_migrar_coluna(tabela: str, coluna: str, tipo: str = "VARCHAR(60)",
-                        user: Usuario = Depends(_auth.get_current_user),
-                        db: Session = Depends(get_session)):
-    """Diagnóstico temporário: roda um ALTER TABLE ADD COLUMN IF NOT EXISTS
-    isolado, fora do fluxo normal de startup, e devolve o erro exato do
-    Postgres se falhar (a migração automática de startup só loga um
-    warning, sem visibilidade daqui) — usado pra investigar por que
-    itens_edital.unidade_medida não foi criada."""
-    from sqlalchemy import text
-    sql = f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {tipo}"
-    try:
-        db.execute(text(sql))
-        db.commit()
-        return {"ok": True, "sql": sql}
-    except Exception as e:
-        db.rollback()
-        return {"ok": False, "sql": sql, "erro": str(e)}
-
-
 @app.get("/api/editais/{edital_id}/detalhe")
 def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                    db: Session = Depends(get_session)):
