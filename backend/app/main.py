@@ -1002,6 +1002,9 @@ def listar_editais(
     apenas_interessantes: bool = Query(False),
     hoje: bool = Query(False),
     tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
+    valor_min: float | None = Query(None, ge=0),
+    valor_max: float | None = Query(None, ge=0),
+    busca_item: str | None = Query(None),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
     user: Usuario = Depends(_auth.get_current_user),
@@ -1024,12 +1027,24 @@ def listar_editais(
         filtro.append(Edital.data_abertura == date.today())
     # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
     if tipo != "todos":
-        from .models import ItemEdital
         prefixo = "m" if tipo == "produtos" else "s"
         sub = (select(ItemEdital.edital_id)
                .where(ItemEdital.edital_id == Edital.id)
                .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
         filtro.append(sub.exists())
+    if valor_min is not None:
+        filtro.append(Edital.valor_estimado >= valor_min)
+    if valor_max is not None:
+        filtro.append(Edital.valor_estimado <= valor_max)
+    # busca por item: só editais que tenham pelo menos um item cujo texto
+    # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
+    # que pedem isso, em vez de precisar abrir cada um pra conferir.
+    if busca_item and busca_item.strip():
+        termo = f"%{busca_item.strip().lower()}%"
+        sub_busca = (select(ItemEdital.edital_id)
+                    .where(ItemEdital.edital_id == Edital.id)
+                    .where(func.lower(ItemEdital.descricao).like(termo)))
+        filtro.append(sub_busca.exists())
 
     if vista == "ativos":
         # ainda dentro do prazo (sem data ou data >= hoje)

@@ -575,6 +575,21 @@
           <button class="nav-close" onclick="toggleFiltrosMobile()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
         </div>
         <div class="field">
+          <label>Buscar por item</label>
+          <input type="text" id="f-busca-item" placeholder="ex.: grampeador"
+                onchange="loadEditais()"
+                onkeydown="if(event.key==='Enter')loadEditais()">
+        </div>
+        <div class="field">
+          <label>Valor do edital (R$)</label>
+          <div style="display:flex;gap:6px">
+            <input type="number" id="f-valor-min" placeholder="mínimo" min="0" step="any"
+                  onchange="loadEditais()" style="width:50%">
+            <input type="number" id="f-valor-max" placeholder="máximo" min="0" step="any"
+                  onchange="loadEditais()" style="width:50%">
+          </div>
+        </div>
+        <div class="field">
           <label>Nível de compatibilidade</label>
           <select id="f-nivel" onchange="loadEditais()">
             <option value="">Todos os níveis</option>
@@ -1408,6 +1423,9 @@ function limparFiltros(){
   $('#f-porpag').value = '20';
   $('#f-naolidos').checked = false;
   $('#f-hoje').checked = false;
+  $('#f-busca-item').value = '';
+  $('#f-valor-min').value = '';
+  $('#f-valor-max').value = '';
   loadEditais();
   fecharFiltrosMobile();
 }
@@ -1425,6 +1443,9 @@ async function loadEditais(resetPagina=true){
   if(nl)qs.set('apenas_nao_lidos','true');
   if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
   const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
+  const bi=$('#f-busca-item'); if(bi && bi.value.trim()) qs.set('busca_item',bi.value.trim());
+  const vmin=$('#f-valor-min'); if(vmin && vmin.value!=='') qs.set('valor_min',vmin.value);
+  const vmax=$('#f-valor-max'); if(vmax && vmax.value!=='') qs.set('valor_max',vmax.value);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   if(!eds.length){
