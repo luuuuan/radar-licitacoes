@@ -1480,6 +1480,28 @@ def _coleta_travada() -> bool:
            and (_utcnow_main() - _coleta_iniciada_em) > _LIMITE_COLETA_TRAVADA)
 
 
+def _limpar_logs_coleta_orfaos(db: Session):
+    """Fecha registros de LogColeta que nunca terminaram (processo morto no
+    meio — crash, redeploy, ou hang forçado a liberar por _coleta_travada).
+    Achado real: 4 rodadas desde jul/2026 ficaram com finalizado_em nulo pra
+    sempre — sem isso, o indicador do usuário dono daquele registro fica
+    preso mostrando "travado" indefinidamente, mesmo depois da trava em
+    memória já ter sumido (um redeploy zera a trava, mas não conserta a
+    linha órfã no banco). Roda logo após conseguir a trava, no início de
+    uma coleta nova — nesse ponto, qualquer linha ainda aberta É de uma
+    rodada anterior morta, nunca desta que está prestes a começar."""
+    orfaos = db.execute(
+        select(LogColeta).where(LogColeta.finalizado_em.is_(None))
+    ).scalars().all()
+    if not orfaos:
+        return
+    agora = _utcnow_main()
+    for log_orfao in orfaos:
+        log_orfao.erro = "interrompida (processo reiniciado antes de terminar)"
+        log_orfao.finalizado_em = agora
+    db.commit()
+
+
 def _rodar_coleta_bg(usuario_id: int | None = None):
     global _coleta_cancelar, _coleta_iniciada_em
     import logging
@@ -1503,6 +1525,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
     _coleta_iniciada_em = _utcnow_main()
     db = SessionLocal()
     try:
+        _limpar_logs_coleta_orfaos(db)
         processar_coleta(db, usuario_id=usuario_id, deve_cancelar=lambda: _coleta_cancelar)
         # após coletar, verifica prazos encerrando e documentos vencendo
         # (e-mail sai daqui; Telegram é só o resumo com botões, logo abaixo)
@@ -2310,40 +2333,42 @@ def coletar_cron(bg: BackgroundTasks, request: Request):
 @app.get("/api/coleta/status")
 def coleta_status(user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
-    """Estado da coleta para o indicador do dashboard."""
-    ultimo = db.execute(
-        select(LogColeta).where(LogColeta.usuario_id == user.id)
-        .order_by(LogColeta.id.desc()).limit(1)
-    ).scalar_one_or_none()
-    if not ultimo:
-        return {"estado": "nunca"}
+    """Estado da coleta para o indicador do dashboard.
 
+    "em_andamento"/"travado" é ESTADO GLOBAL (a trava _coleta_lock vale pra
+    todo mundo, não só pra este usuário) — usa a MESMA trava que barra o
+    botão manual (ver /api/coletar), em vez de inferir pelo último LogColeta
+    deste usuário. Achado real: numa coleta de cron (processa usuário por
+    usuário em sequência), o registro "terminou" de UM usuário só é criado
+    quando chega a vez dele — enquanto isso, esse usuário via o botão manual
+    recusar com "já existe uma coleta em andamento" (a trava global, correta)
+    ao mesmo tempo que o indicador do dashboard mostrava "ocioso" (o LogColeta
+    dele ainda não tinha sido tocado nesta rodada) — duas fontes de verdade
+    desalinhadas. As estatísticas (novos/vistos/fortes) continuam por
+    usuário, já que só ficam prontas quando a rodada chega na conta dele."""
     agora = _utcnow_main()
-    em_andamento = ultimo.finalizado_em is None
+    em_andamento = _coleta_lock.locked()
     travado = False
-    if em_andamento and ultimo.iniciado_em:
-        # limiar calibrado com o histórico real de coletas concluídas (ver
-        # /api/logs): uma coleta completa (busca no PNCP + geração de matches
-        # de todos os usuários) rotineiramente leva de 50min a ~2h — 30min
-        # era baixo demais e marcava "não finalizou" em toda coleta saudável
-        # ainda rodando, não só nas realmente travadas (processo morto por
-        # redeploy, por exemplo). 3h dá folga confortável acima do maior
-        # tempo já observado sem deixar de detectar uma travada de verdade.
-        if (agora - ultimo.iniciado_em).total_seconds() > 10800:  # >3h sem terminar
+    iniciada_ha_seg = None
+    if em_andamento and _coleta_iniciada_em is not None:
+        iniciada_ha_seg = int((agora - _coleta_iniciada_em).total_seconds())
+        if _coleta_travada():
             em_andamento, travado = False, True
 
-    # última coleta concluída (pode ser anterior à que está rodando)
-    ultima_ok = ultimo if ultimo.finalizado_em else db.execute(
+    # última coleta concluída DESTE usuário
+    ultima_ok = db.execute(
         select(LogColeta).where(LogColeta.usuario_id == user.id,
                                 LogColeta.finalizado_em.is_not(None))
         .order_by(LogColeta.id.desc()).limit(1)
     ).scalar_one_or_none()
 
+    if not em_andamento and not travado and not ultima_ok:
+        return {"estado": "nunca"}
+
     estado = "em_andamento" if em_andamento else ("travado" if travado else "ocioso")
     return {
         "estado": estado,
-        "iniciada_ha_seg": int((agora - ultimo.iniciado_em).total_seconds())
-            if em_andamento and ultimo.iniciado_em else None,
+        "iniciada_ha_seg": iniciada_ha_seg,
         "ultima_fim_seg": int((agora - ultima_ok.finalizado_em).total_seconds())
             if ultima_ok and ultima_ok.finalizado_em else None,
         "novos": ultima_ok.editais_novos if ultima_ok else None,
