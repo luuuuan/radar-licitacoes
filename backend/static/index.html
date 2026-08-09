@@ -1225,9 +1225,26 @@ function toggleMenu(){
 // Modo compacto do cabeçalho: só tem efeito visual em telas largas (ver CSS,
 // @media min-width:1200px) — a logo encolhe e o menu reduzido (#nav-compacta)
 // aparece na mesma linha assim que a página rola um pouco.
+//
+// Histerese proposital (liga acima de 60px, só desliga em scrollY<=0) — sem
+// essa folga entre os dois limiares, ligar/desligar o compacto (que muda a
+// altura do cabeçalho/spacer em ~75px) podia por si só empurrar o scroll de
+// volta pro OUTRO lado do mesmo limiar único, entrando num loop de
+// liga-desliga instantâneo (achado real, reproduzido com Playwright:
+// 265 trocas em ~7s ao trocar de uma aba mais alta pra uma mais curta, ex.
+// Cotação -> Proposta, num edital com poucos itens — o "encolher da página"
+// ao trocar de aba já bastava pra cruzar o limiar de 60px sozinho). A
+// correção anterior (padding-bottom extra no fim da página) reduzia a
+// chance de chegar nesse limiar, mas não impedia estruturalmente — qualquer
+// página/aba curta o bastante reabre a mesma falha. Histerese resolve a
+// causa raiz: uma vez ligado, só desliga bem no topo, longe o suficiente
+// pra nenhum toggle sozinho conseguir cruzar os dois limiares.
 let _navCompacta = false;
 function _atualizarNavCompacta(){
-  const compacta = window.scrollY > 60;
+  const y = window.scrollY;
+  let compacta = _navCompacta;
+  if(!_navCompacta && y > 60) compacta = true;
+  else if(_navCompacta && y <= 0) compacta = false;
   if(compacta === _navCompacta) return;
   _navCompacta = compacta;
   $('#topo-fixo').classList.toggle('compacto', compacta);
