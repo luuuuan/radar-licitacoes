@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/static/favicon-radar.svg">
 <title>Radar de Licitações</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
@@ -66,6 +67,15 @@
       background-color .25s ease,color .25s ease,border-color .25s ease}
   header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
     padding:2px 8px;border-radius:20px}
+  /* status da coleta + tema + Recalcular: um bloco só, reparentado por JS
+     (_reposicionarHeaderExtra) entre o cabeçalho (desktop/tablet, aqui) e a
+     gaveta lateral (celular, ver #slot-header-extra-mobile) — mesma técnica
+     já usada pro campo de busca (_reposicionarBuscaItem), pra manter um
+     único elemento com estado (id="coleta-status" etc.) em vez de duplicar
+     e arriscar desincronizar. */
+  #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px}
+  .header-conta-desktop{display:flex;align-items:center;gap:8px;margin-left:6px;
+    border-left:1px solid var(--line);padding-left:12px}
   /* menu compacto: some por padrão (só existe pra caber na mesma linha do
      cabeçalho depois de rolar, em telas bem largas — ver .compacto abaixo) */
   .nav-compacta{display:flex;align-items:center;gap:6px;overflow:hidden;
@@ -107,6 +117,11 @@
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
   select,input,textarea{background:var(--panel2);border:1px solid var(--line);
     color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px;font-family:inherit}
+  /* campos de valor monetário: sem as setinhas de incremento — não faz
+     sentido "somar 1" num preço em reais clicando nelas, só ocupam espaço */
+  input.campo-valor::-webkit-outer-spin-button,
+  input.campo-valor::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  input.campo-valor[type=number]{-moz-appearance:textfield}
   .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
     border-radius:7px;cursor:pointer;font-size:13px;display:inline-block}
   /* <button> já é inline-block por padrão do navegador, mas <a class="btn">
@@ -270,6 +285,32 @@
        cabeçalho que fecha visualmente a barra fixa — por isso a borda aqui */
     header{border-bottom:1px solid var(--line);flex-wrap:wrap;padding:12px 16px;gap:8px}
     header h1{font-size:16px}
+    /* cabeçalho do celular fica só com hambúrguer + logo + a ação principal
+       ("Coletar agora", numa 2ª linha própria) — achado real: o resto (status
+       da coleta, tema, Recalcular, conta) espremido na mesma barra quebrava
+       em 3 linhas bagunçadas, com botões de tamanhos/alinhamentos diferentes
+       colados uns nos outros. Status/tema/Recalcular somem daqui (reparentados
+       pra dentro da gaveta, ver #slot-header-extra-mobile); conta/sair já tem
+       casa própria em .nav-footer, então a cópia daqui só é escondida. */
+    #slot-header-extra-desktop{display:none}
+    .header-conta-desktop{display:none}
+    #btn-coletar{width:100%;justify-content:center;order:3}
+    /* bloco de status/tema/Recalcular dentro da gaveta — visualmente separado
+       da lista de abas (fundo + borda), com toque de sobra (44px+) já que
+       aqui viram itens de lista, não ícones apertados do cabeçalho */
+    #slot-header-extra-mobile{display:flex}
+    #slot-header-extra-mobile #slot-header-extra{flex-wrap:wrap;gap:8px;
+      width:100%;padding:10px 10px 14px;margin-bottom:6px;
+      border-bottom:1px solid var(--line)}
+    #slot-header-extra-mobile #coleta-status{flex:1 1 100%;font-size:12.5px;padding:6px 10px}
+    /* "nav button" (regra geral da gaveta, mais acima) força width:100% e
+       zera o fundo — sem sobrescrever aqui, tema/Recalcular caíam cada um
+       sozinho numa linha (largura:100% vira a base do flex-wrap) em vez de
+       ficarem lado a lado */
+    #slot-header-extra-mobile #btn-tema,#slot-header-extra-mobile #btn-recalcular{
+      width:auto;text-align:center;background:var(--accent);border-color:var(--accent)}
+    #slot-header-extra-mobile #btn-tema{min-width:44px;min-height:44px;padding:10px;flex:0 0 auto}
+    #slot-header-extra-mobile #btn-recalcular{flex:1;min-height:44px}
     .wrap{padding:12px}
     .kpis{grid-template-columns:repeat(2,1fr);gap:8px}
     .kpi{padding:11px}
@@ -564,11 +605,15 @@
   </nav>
 
   <span style="flex:1"></span>
-  <span id="coleta-status" class="badge">—</span>
-  <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
-  <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+  <div id="slot-header-extra-desktop">
+    <div id="slot-header-extra">
+      <span id="coleta-status" class="badge">—</span>
+      <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
+      <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+    </div>
+  </div>
   <button class="btn" id="btn-coletar" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
-  <span style="display:flex;align-items:center;gap:8px;margin-left:6px;border-left:1px solid var(--line);padding-left:12px">
+  <span class="header-conta-desktop">
     <span id="user-nome" class="badge" title="Sua conta">—</span>
     <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
   </span>
@@ -577,6 +622,7 @@
 <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
 <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div id="slot-header-extra-mobile"></div>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
     <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
@@ -640,9 +686,9 @@
         <div class="field">
           <label>Valor do edital (R$)</label>
           <div style="display:flex;gap:6px">
-            <input type="number" id="f-valor-min" placeholder="mínimo" min="0" step="any"
+            <input type="number" id="f-valor-min" class="campo-valor" placeholder="mínimo" min="0" step="any"
                   onchange="loadEditais()" style="width:50%">
-            <input type="number" id="f-valor-max" placeholder="máximo" min="0" step="any"
+            <input type="number" id="f-valor-max" class="campo-valor" placeholder="máximo" min="0" step="any"
                   onchange="loadEditais()" style="width:50%">
           </div>
         </div>
@@ -773,8 +819,8 @@
         <span id="imp-msg" class="muted" style="font-size:12px"></span>
       </div>
     </div>
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Produtos cadastrados</h3>
+    <div class="card">
+      <h3 style="margin:0 0 10px">Produtos cadastrados</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div id="bulk-produtos" style="display:none;gap:8px;align-items:center">
           <span id="bulk-produtos-count" class="muted" style="font-size:13px"></span>
@@ -818,9 +864,9 @@
 
         <div class="grid2">
           <div class="field"><label>Meu custo (R$) — quanto você paga</label>
-            <input id="p-custo" type="number" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
+            <input id="p-custo" type="number" class="campo-valor" step="0.01" style="width:100%" placeholder="ex: 18.50"></div>
           <div class="field"><label>Meu preço de venda (R$)</label>
-            <input id="p-venda" type="number" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
+            <input id="p-venda" type="number" class="campo-valor" step="0.01" style="width:100%" placeholder="ex: 24.90"></div>
         </div>
         <div class="grid2">
           <div class="field"><label>Unidade de venda</label>
@@ -1526,6 +1572,18 @@ function _reposicionarBuscaItem(){
   if(alvo && el.parentElement !== alvo) alvo.appendChild(el);
   if(_buscaEhDesktop()) _atualizarBuscaPorScroll();
   else el.classList.remove('colapsada');   // celular: sempre aberto
+}
+// Mesma técnica do campo de busca (acima): move o bloco de status da coleta
+// + tema + Recalcular entre o cabeçalho (desktop/tablet) e a gaveta lateral
+// (celular) sem duplicar os elementos — eles têm estado dinâmico (texto/
+// ícone trocam durante uma coleta/recálculo em andamento) então duplicar a
+// id quebraria os `$('#id')` que atualizam isso.
+function _headerExtraEhDesktop(){ return window.matchMedia('(min-width:681px)').matches; }
+function _reposicionarHeaderExtra(){
+  const el = document.getElementById('slot-header-extra');
+  if(!el) return;
+  const alvo = document.getElementById(_headerExtraEhDesktop() ? 'slot-header-extra-desktop' : 'slot-header-extra-mobile');
+  if(alvo && el.parentElement !== alvo) alvo.appendChild(el);
 }
 function _initBuscaItemDestaque(){
   const wrap = document.querySelector('.busca-item-destaque');
@@ -3164,8 +3222,8 @@ async function _corpoCotacaoEdital(id){
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td style="font-size:13px">${esc(descCurta)}</td>
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
-      <td><input type="number" step="0.01" class="cot-frete-entrada-item" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
-      <td><input type="number" step="0.01" class="cot-frete-saida-item" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
+      <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
+      <td><input type="number" step="0.01" class="cot-frete-saida-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
     </tr>`;
   }).join('');
   return `<p class="muted" style="margin-top:0">Itens adicionados à cotação na aba "Itens / margem" — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos. Desmarcar aqui remove o item da cotação (mesmo efeito de clicar em "remover" na aba Itens / margem).</p>
@@ -3342,8 +3400,8 @@ function renderProposta(){
     return `<tr>
       <td><input value="${esc(it.descricao||'')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
       <td><input type="number" step="any" value="${it.quantidade}" onchange="propSet(${idx},'quantidade',this.value)" style="width:80px"></td>
-      <td><input type="number" step="any" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
-      <td><input type="number" step="any" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
+      <td><input type="number" step="any" class="campo-valor" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
+      <td><input type="number" step="any" class="campo-valor" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
       <td style="white-space:nowrap;color:${margItem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margItem)}</td>
       <td><button class="btn ghost discreto" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
@@ -3585,6 +3643,8 @@ async function sair(){
   const ok = await exigirLogin();
   if(!ok) return;   // já redirecionou para /login
   _initBuscaItemDestaque();
+  _reposicionarHeaderExtra();
+  window.addEventListener('resize', _reposicionarHeaderExtra);
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });

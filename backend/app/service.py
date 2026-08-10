@@ -29,6 +29,11 @@ NIVEIS_ORDEM = {"fraco": 0, "medio": 1, "forte": 2}
 # ser guardado para sempre (a tela já só mostra as mais recentes)
 RETENCAO_LOGS_DIAS = 15
 
+# quanto tempo um checkpoint de recálculo interrompido ainda é confiável pra
+# retomar (ver _gerar_matches_usuario) — passado isso, a próxima rodada
+# começa do zero de novo, por precaução (catálogo pode ter mudado).
+RECALCULO_CHECKPOINT_VALIDADE = timedelta(hours=12)
+
 
 def purgar_logs_antigos(db: Session) -> int:
     limite = utcnow() - timedelta(days=RETENCAO_LOGS_DIAS)
@@ -148,15 +153,37 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         Match.status.in_(("proposta_enviada", "ganho", "perdido")),
     )
     hoje = date.today()
+    query_editais = select(Edital).where(
+        (Edital.data_encerramento.is_(None))
+        | (Edital.data_encerramento >= hoje)
+        | (Edital.id.in_(sub_acompanhados))
+    )
+    # retoma de um checkpoint de uma rodada completa (recalcular_todos)
+    # interrompida antes de terminar — só se ainda estiver "fresco" (o
+    # catálogo pode ter mudado desde então; RECALCULO_CHECKPOINT_VALIDADE é
+    # o quanto confiamos que não mudou o bastante pra invalidar o que já foi
+    # processado). Sem isso, todo redeploy/queda no meio de um recálculo
+    # grande faz a próxima rodada regastar cota de IA nos editais já feitos.
+    retomando = (
+        recalcular_todos
+        and usuario.recalculo_checkpoint_em is not None
+        and usuario.recalculo_checkpoint_edital_id is not None
+        and (utcnow() - usuario.recalculo_checkpoint_em) <= RECALCULO_CHECKPOINT_VALIDADE
+    )
+    if retomando:
+        cp_dt = usuario.recalculo_checkpoint_coletado_em
+        cp_id = usuario.recalculo_checkpoint_edital_id
+        # mesma ordem (coletado_em desc, id desc como desempate) — mantém só
+        # o que ainda NÃO foi processado na rodada anterior
+        query_editais = query_editais.where(
+            (Edital.coletado_em < cp_dt)
+            | ((Edital.coletado_em == cp_dt) & (Edital.id < cp_id))
+        )
+        log.info("Recálculo do usuário %s retomando do checkpoint (edital_id=%s, %s)",
+                usuario.id, cp_id, usuario.recalculo_checkpoint_em)
     # mais relevantes primeiro (se a cota de IA acabar, os melhores já foram feitos)
     editais = db.execute(
-        select(Edital)
-        .where(
-            (Edital.data_encerramento.is_(None))
-            | (Edital.data_encerramento >= hoje)
-            | (Edital.id.in_(sub_acompanhados))
-        )
-        .order_by(Edital.coletado_em.desc())
+        query_editais.order_by(Edital.coletado_em.desc(), Edital.id.desc())
     ).scalars().all()
     total = len(editais)
     if progresso:
@@ -177,6 +204,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     # progresso que na verdade nunca chegou a salvar no banco).
     resumo_commitado = dict(resumo)
     novos_fortes_commitados: list[Edital] = []
+    ultimo_visto: Edital | None = None   # pra gravar o checkpoint junto do commit parcial
     for _i, ed in enumerate(editais):
         if progresso and _i % 50 == 0:
             progresso(_i, total)
@@ -184,6 +212,10 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         # minutos/horas rodando numa única transação. Sem isso, qualquer soluço
         # de conexão com o banco no meio do caminho perde TODO o progresso.
         if _i > 0 and _i % 200 == 0:
+            if recalcular_todos and ultimo_visto is not None:
+                usuario.recalculo_checkpoint_edital_id = ultimo_visto.id
+                usuario.recalculo_checkpoint_coletado_em = ultimo_visto.coletado_em
+                usuario.recalculo_checkpoint_em = utcnow()
             try:
                 db.commit()
                 resumo_commitado = dict(resumo)
@@ -212,6 +244,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                 log.info("Recálculo do usuário %s cancelado a pedido — %s/%s editais processados.",
                          usuario.id, _i, total)
                 break
+        ultimo_visto = ed
         existente = existentes_map.get(ed.id)
         if existente and not recalcular_todos:
             continue
@@ -251,6 +284,17 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
             resumo["fortes"] += 1
             if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
                 novos_fortes.append(ed)
+    else:
+        # "else" do for: só roda se o loop terminou a lista inteira sem
+        # nenhum "break" (cancelamento ou queda de conexão) — ou seja, a
+        # rodada completou de verdade. Limpa o checkpoint: a PRÓXIMA vez que
+        # alguém pedir um recálculo completo deve ser do zero de novo (reflete
+        # o catálogo mais atual), não retomar um checkpoint de uma rodada que
+        # já terminou.
+        if recalcular_todos:
+            usuario.recalculo_checkpoint_edital_id = None
+            usuario.recalculo_checkpoint_coletado_em = None
+            usuario.recalculo_checkpoint_em = None
     try:
         db.commit()
     except IntegrityError:

@@ -77,6 +77,9 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("dias_antecedencia", "INTEGER DEFAULT 2"),
     ("token_reset_senha", "VARCHAR(128)"),
     ("token_reset_expira", "TIMESTAMP"),
+    ("recalculo_checkpoint_edital_id", "INTEGER"),
+    ("recalculo_checkpoint_coletado_em", "TIMESTAMP"),
+    ("recalculo_checkpoint_em", "TIMESTAMP"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
 for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),

@@ -53,6 +53,14 @@ class Usuario(Base):
     dias_antecedencia: Mapped[int] = mapped_column(Integer, default=2)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # checkpoint do recálculo completo (recalcular_todos=True) — permite
+    # retomar de onde parou se o processo for interrompido (ex.: deploy no
+    # meio de uma rodada longa) em vez de gastar cota de IA reprocessando
+    # editais que já foram refeitos. Só vale por um tempo (ver service.py,
+    # RECALCULO_CHECKPOINT_VALIDADE): catálogo pode ter mudado desde então.
+    recalculo_checkpoint_edital_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recalculo_checkpoint_coletado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recalculo_checkpoint_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Fornecedor(Base):
