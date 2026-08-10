@@ -2604,29 +2604,45 @@ def salvar_proposta(edital_id: int, dados: PropostaIn,
     return _proposta_payload(ed, prop)
 
 
-@app.get("/api/editais/{edital_id}/proposta.csv")
-def exportar_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                      db: Session = Depends(get_session)):
+def _dados_remetente(user: Usuario) -> dict:
+    """Dados do PRÓPRIO usuário (proponente) pra timbrar a proposta —
+    decifra endereço/dados complementares, igual a /api/perfil."""
+    import json as _j
+    end = _auth.decifrar(user.endereco_cifrado)
+    try:
+        endereco = _j.loads(end) if end else {}
+    except ValueError:
+        endereco = {}
+    emp = _auth.decifrar(user.dados_empresa_cifrado)
+    try:
+        empresa = _j.loads(emp) if emp else {}
+    except ValueError:
+        empresa = {}
+    return {
+        "nome": user.nome, "documento": _auth.decifrar(user.doc_cifrado),
+        "endereco": endereco, "empresa": empresa, "logo_base64": user.logo_base64,
+    }
+
+
+@app.get("/api/editais/{edital_id}/proposta.pdf")
+def exportar_proposta_pdf(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
     prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
                       .where(Proposta.usuario_id == user.id)).scalars().first()
     p = _proposta_payload(ed, prop)
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
-    w.writerow(["Descrição", "Quantidade", "Custo unit.", "Preço unit.", "Total venda", "Margem"])
-    for it in p["itens"]:
-        q = it.get("quantidade") or 0
-        cu = it.get("custo_unit") or 0
-        pu = it.get("preco_unit") or 0
-        w.writerow([it.get("descricao", ""), q, f"{cu:.2f}", f"{pu:.2f}",
-                    f"{pu * q:.2f}", f"{(pu - cu) * q:.2f}"])
-    w.writerow([])
-    w.writerow(["", "", "", "TOTAIS:", f"{p['total_venda']:.2f}", f"{p['margem']:.2f}"])
-    buf.seek(0)
-    nome = f"proposta_edital_{edital_id}.csv"
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+    edital_info = {
+        "orgao": ed.orgao, "objeto": ed.objeto, "modalidade": ed.modalidade,
+        "municipio": ed.municipio, "uf": ed.uf, "id_externo": ed.id_externo,
+        "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+        "link": ed.link,
+    }
+    from .proposta_pdf import gerar_pdf_proposta
+    pdf_bytes = gerar_pdf_proposta(_dados_remetente(user), edital_info, p)
+    nome = f"proposta_edital_{edital_id}.pdf"
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename={nome}"})
 
 

@@ -3449,7 +3449,7 @@ async function _montarPropostaEdital(id, ativo){
       <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
     <div class="toolbar" style="margin-top:10px">
       <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
-      <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.csv','_blank')">${ICN.baixar} Exportar CSV</button>
+      <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.pdf','_blank')">${ICN.baixar} Baixar proposta (PDF)</button>
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
     </div>`;
