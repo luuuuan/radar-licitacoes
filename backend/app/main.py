@@ -1864,6 +1864,24 @@ def backfill_unidade_medida_status(user: Usuario = Depends(_auth.get_current_use
     return _backfill_unidade_status
 
 
+# TEMPORÁRIO — endpoint de análise pra levantar os itens mais pedidos nos
+# editais ativos (ajudar a priorizar o catálogo com pouco item cadastrado
+# ainda). Sem escopo de usuário/catálogo de propósito: é sobre demanda do
+# mercado como um todo, não sobre o que já bate com algum catálogo
+# específico. Remover depois de usado.
+@app.get("/api/admin/itens-frequentes")
+def itens_frequentes_temp(user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    hoje = date.today()
+    linhas = db.execute(
+        select(ItemEdital.descricao, ItemEdital.edital_id)
+        .join(Edital, ItemEdital.edital_id == Edital.id)
+        .where((Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje))
+    ).all()
+    return {"total": len(linhas),
+           "itens": [{"descricao": d, "edital_id": eid} for d, eid in linhas]}
+
+
 @app.get("/api/editais/{edital_id}/documentos")
 def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
                       db: Session = Depends(get_session)):
