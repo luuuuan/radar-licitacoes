@@ -3453,7 +3453,7 @@ async function _montarPropostaEdital(id, ativo){
       <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
     <div class="toolbar" style="margin-top:10px">
       <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
-      <button class="btn ghost" onclick="baixarPropostaPdf()">${ICN.baixar} Baixar proposta (PDF)</button>
+      <button class="btn ghost" id="btn-baixar-proposta" onclick="baixarPropostaPdf(this)">${ICN.baixar} Baixar proposta (PDF)</button>
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
     </div>`;
@@ -3541,9 +3541,31 @@ async function salvarProposta(){
 // o PDF é gerado no servidor a partir do que está SALVO — sem salvar antes,
 // um item excluído/editado só na tela (sem clicar em "Salvar proposta")
 // continuava aparecendo no PDF baixado, com os dados antigos.
-async function baixarPropostaPdf(){
-  await salvarProposta();
-  window.open(`/api/editais/${_propEditalId}/proposta.pdf`,'_blank');
+// usa fetch (não window.open) justamente pra poder awaitar a geração de
+// verdade no servidor e só aí devolver o botão ao normal — window.open não
+// dá esse retorno, o botão voltaria ao texto original na hora, mesmo com o
+// PDF ainda gerando.
+async function baixarPropostaPdf(btn){
+  const original = btn ? btn.innerHTML : null;
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-inline" style="border-color:rgba(255,255,255,.35);border-top-color:#fff;vertical-align:-3px"></span> Gerando PDF...`;
+  }
+  try{
+    await salvarProposta();
+    const r = await fetch(`/api/editais/${_propEditalId}/proposta.pdf`);
+    if(!r.ok) throw new Error('falha ao gerar');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `proposta_edital_${_propEditalId}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  }catch(e){
+    toast('Não foi possível gerar o PDF agora. Tente de novo.', 'erro');
+  }finally{
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
 }
 
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
