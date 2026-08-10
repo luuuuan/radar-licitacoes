@@ -1473,8 +1473,22 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     service._mesclar_confirmacoes_manuais."""
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
-    if not match or not match.detalhe:
-        raise HTTPException(404, "Edital sem match para este usuário")
+    if not match:
+        # Editais sem nenhum sinal textual (nivel "fraco") nunca ganham Match
+        # — de propósito, ver _gerar_matches_usuario. Mas a comparação de
+        # catálogo por IA (aba Análise por IA) é independente do motor de
+        # texto e pode achar um produto mesmo assim; sem isso, confirmar
+        # essa sugestão sempre batia em 404 ("Edital sem match"), mesmo o
+        # usuário tendo acabado de confirmar que o produto É o certo — a
+        # própria confirmação já é sinal suficiente de relevância.
+        ed = db.get(Edital, edital_id)
+        if not ed:
+            raise HTTPException(404, "Edital não encontrado")
+        match = Match(edital_id=edital_id, usuario_id=user.id, score=0.0,
+                      nivel="medio", detalhe={"itens": []})
+        db.add(match)
+    elif not match.detalhe:
+        match.detalhe = {"itens": []}
 
     produto = None
     if body.produto_id is not None:

@@ -113,6 +113,57 @@ def test_confirma_item_inexistente_no_edital_continua_404():
     assert exc.value.status_code == 404
 
 
+def test_confirma_item_sem_nenhum_match_cria_o_match():
+    """Regressão de 2º nível do mesmo bug: editais com nível "fraco" nunca
+    ganham Match nenhum (_gerar_matches_usuario não salva). A comparação de
+    catálogo por IA não depende de Match existir, então sugeria produto pra
+    um edital que nem aparecia na lista — confirmar batia em 404 ("Edital
+    sem match"). A própria confirmação já é sinal de relevância suficiente
+    pra criar o Match."""
+    db = _sessao()
+    u = _usuario(db)
+    p = _produto(db, u)
+    ed = _edital(db, itens_numeros=(1,))
+    # nenhum Match criado de propósito
+
+    r = confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=p.id), user=u, db=db)
+
+    assert r == {"ok": True}
+    match = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert match is not None
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    assert item["produto_id"] == p.id
+    assert item["confirmado_manualmente"] is True
+
+
+def test_confirma_item_edital_inexistente_sem_match_da_404():
+    db = _sessao()
+    u = _usuario(db)
+    p = _produto(db, u)
+    with pytest.raises(HTTPException) as exc:
+        confirmar_item_edital(999999, 1, ConfirmarItemIn(produto_id=p.id), user=u, db=db)
+    assert exc.value.status_code == 404
+
+
+def test_confirma_item_com_match_existente_mas_detalhe_none():
+    """Match pode existir com detalhe=None em teoria (nunca populado) — não
+    pode dar 404 nem quebrar, só trata como "sem itens ainda"."""
+    db = _sessao()
+    u = _usuario(db)
+    p = _produto(db, u)
+    ed = _edital(db, itens_numeros=(1,))
+    match = Match(usuario_id=u.id, edital_id=ed.id, score=0.0, nivel="medio", detalhe=None)
+    db.add(match)
+    db.commit()
+
+    r = confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=p.id), user=u, db=db)
+
+    assert r == {"ok": True}
+    db.refresh(match)
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    assert item["produto_id"] == p.id
+
+
 def test_confirma_com_produto_id_none_marca_nenhuma_destas():
     db = _sessao()
     u = _usuario(db)
