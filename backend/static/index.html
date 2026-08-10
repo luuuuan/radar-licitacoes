@@ -451,28 +451,39 @@
   .filtros-lateral .uf-checks label:has(input:checked){border-color:var(--accent);color:var(--accent)}
   .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
   .editais-principal{min-width:0}
-  /* Busca por item em destaque: campo largo acima da lista (pedido do
-     usuário — antes ficava perdido junto dos outros filtros na lateral
-     estreita). A partir do tablet (mesmo ponto em que a lateral de filtros
-     vira sticky), fica fixa no topo da lista enquanto rola, pra não precisar
-     voltar lá em cima toda hora pra trocar a busca. */
+  /* Busca por item: no celular mora dentro do painel de Filtros, sempre
+     aberta, sem animação de rolagem (achado real: focar o campo abre o
+     teclado, o navegador ajusta a viewport pra manter o campo visível, isso
+     dispara um scroll, e a lógica de colapsar-com-scroll recolhia o campo
+     na hora que abria — ruim especificamente por causa do teclado, que só
+     existe no celular). A partir do tablet (mesmo ponto em que a lateral de
+     filtros vira sticky), o mesmo elemento é REALOCADO por JS pro topo da
+     lista (ver _reposicionarBuscaItem) e aí sim ganha a rolagem/colapso. */
   .busca-item-destaque{display:flex;align-items:center;gap:10px;padding:12px 16px;
     background:var(--panel);border:1px solid var(--accent);border-radius:10px;
-    margin-bottom:14px;color:var(--muted);max-width:520px;
+    margin-bottom:14px;color:var(--muted);width:100%;
     transition:max-width .25s ease,padding .25s ease}
-  .busca-item-icone{flex-shrink:0;display:flex;align-items:center;justify-content:center;
-    background:none;border:none;padding:0;color:inherit;cursor:pointer}
+  .busca-item-icone{flex-shrink:0;display:flex;align-items:center;gap:6px;
+    background:none;border:none;padding:0;color:inherit;cursor:pointer;
+    font:inherit;font-size:14px}
   .busca-item-destaque input{flex:1;min-width:0;border:none;background:transparent;
     outline:none;color:var(--txt);font-size:15px;padding:2px 0;
     transition:opacity .15s ease}
   .busca-item-destaque input::placeholder{color:var(--muted)}
-  /* colapsada: só o ícone de lupa, campo escondido — abre de novo ao
-     clicar (pedido do usuário, pra não ocupar espaço fixo o tempo todo
-     enquanto não está em uso). Recolhe sozinha ao perder o foco SE
-     estiver vazia — com texto digitado, fica aberta (senão o usuário
-     acha que a busca ativa sumiu). */
+  /* colapsada (só existe na versão desktop/tablet, ver JS): só o ícone,
+     campo e rótulo "Pesquisar" escondidos — abre de novo ao clicar. */
   .busca-item-destaque.colapsada{max-width:44px;padding:12px;cursor:pointer}
   .busca-item-destaque.colapsada input{width:0;opacity:0;pointer-events:none}
+  .busca-item-destaque.colapsada .busca-item-rotulo{display:none}
+  /* no celular, campo numa linha e botão "Pesquisar" cheio embaixo (igual
+     aos outros botões do painel de Filtros) — em uma linha só ficava
+     espremido: o rótulo do botão colava no placeholder do campo, sem
+     nenhuma separação visual entre os dois. */
+  #slot-busca-mobile .busca-item-destaque{flex-wrap:wrap;padding:10px 12px}
+  #slot-busca-mobile .busca-item-destaque input{order:1;flex:1 1 100%;padding:6px 0}
+  #slot-busca-mobile .busca-item-icone{order:2;width:100%;justify-content:center;
+    padding:8px;margin-top:6px;border:1px solid var(--accent);border-radius:8px;
+    color:var(--accent);font-weight:600}
   @media (min-width:681px){
     .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
     .filtros-btn-mobile{display:none}
@@ -486,14 +497,14 @@
     /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1200px, ver abaixo) + uma folga de 8px. */
-    .busca-item-destaque{position:sticky;top:138px;z-index:5}
+    #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px}
   }
   @media (min-width:1200px){
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
        (147px/72px, ver #topo-fixo.compacto acima) — acompanha os dois
        valores reais (medidos com Playwright), não um chute. */
-    .busca-item-destaque{top:155px}
-    body:has(#topo-fixo.compacto) .busca-item-destaque{top:78px}
+    #slot-busca-desktop .busca-item-destaque{top:155px}
+    body:has(#topo-fixo.compacto) #slot-busca-desktop .busca-item-destaque{top:78px}
   }
 
   /* ---- Estado vazio ---- */
@@ -607,6 +618,21 @@
         <div class="filtros-lateral-head">Filtros
           <button class="nav-close" onclick="toggleFiltrosMobile()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
         </div>
+        <!-- no celular, o campo de busca por item mora aqui (slot fixo, sem
+             animação de rolagem — no mobile, focar o campo abre o teclado, o
+             que dispara ajuste de scroll do navegador e recolapsava o campo
+             na hora, achado real). No desktop, o mesmo elemento é movido pro
+             slot-busca-desktop por JS (ver _reposicionarBuscaItem). -->
+        <div id="slot-busca-mobile">
+          <div class="busca-item-destaque">
+            <button type="button" class="busca-item-icone" onclick="_cliqueIconeBusca(event)" aria-label="Pesquisar" title="Pesquisar">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <span class="busca-item-rotulo">Pesquisar</span>
+            </button>
+            <input type="text" id="f-busca-item" placeholder="Buscar edital por item — ex.: grampeador"
+                  onkeydown="if(event.key==='Enter')_pesquisarItem()">
+          </div>
+        </div>
         <div class="field">
           <label>Valor do edital (R$)</label>
           <div style="display:flex;gap:6px">
@@ -692,13 +718,7 @@
         <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
       </aside>
       <div class="editais-principal">
-        <div class="busca-item-destaque">
-          <button type="button" class="busca-item-icone" onclick="_cliqueIconeBusca(event)" aria-label="Pesquisar" title="Pesquisar">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-          </button>
-          <input type="text" id="f-busca-item" placeholder="Buscar edital por item — ex.: grampeador"
-                onkeydown="if(event.key==='Enter')_pesquisarItem()">
-        </div>
+        <div id="slot-busca-desktop"></div>
         <div id="lista-editais"></div>
       </div>
     </div>
@@ -1465,26 +1485,43 @@ function navPaginacao(r, fnPagina, paginaAtual){
 
 let paginaEditais = 1;
 
-// Campo de busca por item colapsa/expande seguindo o SCROLL da página (não
-// mais blur): rolou pra baixo, encolhe pro ícone; voltou pro topo, abre
-// sozinho de novo, mesmo sem clicar. Clicar enquanto colapsado ainda abre
-// na hora (pra pesquisar sem precisar rolar até o topo primeiro).
+// Campo de busca por item: a partir do tablet, colapsa/expande seguindo o
+// SCROLL da página — rolou pra baixo, encolhe pro ícone; voltou pro topo,
+// abre sozinho, mesmo sem clicar. No CELULAR não usa esse comportamento —
+// achado real: focar o campo abre o teclado, o navegador ajusta a viewport
+// pra manter o campo visível, isso dispara um evento de scroll, e a lógica
+// de colapsar-com-scroll recolhia o campo bem na hora que ele abria. No
+// celular o campo mora fixo dentro do painel de Filtros e fica sempre
+// aberto (ver _reposicionarBuscaItem).
 //
-// Lê o estado ATUAL da classList a cada checagem em vez de guardar num
+// Lê o estado ATUAL da classList a cada checagem em vez de guardar numa
 // variável separada — evita dessincronia entre "abriu manualmente com um
-// clique" e "o scroll achava que já estava aberto/fechado" (que causaria
-// um _pesquisarItem() não recolher, ou o scroll não reabrir, dependendo de
-// qual mexeu por último). Como isso só muda LARGURA (nunca altura), não
-// tem o risco do loop de auto-alimentação que o cabeçalho compacto tinha
-// (ver correção em _atualizarNavCompacta) — a troca de estado aqui não
-// pode, por si só, mudar a posição de scroll que a disparou.
+// clique" e "o scroll achava que já estava aberto/fechado". Como isso só
+// muda LARGURA (nunca altura), não tem o risco do loop de auto-alimentação
+// que o cabeçalho compacto tinha (ver correção em _atualizarNavCompacta) —
+// a troca de estado aqui não pode, por si só, mudar a posição de scroll
+// que a disparou.
 const _LIMIAR_BUSCA_COLAPSA = 10;
+function _buscaEhDesktop(){ return window.matchMedia('(min-width:681px)').matches; }
 function _atualizarBuscaPorScroll(){
+  if(!_buscaEhDesktop()) return;   // colapso-por-scroll só existe a partir do tablet
   const wrap = document.querySelector('.busca-item-destaque');
   if(!wrap) return;
   const deveColapsar = window.scrollY > _LIMIAR_BUSCA_COLAPSA;
   if(wrap.classList.contains('colapsada') === deveColapsar) return;
   wrap.classList.toggle('colapsada', deveColapsar);
+}
+// Move o MESMO elemento (não duplica) entre o slot no painel de Filtros
+// (celular) e o slot no topo da lista (tablet+) conforme a largura da tela.
+// Roda no boot e a cada resize (ex.: girar o celular, redimensionar a
+// janela cruzando o limiar de 681px).
+function _reposicionarBuscaItem(){
+  const el = document.querySelector('.busca-item-destaque');
+  if(!el) return;
+  const alvo = document.getElementById(_buscaEhDesktop() ? 'slot-busca-desktop' : 'slot-busca-mobile');
+  if(alvo && el.parentElement !== alvo) alvo.appendChild(el);
+  if(_buscaEhDesktop()) _atualizarBuscaPorScroll();
+  else el.classList.remove('colapsada');   // celular: sempre aberto
 }
 function _initBuscaItemDestaque(){
   const wrap = document.querySelector('.busca-item-destaque');
@@ -1497,7 +1534,8 @@ function _initBuscaItemDestaque(){
     }
   });
   window.addEventListener('scroll', _atualizarBuscaPorScroll, {passive:true});
-  _atualizarBuscaPorScroll();   // estado inicial conforme o scroll de agora
+  window.addEventListener('resize', _reposicionarBuscaItem);
+  _reposicionarBuscaItem();
 }
 // Ícone funciona como botão "Pesquisar" quando o campo já está aberto —
 // enquanto colapsado, o primeiro clique só revela o campo (não pesquisa
