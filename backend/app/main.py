@@ -1638,11 +1638,14 @@ def _lock_recalculo(usuario_id: int) -> threading.Lock:
 
 # seletor de modelo do reranker (tela de Recalcular): experimental, por
 # enquanto só pra essa conta testar antes de decidir se vale expor geral.
+# "gemini" é um PROVEDOR inteiro diferente (usa a chave própria do Gemini do
+# usuário, engine.py troca a chamada inteira) — não é um modelo da DeepInfra.
 _USUARIOS_SELETOR_RERANKER = {5}
 _MODELOS_RERANKER_PERMITIDOS = {
     "Qwen/Qwen3-Reranker-0.6B",
     "Qwen/Qwen3-Reranker-4B",
     "Qwen/Qwen3-Reranker-8B",
+    "gemini",
 }
 
 

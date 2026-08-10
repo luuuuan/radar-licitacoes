@@ -144,7 +144,12 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
     if forcar_usar_ia is not None:   # recálculo pode forçar sem IA (rápido)
         usar_ia = forcar_usar_ia
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia, modelo_reranker=modelo_reranker)
+    gemini_api_key = None
+    if modelo_reranker == "gemini":
+        from . import auth as _auth
+        gemini_api_key = _auth.decifrar(usuario.gemini_key_cifrada)
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia, modelo_reranker=modelo_reranker,
+                            gemini_api_key=gemini_api_key)
 
     # Só considera editais que aparecem em ALGUM lugar da tela: ativos (prazo em
     # aberto) ou encerrados que o usuário está acompanhando (proposta enviada/

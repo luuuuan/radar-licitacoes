@@ -575,3 +575,45 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
         itens.append({"numero": numero, "produto_id": produto_id,
                       "justificativa": str(it.get("justificativa") or "")})
     return {"status": "ok", "itens": itens}
+
+
+_PROMPT_RERANK = """Você está avaliando se produtos de um catálogo são o MESMO item físico pedido num edital de licitação.
+
+Item do edital: "{item}"
+
+Catálogo (um produto por linha, numerado):
+{catalogo}
+
+Para CADA produto do catálogo, na mesma ordem, dê um score de 0.0 a 1.0 indicando o quanto ele é o MESMO produto físico do item acima — mesmo tipo de objeto e uso prático, não apenas categoria parecida. Responda APENAS com um JSON no formato {{"scores": [n1, n2, ...]}}, com exatamente {n} números, um por produto, na mesma ordem da lista."""
+
+
+def rerank_gemini(texto_item: str, documentos: list[str], api_key: str | None = None,
+                  timeout: int = 60, tentativas: int = 2) -> list[float] | None:
+    """Alternativa ao reranker da DeepInfra (ver matching/embeddings.rerank):
+    usa o Gemini (chave própria do usuário) pra pontuar cada produto do
+    catálogo contra um item de edital. Mesma assinatura/contrato de retorno
+    (lista de scores na mesma ordem de `documentos`, ou None em qualquer
+    falha) — quem chama trata igual, sem saber qual provedor respondeu.
+
+    EXPERIMENTAL: é 1 chamada ao Gemini POR ITEM. Num recálculo completo
+    (milhares de editais) isso estoura de longe os limites de taxa do
+    Gemini — viável só pra testar em poucos editais por vez, não pra rodar
+    a base inteira (ver seletor em main.py, restrito a uma conta)."""
+    if not ia_texto_disponivel(api_key) or not documentos:
+        return None
+    catalogo_txt = "\n".join(f"{i+1}. {d}" for i, d in enumerate(documentos))
+    prompt = _PROMPT_RERANK.format(item=(texto_item or "")[:500],
+                                   catalogo=catalogo_txt[:20000], n=len(documentos))
+    txt, st = _gerar(prompt, api_key=api_key, timeout=timeout, tentativas=tentativas)
+    if st != "ok" or not txt:
+        return None
+    data = _parse_json(txt)
+    if not isinstance(data, dict) or not isinstance(data.get("scores"), list):
+        return None
+    scores = data["scores"]
+    if len(scores) != len(documentos):
+        return None
+    try:
+        return [max(0.0, min(1.0, float(s))) for s in scores]
+    except (TypeError, ValueError):
+        return None

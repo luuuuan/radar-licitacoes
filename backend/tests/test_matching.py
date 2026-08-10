@@ -278,3 +278,42 @@ def test_candidato_abaixo_do_piso_de_sugestao_nao_aparece(monkeypatch):
     r = eng.avaliar("Objeto", [ItemEdt(1, "algo")])
     candidatos = r.detalhe[0]["candidatos"]
     assert all(c["produto_id"] != 2 for c in candidatos)
+
+
+# --------- provedor "gemini" (seletor experimental, ver main.py) --------- #
+
+def test_modelo_gemini_usa_a_chave_gemini_nao_a_deepinfra(monkeypatch):
+    """Sem DEEPINFRA_API_KEY mas COM gemini_api_key: o motor ainda liga o
+    reranker, porque o provedor escolhido é o Gemini, não a DeepInfra."""
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "")
+    chamadas = []
+    def _fake_rerank_gemini(query, documentos, api_key=None, timeout=60, tentativas=2):
+        chamadas.append((query, documentos, api_key))
+        return [0.9, 0.0, 0.0]
+    monkeypatch.setattr(engine_mod, "_rerank_gemini", _fake_rerank_gemini)
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True, modelo_reranker="gemini",
+                         gemini_api_key="minha-chave-gemini")
+    r = eng.avaliar("Papelaria", [ItemEdt(1, "Papel A4 branco")])
+
+    assert r.detalhe[0]["produto_id"] == 1
+    assert len(chamadas) == 1
+    assert chamadas[0][2] == "minha-chave-gemini"
+
+
+def test_modelo_gemini_sem_chave_gemini_nao_liga_o_reranker(monkeypatch):
+    """DEEPINFRA_API_KEY presente não é suficiente pro provedor "gemini" —
+    sem a chave Gemini do usuário, o reranker fica desligado (sem
+    corroboração nenhuma), não cai pra DeepInfra silenciosamente."""
+    monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "fake-deepinfra-key")
+    chamou_deepinfra = []
+    monkeypatch.setattr(engine_mod, "_rerank",
+                        lambda *a, **kw: chamou_deepinfra.append(1) or [0.9])
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True, modelo_reranker="gemini",
+                         gemini_api_key=None)
+
+    assert eng.usar_ia is False
+    r = eng.avaliar("Papelaria", [ItemEdt(1, "Papel A4 branco")])
+    assert r.detalhe == []
+    assert not chamou_deepinfra

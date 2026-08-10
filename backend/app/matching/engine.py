@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 
 from ..config import settings
 from .embeddings import rerank as _rerank
+from ..analise_edital import rerank_gemini as _rerank_gemini
 
 
 # ---------------------------------------------------------------------------
@@ -155,16 +156,21 @@ class MatchingEngine:
     )
 
     def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False,
-                modelo_reranker: str | None = None):
+                modelo_reranker: str | None = None, gemini_api_key: str | None = None):
         self.produtos = produtos
         self._textos_prod = [p.texto() for p in produtos]
+        # sobrescreve settings.DEEPINFRA_MODELO_RERANKER só pra essa instância
+        # — seletor experimental do recálculo (main.py), restrito a uma conta.
+        # "gemini" é um provedor inteiro diferente (chave própria do usuário,
+        # não a DEEPINFRA_API_KEY global), não um modelo da DeepInfra.
+        self._modelo_reranker = modelo_reranker
+        self._usa_gemini = modelo_reranker == "gemini"
+        self._gemini_api_key = gemini_api_key
         # "usar_ia" aqui é literalmente "o reranker roda ou não" — sem ele,
         # o motor fica só com código exato (sem corroboração, então nem
         # esse vira vencedor automático) e nenhum sinal textual.
-        self.usar_ia = bool(usar_ia) and bool(settings.DEEPINFRA_API_KEY) and len(produtos) > 0
-        # sobrescreve settings.DEEPINFRA_MODELO_RERANKER só pra essa instância
-        # — seletor experimental do recálculo (main.py), restrito a uma conta.
-        self._modelo_reranker = modelo_reranker
+        chave_disponivel = bool(gemini_api_key) if self._usa_gemini else bool(settings.DEEPINFRA_API_KEY)
+        self.usar_ia = bool(usar_ia) and chave_disponivel and len(produtos) > 0
 
         # Índices reversos de códigos -> produto, para match exato O(1)
         self._idx_codigo: dict[str, list[int]] = {}
@@ -180,6 +186,9 @@ class MatchingEngine:
         "sem sinal disponível", nunca deixa a exceção subir."""
         if not self.usar_ia or not texto_item or not self._textos_prod:
             return None
+        if self._usa_gemini:
+            return _rerank_gemini(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
+                                  api_key=self._gemini_api_key)
         return _rerank(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
                        api_key=settings.DEEPINFRA_API_KEY, modelo=self._modelo_reranker)
 

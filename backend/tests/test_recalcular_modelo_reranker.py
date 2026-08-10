@@ -57,3 +57,18 @@ def test_sem_modelo_reranker_passa_none():
     recalcular(bt, com_ia=True, modelo_reranker=None, user=_usuario(5))
     args = bt.tasks[0].args
     assert args == (5, None, None)
+
+
+def test_gemini_e_um_provedor_permitido_pra_usuario_liberado():
+    bt = BackgroundTasks()
+    recalcular(bt, com_ia=True, modelo_reranker="gemini", user=_usuario(5))
+    args = bt.tasks[0].args
+    assert args == (5, None, "gemini")
+
+
+def test_gemini_ignorado_pra_usuario_fora_da_lista():
+    outro_id = max(_USUARIOS_SELETOR_RERANKER) + 1000
+    bt = BackgroundTasks()
+    recalcular(bt, com_ia=True, modelo_reranker="gemini", user=_usuario(outro_id))
+    args = bt.tasks[0].args
+    assert args == (outro_id, None, None)

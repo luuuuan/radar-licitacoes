@@ -2422,16 +2422,32 @@ function abrirRecalcular(){
         ${USUARIO && USUARIO.id===5 ? `
         <div class="field" style="margin:0">
           <label style="font-size:12px">Modelo do reranker (teste — só nesta conta)</label>
-          <select id="rec-modelo-reranker" style="width:100%">
-            <option value="Qwen/Qwen3-Reranker-0.6B">0.6B — mais barato ($0,010 / 1M tokens)</option>
-            <option value="Qwen/Qwen3-Reranker-4B" selected>4B — padrão atual ($0,025 / 1M tokens)</option>
-            <option value="Qwen/Qwen3-Reranker-8B">8B — mais caro ($0,050 / 1M tokens)</option>
+          <select id="rec-modelo-reranker" style="width:100%" onchange="_avisoModeloReranker(this.value)">
+            <option value="Qwen/Qwen3-Reranker-0.6B">0.6B (DeepInfra) — mais barato ($0,010 / 1M tokens)</option>
+            <option value="Qwen/Qwen3-Reranker-4B" selected>4B (DeepInfra) — padrão atual ($0,025 / 1M tokens)</option>
+            <option value="Qwen/Qwen3-Reranker-8B">8B (DeepInfra) — mais caro ($0,050 / 1M tokens)</option>
+            <option value="gemini">Gemini (sua chave) — experimental</option>
           </select>
+          <div id="aviso-modelo-reranker" class="muted" style="font-size:11px;margin-top:4px;display:none;color:var(--medio)"></div>
         </div>` : ''}
         <button class="btn ghost" onclick="recalcular(true)">✨ Recalcular com IA</button>
         <span class="muted" style="font-size:12px;margin-top:-6px">Mais preciso (usa o reranker), porém bem mais lento e tem custo por token na DeepInfra.</span>
       </div>
     </div></div>`;
+}
+// Gemini faz 1 chamada POR ITEM (não broadcast como o reranker da DeepInfra)
+// — num recálculo completo (milhares de editais) isso estoura de longe o
+// limite de taxa da chave Gemini. Avisa isso só quando a opção é escolhida,
+// não polui a tela por padrão.
+function _avisoModeloReranker(valor){
+  const el = $('#aviso-modelo-reranker');
+  if(!el) return;
+  if(valor === 'gemini'){
+    el.textContent = '⚠ Experimental: 1 chamada Gemini por item (não broadcast). Rodar contra a base inteira provavelmente esbarra no limite de taxa da sua chave — use só pra testar poucos editais por vez.';
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 // _recalcTimer fica fora da função pra não duplicar o polling: se a página é
