@@ -1071,6 +1071,42 @@
     </div>
 
     <div class="card">
+      <h3 style="margin-top:0">Dados complementares
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Usados pra montar a proposta timbrada exportada pro edital. Todos opcionais.</span></span>
+      </h3>
+      <div class="grid2">
+        <div class="field"><label>Telefone</label><input id="pf-telefone" style="width:100%" placeholder="(00) 00000-0000"></div>
+        <div class="field"><label>Representante legal</label><input id="pf-representante" style="width:100%" placeholder="Quem assina a proposta"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Inscrição estadual</label><input id="pf-ie" style="width:100%"></div>
+        <div class="field"><label>Inscrição municipal</label><input id="pf-im" style="width:100%"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Banco</label><input id="pf-banco-nome" style="width:100%"></div>
+        <div class="field"><label>Agência</label><input id="pf-banco-ag" style="width:100%"></div>
+      </div>
+      <div class="field"><label>Conta</label><input id="pf-banco-conta" style="width:100%"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Logo da empresa
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Usada pra timbrar a proposta exportada. PNG, JPG, WEBP ou SVG, até ~800KB.</span></span>
+      </h3>
+      <div style="display:flex;align-items:center;gap:14px">
+        <div id="pf-logo-preview" style="width:64px;height:64px;border-radius:10px;border:1px dashed var(--line);
+          background:var(--panel2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+        </div>
+        <div style="flex:1">
+          <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" onchange="selecionarLogoPerfil(this)">
+          <div class="muted" id="pf-logo-status" style="font-size:11px;margin-top:4px"></div>
+          <button type="button" class="btn ghost discreto" id="pf-logo-remover" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="removerLogoPerfil()">Remover logo</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 style="margin-top:0">Chave da IA (Gemini)</h3>
       <div class="field"><label>Sua chave Gemini</label>
         <input id="pf-gemini" style="width:100%" placeholder="cole aqui sua chave (AIza...)" autocomplete="off">
@@ -3569,10 +3605,57 @@ async function loadPerfil(){
   $('#pf-notif-tg').checked = !!p.notif_telegram;
   $('#pf-avisar-abertura').checked = p.avisar_abertura !== false;
   if(p.dias_antecedencia != null) $('#pf-dias-ante').value = p.dias_antecedencia;
+  const emp = p.dados_empresa||{};
+  $('#pf-telefone').value = emp.telefone||'';
+  $('#pf-representante').value = emp.representante_legal||'';
+  $('#pf-ie').value = emp.inscricao_estadual||'';
+  $('#pf-im').value = emp.inscricao_municipal||'';
+  $('#pf-banco-nome').value = emp.banco_nome||'';
+  $('#pf-banco-ag').value = emp.banco_agencia||'';
+  $('#pf-banco-conta').value = emp.banco_conta||'';
+  _perfilLogoBase64 = undefined;   // undefined = sem alteração pendente (mantém a atual ao salvar)
+  $('#pf-logo').value = '';
+  $('#pf-logo-status').textContent = '';
+  $('#pf-logo-remover').style.display = p.logo_base64 ? 'inline-block' : 'none';
+  $('#pf-logo-preview').innerHTML = p.logo_base64
+    ? `<img src="${esc(p.logo_base64)}" alt="Logo" style="max-width:100%;max-height:100%;object-fit:contain">`
+    : '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>';
   // máscaras (idempotente: só liga uma vez)
   if(!$('#pf-doc').dataset.mask){ aplicarMascara($('#pf-doc'), mascaraDoc); $('#pf-doc').dataset.mask='1'; }
   if(!$('#pf-cep').dataset.mask){ aplicarMascara($('#pf-cep'), mascaraCep); $('#pf-cep').dataset.mask='1'; }
   carregarVinculoTelegram();
+}
+// undefined = nenhuma alteração pendente (salvarPerfil não envia logo_base64,
+// mantém a atual); '' = removida; string = nova logo escolhida
+let _perfilLogoBase64;
+function selecionarLogoPerfil(input){
+  const statusEl = $('#pf-logo-status');
+  const arquivo = input.files && input.files[0];
+  if(!arquivo) return;
+  const tiposOk = ['image/png','image/jpeg','image/svg+xml','image/webp'];
+  if(!tiposOk.includes(arquivo.type)){
+    statusEl.textContent = 'Envie uma imagem PNG, JPG, WEBP ou SVG.';
+    input.value = ''; return;
+  }
+  if(arquivo.size > 800*1024){
+    statusEl.textContent = 'Imagem muito grande (máximo ~800KB).';
+    input.value = ''; return;
+  }
+  const leitor = new FileReader();
+  leitor.onload = () => {
+    _perfilLogoBase64 = leitor.result;
+    $('#pf-logo-preview').innerHTML = `<img src="${leitor.result}" alt="Logo" style="max-width:100%;max-height:100%;object-fit:contain">`;
+    $('#pf-logo-remover').style.display = 'inline-block';
+    statusEl.textContent = arquivo.name + ' (salve para confirmar)';
+  };
+  leitor.readAsDataURL(arquivo);
+}
+function removerLogoPerfil(){
+  _perfilLogoBase64 = '';
+  $('#pf-logo').value = '';
+  $('#pf-logo-preview').innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>';
+  $('#pf-logo-remover').style.display = 'none';
+  $('#pf-logo-status').textContent = 'Logo será removida ao salvar.';
 }
 
 async function carregarVinculoTelegram(){
@@ -3641,9 +3724,16 @@ async function salvarPerfil(){
       complemento: $('#pf-compl').value,
       cidade: $('#pf-cidade').dataset.cidade||'', uf: $('#pf-cidade').dataset.uf||'',
     },
+    dados_empresa: {
+      telefone: $('#pf-telefone').value, representante_legal: $('#pf-representante').value,
+      inscricao_estadual: $('#pf-ie').value, inscricao_municipal: $('#pf-im').value,
+      banco_nome: $('#pf-banco-nome').value, banco_agencia: $('#pf-banco-ag').value,
+      banco_conta: $('#pf-banco-conta').value,
+    },
   };
   const g = $('#pf-gemini').value.trim();
   if(g) body.gemini_key = g;   // só envia se digitou algo (em branco mantém a atual)
+  if(_perfilLogoBase64 !== undefined) body.logo_base64 = _perfilLogoBase64;   // undefined = não mexe na logo atual
   await api('/api/perfil',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#perfil-msg').textContent = 'Perfil salvo!';
   toast('Perfil salvo com sucesso.', 'ok', 3000);

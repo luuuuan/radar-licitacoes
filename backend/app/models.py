@@ -36,6 +36,15 @@ class Usuario(Base):
     # dados cadastrais (CPF/CNPJ e endereço guardados cifrados)
     doc_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)       # CPF/CNPJ
     endereco_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON cifrado
+    # dados complementares pra montar a proposta/documento timbrado — mesmo
+    # padrão do endereço: JSON cifrado (telefone, representante_legal,
+    # inscricao_estadual, inscricao_municipal, banco_nome, banco_agencia,
+    # banco_conta — inclui dado bancário, por isso cifrado).
+    dados_empresa_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # logo da empresa (data URI completo: "data:image/png;base64,...") pra
+    # timbrar a proposta exportada — não é sensível (vai impresso no
+    # documento mesmo), por isso não cifrado, ao contrário dos campos acima.
+    logo_base64: Mapped[str | None] = mapped_column(Text, nullable=True)
     # verificação de e-mail
     email_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
     token_verificacao: Mapped[str | None] = mapped_column(String(128), nullable=True)

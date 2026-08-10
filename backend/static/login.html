@@ -78,10 +78,44 @@
   .voltar{display:inline-block;margin-top:14px;font-size:12px;color:var(--muted);
     text-decoration:none;background:none;border:none;cursor:pointer;padding:0}
   .voltar:hover{color:var(--txt)}
+  /* especificidade extra: sem isso, ".voltar{display:inline-block}" (que
+     vem depois de ".hidden" no CSS) ganhava da cascata mesmo com a classe
+     "hidden" aplicada por JS — mesmo bug já visto no cabeçalho do app
+     principal (index.html), botão "escondido" continuava visível. */
+  .voltar.hidden{display:none}
   /* mensagem de campo obrigatório/inválido: abaixo do campo, no lugar do
      balão nativo do navegador (que aparece solto, sem seguir o tema) */
   input.campo-invalido{border-color:var(--destructive)}
   .erro-campo{color:var(--destructive);font-size:11px;margin-top:4px}
+
+  /* ---- animação login <-> cadastro <-> esqueci/redefinir ---- */
+  @keyframes formIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .form-anim{animation:formIn .28s ease}
+
+  /* ---- cadastro em passos (wizard) ---- */
+  .wizard-dots{display:flex;gap:6px;justify-content:center;margin-bottom:16px}
+  .wizard-dots .dot{width:7px;height:7px;border-radius:50%;background:var(--line);
+    transition:background-color .2s,width .2s}
+  .wizard-dots .dot.on{background:var(--accent);width:18px;border-radius:4px}
+  .wizard-dots .dot.feito{background:var(--forte)}
+  .wizard-viewport{overflow:hidden}
+  .wizard-track{display:flex;transition:transform .3s ease}
+  .wizard-step{flex:0 0 100%;min-width:0}
+  .wizard-step-titulo{font-family:var(--font-heading);font-size:14px;font-weight:600;margin:0 0 2px}
+  .wizard-step-sub{font-size:12px;color:var(--muted);margin:0 0 4px}
+  .wizard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:10px}
+  .wizard-nav .voltar{margin-top:0;flex-shrink:0}
+  .wizard-nav .btn{width:auto;margin-top:0;padding:9px 22px}
+  .wizard-nav .espaco{flex:1}
+  .logo-upload{display:flex;align-items:center;gap:14px;margin-top:6px}
+  .logo-preview{width:64px;height:64px;border-radius:10px;border:1px dashed var(--line);
+    background:var(--panel2);display:flex;align-items:center;justify-content:center;
+    overflow:hidden;flex-shrink:0}
+  .logo-preview img{max-width:100%;max-height:100%;object-fit:contain}
+  .logo-preview svg{color:var(--muted)}
+  @media (prefers-reduced-motion:reduce){
+    .wizard-track{transition:none}
+  }
 </style>
 <script>
   // aplica o mesmo tema (claro/escuro) escolhido no app principal, antes do
@@ -116,22 +150,99 @@
     <button id="l-submit" class="btn" type="submit">Entrar</button>
   </form>
 
-  <!-- CADASTRO -->
+  <!-- CADASTRO (passo a passo) -->
   <form id="form-cadastro" class="hidden" novalidate onsubmit="return cadastrar(event)">
-    <label>Nome ou razão social</label>
-    <input id="c-nome" required>
-    <label>CPF ou CNPJ <span style="opacity:.6">(opcional)</span></label>
-    <input id="c-doc" placeholder="CPF ou CNPJ" oninput="this.value=mascaraDocLogin(this.value)">
-    <label>E-mail</label>
-    <input id="c-email" type="email" autocomplete="email" required>
-    <label>Senha</label>
-    <div class="campo-senha">
-      <input id="c-senha" type="password" autocomplete="new-password" required oninput="medirForca()">
-      <button type="button" class="olho" onclick="alternarSenha('c-senha', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <div class="wizard-dots" id="wizard-dots">
+      <span class="dot on" data-step="0"></span>
+      <span class="dot" data-step="1"></span>
+      <span class="dot" data-step="2"></span>
+      <span class="dot" data-step="3"></span>
     </div>
-    <div class="forca"><i id="forca-barra"></i></div>
-    <div class="forca-txt" id="forca-txt">Use 8+ caracteres, com letra, número e símbolo.</div>
-    <button id="c-submit" class="btn" type="submit">Criar conta</button>
+    <div class="wizard-viewport">
+      <div class="wizard-track" id="wizard-track">
+
+        <!-- passo 1: conta -->
+        <div class="wizard-step">
+          <p class="wizard-step-titulo">Sua conta</p>
+          <label>Nome ou razão social</label>
+          <input id="c-nome" required>
+          <label>CPF ou CNPJ <span style="opacity:.6">(opcional)</span></label>
+          <input id="c-doc" placeholder="CPF ou CNPJ" oninput="this.value=mascaraDocLogin(this.value)">
+          <label>E-mail</label>
+          <input id="c-email" type="email" autocomplete="email" required>
+          <label>Senha</label>
+          <div class="campo-senha">
+            <input id="c-senha" type="password" autocomplete="new-password" required oninput="medirForca()">
+            <button type="button" class="olho" onclick="alternarSenha('c-senha', this)" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+          <div class="forca"><i id="forca-barra"></i></div>
+          <div class="forca-txt" id="forca-txt">Use 8+ caracteres, com letra, número e símbolo.</div>
+        </div>
+
+        <!-- passo 2: endereço -->
+        <div class="wizard-step">
+          <p class="wizard-step-titulo">Endereço</p>
+          <p class="wizard-step-sub">Opcional — ajuda a montar a proposta depois. Pode pular e completar mais tarde em "Meu perfil".</p>
+          <label>CEP</label>
+          <input id="c-cep" placeholder="00000-000" oninput="this.value=mascaraCepLogin(this.value)" onblur="buscarCepLogin()">
+          <span class="hint" id="cep-status-login"></span>
+          <div class="row">
+            <div><label>Logradouro</label><input id="c-logradouro"></div>
+            <div style="flex:0 0 90px"><label>Número</label><input id="c-numero"></div>
+          </div>
+          <div class="row">
+            <div><label>Bairro</label><input id="c-bairro"></div>
+            <div><label>Complemento</label><input id="c-compl"></div>
+          </div>
+          <div class="row">
+            <div><label>Cidade</label><input id="c-cidade"></div>
+            <div style="flex:0 0 70px"><label>UF</label><input id="c-uf" maxlength="2" style="text-transform:uppercase"></div>
+          </div>
+        </div>
+
+        <!-- passo 3: dados complementares -->
+        <div class="wizard-step">
+          <p class="wizard-step-titulo">Dados complementares</p>
+          <p class="wizard-step-sub">Opcional — usados na proposta timbrada exportada pro edital. Pode pular e completar depois.</p>
+          <label>Telefone</label>
+          <input id="c-telefone" placeholder="(00) 00000-0000">
+          <label>Representante legal</label>
+          <input id="c-representante" placeholder="Quem assina a proposta">
+          <div class="row">
+            <div><label>Inscrição estadual</label><input id="c-ie"></div>
+            <div><label>Inscrição municipal</label><input id="c-im"></div>
+          </div>
+          <label>Banco</label>
+          <input id="c-banco-nome">
+          <div class="row">
+            <div><label>Agência</label><input id="c-banco-ag"></div>
+            <div><label>Conta</label><input id="c-banco-conta"></div>
+          </div>
+        </div>
+
+        <!-- passo 4: logo -->
+        <div class="wizard-step">
+          <p class="wizard-step-titulo">Logo da empresa</p>
+          <p class="wizard-step-sub">Opcional — usada pra timbrar a proposta exportada. PNG, JPG ou SVG, até ~800KB.</p>
+          <div class="logo-upload">
+            <div class="logo-preview" id="logo-preview">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+            </div>
+            <div style="flex:1">
+              <input type="file" id="c-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" onchange="selecionarLogoLogin(this)">
+              <div class="hint" id="logo-status-login"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="wizard-nav">
+      <button type="button" class="voltar hidden" id="wizard-voltar" onclick="wizardVoltar()">&larr; Voltar</button>
+      <span class="espaco"></span>
+      <button type="button" class="btn" id="wizard-avancar" onclick="wizardAvancar()">Avançar</button>
+    </div>
+    <button id="c-submit" class="btn hidden" type="submit">Criar conta</button>
   </form>
 
   <!-- ESQUECI MINHA SENHA -->
@@ -181,6 +292,17 @@ function mostrar(qual){
   $('#tab-login').classList.toggle('on', qual==='login');
   $('#tab-cadastro').classList.toggle('on', qual==='cadastro');
   msg('');
+  // anima a entrada do formulário que acabou de aparecer (troca de aba) —
+  // reinicia a animação removendo a classe e forçando reflow antes de
+  // adicionar de novo, senão o navegador não reexecuta o @keyframes numa
+  // 2ª troca pro mesmo formulário
+  const alvo = $(formularios[qual]);
+  if(alvo){
+    alvo.classList.remove('form-anim');
+    void alvo.offsetWidth;
+    alvo.classList.add('form-anim');
+  }
+  if(qual==='cadastro') wizardIrPara(0, true);
 }
 function msg(t, tipo){
   const m=$('#msg'); m.textContent=t||''; m.className='msg'+(t?(' '+(tipo||'erro')):'');
@@ -203,9 +325,9 @@ function marcarErroCampo(input, texto){
   (input.closest('.campo-senha') || input).insertAdjacentElement('afterend', div);
   input.addEventListener('input', function limpar(){ limparErroCampo(input); }, {once:true});
 }
-function validarCampos(form){
+function validarCamposEm(container){
   let primeiroInvalido=null;
-  form.querySelectorAll('input').forEach(input=>{
+  container.querySelectorAll('input').forEach(input=>{
     limparErroCampo(input);
     if(!input.checkValidity()){
       const texto = (input.validity.typeMismatch && input.type==='email')
@@ -216,6 +338,82 @@ function validarCampos(form){
   });
   if(primeiroInvalido) primeiroInvalido.focus();
   return !primeiroInvalido;
+}
+function validarCampos(form){ return validarCamposEm(form); }
+
+// ---------------- Cadastro em passos (wizard) ----------------
+const _WIZARD_TOTAL = 4;
+let _wizardStep = 0;
+let _wizardLogoBase64 = '';
+function wizardIrPara(passo, semAnimar){
+  _wizardStep = Math.max(0, Math.min(_WIZARD_TOTAL-1, passo));
+  const track = $('#wizard-track');
+  track.style.transition = semAnimar ? 'none' : '';
+  track.style.transform = `translateX(-${_wizardStep*100}%)`;
+  if(semAnimar) void track.offsetWidth;   // força aplicar antes de devolver a transição
+  track.style.transition = '';
+  document.querySelectorAll('#wizard-dots .dot').forEach((d,i)=>{
+    d.classList.toggle('on', i===_wizardStep);
+    d.classList.toggle('feito', i<_wizardStep);
+  });
+  $('#wizard-voltar').classList.toggle('hidden', _wizardStep===0);
+  const ultimo = _wizardStep===_WIZARD_TOTAL-1;
+  $('#wizard-avancar').classList.toggle('hidden', ultimo);
+  $('#c-submit').classList.toggle('hidden', !ultimo);
+}
+function wizardVoltar(){ wizardIrPara(_wizardStep-1); }
+function wizardAvancar(){
+  const stepAtual = document.querySelectorAll('.wizard-step')[_wizardStep];
+  if(!validarCamposEm(stepAtual)) return;
+  wizardIrPara(_wizardStep+1);
+}
+function mascaraCepLogin(v){
+  const d=(v||'').replace(/\D/g,'').slice(0,8);
+  return d.length>5 ? d.replace(/(\d{5})(\d)/,'$1-$2') : d;
+}
+async function buscarCepLogin(){
+  const cep=($('#c-cep').value||'').replace(/\D/g,'');
+  const statusEl=$('#cep-status-login');
+  if(cep.length!==8){ statusEl.textContent=''; return; }
+  statusEl.textContent='Buscando...';
+  try{
+    // ViaCEP aceita chamada direta do navegador — cadastro ainda não tem
+    // sessão/token pra usar o /api/cep autenticado do app principal.
+    const r=await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const d=await r.json();
+    if(d.erro){ statusEl.textContent='CEP não encontrado.'; return; }
+    $('#c-logradouro').value = d.logradouro || '';
+    $('#c-bairro').value = d.bairro || '';
+    $('#c-cidade').value = d.localidade || '';
+    $('#c-uf').value = d.uf || '';
+    statusEl.textContent = '';
+    if(!d.logradouro) $('#c-logradouro').focus(); else $('#c-numero').focus();
+  }catch(e){
+    statusEl.textContent = 'Não foi possível buscar o CEP agora.';
+  }
+}
+function selecionarLogoLogin(input){
+  const statusEl = $('#logo-status-login');
+  const arquivo = input.files && input.files[0];
+  if(!arquivo) return;
+  const tiposOk = ['image/png','image/jpeg','image/svg+xml','image/webp'];
+  if(!tiposOk.includes(arquivo.type)){
+    statusEl.textContent = 'Envie uma imagem PNG, JPG, WEBP ou SVG.';
+    input.value = '';
+    return;
+  }
+  if(arquivo.size > 800*1024){
+    statusEl.textContent = 'Imagem muito grande (máximo ~800KB).';
+    input.value = '';
+    return;
+  }
+  const leitor = new FileReader();
+  leitor.onload = () => {
+    _wizardLogoBase64 = leitor.result;
+    $('#logo-preview').innerHTML = `<img src="${leitor.result}" alt="Logo">`;
+    statusEl.textContent = arquivo.name;
+  };
+  leitor.readAsDataURL(arquivo);
 }
 function medirForcaEm(valor, barraEl, txtEl){
   let n=0;
@@ -257,24 +455,50 @@ async function entrar(e){
   else msg(r.data.detail || 'Não foi possível entrar.');
   return false;
 }
+function _campoOuVazio(id){ const el=$(id); return el ? (el.value||'').trim() : ''; }
 async function cadastrar(e){
   e.preventDefault(); msg('');
+  // valida os campos de TODOS os passos (defesa extra — o botão Avançar já
+  // valida passo a passo, isso aqui só cobre o caso de chegar aqui sem ter
+  // passado pelo wizard normalmente)
   if(!validarCampos(e.target)) return false;
   const email=($('#c-email').value||'').trim();
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
     marcarErroCampo($('#c-email'), 'Digite um e-mail válido (ex: nome@dominio.com).');
+    wizardIrPara(0);
     $('#c-email').focus();
     return false;
   }
+  const endereco = {
+    cep:_campoOuVazio('#c-cep'), logradouro:_campoOuVazio('#c-logradouro'),
+    numero:_campoOuVazio('#c-numero'), bairro:_campoOuVazio('#c-bairro'),
+    cidade:_campoOuVazio('#c-cidade'), uf:_campoOuVazio('#c-uf'),
+    complemento:_campoOuVazio('#c-compl'),
+  };
+  const temEndereco = Object.values(endereco).some(v=>v);
+  const dadosEmpresa = {
+    telefone:_campoOuVazio('#c-telefone'), representante_legal:_campoOuVazio('#c-representante'),
+    inscricao_estadual:_campoOuVazio('#c-ie'), inscricao_municipal:_campoOuVazio('#c-im'),
+    banco_nome:_campoOuVazio('#c-banco-nome'), banco_agencia:_campoOuVazio('#c-banco-ag'),
+    banco_conta:_campoOuVazio('#c-banco-conta'),
+  };
+  const temDadosEmpresa = Object.values(dadosEmpresa).some(v=>v);
   const btn=$('#c-submit'); btn.disabled=true;
   const r=await post('/api/auth/cadastro',{
     nome:$('#c-nome').value, email:email,
-    senha:$('#c-senha').value, documento:$('#c-doc').value||null});
+    senha:$('#c-senha').value, documento:$('#c-doc').value||null,
+    endereco: temEndereco ? endereco : null,
+    dados_empresa: temDadosEmpresa ? dadosEmpresa : null,
+    logo_base64: _wizardLogoBase64 || null,
+  });
   btn.disabled=false;
   if(r.ok){
     if(r.data.verificar_email){
       msg(r.data.mensagem || 'Enviamos um link de confirmação para o seu e-mail. Confirme para entrar.', 'ok');
       $('#form-cadastro').reset(); medirForca();
+      _wizardLogoBase64 = '';
+      $('#logo-preview').innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>';
+      wizardIrPara(0, true);
     } else { location.href='/'; }
   } else {
     msg(r.data.detail || 'Não foi possível criar a conta.');

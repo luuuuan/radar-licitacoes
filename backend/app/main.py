@@ -117,6 +117,11 @@ class CadastroIn(BaseModel):
     email: str
     senha: str
     documento: str | None = None       # CPF ou CNPJ
+    # complementares (todos opcionais — dá pra completar depois em Meu perfil)
+    endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
+    dados_empresa: dict | None = None   # {telefone, representante_legal, inscricao_estadual,
+                                         #  inscricao_municipal, banco_nome, banco_agencia, banco_conta}
+    logo_base64: str | None = None      # data URI ("data:image/png;base64,...") pra timbrar a proposta
 
 
 def _email_html_verificacao(nome: str, link: str) -> str:
@@ -173,6 +178,36 @@ def _set_cookie_sessao(resp: _Resp, usuario_id: int):
                     path="/")
 
 
+# campos válidos do JSON cifrado de dados complementares — filtra chave
+# desconhecida antes de guardar (o cliente não pode injetar chave arbitrária
+# num JSON que vai direto pro banco).
+_CAMPOS_DADOS_EMPRESA = {
+    "telefone", "representante_legal", "inscricao_estadual",
+    "inscricao_municipal", "banco_nome", "banco_agencia", "banco_conta",
+}
+# tamanho máximo do data URI da logo (base64 infla ~33% sobre o binário —
+# isso cobre uma imagem de até ~800KB, de sobra pra um logo).
+_LOGO_MAX_CHARS = 1_200_000
+
+
+def _limpar_dados_empresa(bruto: dict | None) -> dict:
+    if not bruto:
+        return {}
+    return {k: str(v).strip() for k, v in bruto.items()
+           if k in _CAMPOS_DADOS_EMPRESA and str(v or "").strip()}
+
+
+def _validar_logo_base64(valor: str | None) -> str | None:
+    if not valor:
+        return None
+    valor = valor.strip()
+    if not valor.startswith("data:image/"):
+        raise HTTPException(400, "Logo inválida — envie uma imagem (PNG, JPG ou SVG).")
+    if len(valor) > _LOGO_MAX_CHARS:
+        raise HTTPException(400, "Logo muito grande — envie uma imagem menor (até ~800KB).")
+    return valor
+
+
 @app.post("/api/auth/cadastro")
 def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
                   db: Session = Depends(get_session)):
@@ -191,14 +226,20 @@ def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
     existe = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
     if existe:
         raise HTTPException(409, "Já existe uma conta com este e-mail.")
+    logo = _validar_logo_base64(dados.logo_base64)
 
     primeiro = db.scalar(select(func.count(Usuario.id))) == 0
     smtp_ok = _email_mod.smtp_configurado()
 
+    import json as _j
+    dados_empresa = _limpar_dados_empresa(dados.dados_empresa)
     u = Usuario(
         nome=dados.nome.strip(), email=email,
         senha_hash=_auth.hash_senha(dados.senha),
         doc_cifrado=_auth.cifrar((dados.documento or "").strip() or None),
+        endereco_cifrado=_auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False)) if dados.endereco else None,
+        dados_empresa_cifrado=_auth.cifrar(_j.dumps(dados_empresa, ensure_ascii=False)) if dados_empresa else None,
+        logo_base64=logo,
         email_verificado=not smtp_ok,   # sem SMTP, libera direto; com SMTP, exige verificar
         token_verificacao=_secrets_auth.token_urlsafe(32) if smtp_ok else None,
     )
@@ -382,6 +423,9 @@ class PerfilIn(BaseModel):
     avisar_abertura: bool | None = None
     dias_antecedencia: int | None = None
     endereco: dict | None = None        # {cep, logradouro, numero, bairro, cidade, uf, complemento}
+    dados_empresa: dict | None = None   # {telefone, representante_legal, inscricao_estadual,
+                                         #  inscricao_municipal, banco_nome, banco_agencia, banco_conta}
+    logo_base64: str | None = None      # data URI; "" remove a logo, None mantém
 
 
 @app.get("/api/perfil")
@@ -392,6 +436,11 @@ def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
         endereco = _j.loads(end) if end else {}
     except ValueError:
         endereco = {}
+    emp = _auth.decifrar(user.dados_empresa_cifrado)
+    try:
+        dados_empresa = _j.loads(emp) if emp else {}
+    except ValueError:
+        dados_empresa = {}
     return {
         "nome": user.nome, "email": user.email,
         "documento": _auth.decifrar(user.doc_cifrado) or "",
@@ -401,6 +450,8 @@ def obter_perfil(user: Usuario = Depends(_auth.get_current_user)):
         "avisar_abertura": user.avisar_abertura,
         "dias_antecedencia": user.dias_antecedencia,
         "endereco": endereco,
+        "dados_empresa": dados_empresa,
+        "logo_base64": user.logo_base64 or "",
     }
 
 
@@ -427,6 +478,11 @@ def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_use
         user.dias_antecedencia = max(0, min(30, dados.dias_antecedencia))  # 0 a 30 dias
     if dados.endereco is not None:
         user.endereco_cifrado = _auth.cifrar(_j.dumps(dados.endereco, ensure_ascii=False))
+    if dados.dados_empresa is not None:
+        limpo = _limpar_dados_empresa(dados.dados_empresa)
+        user.dados_empresa_cifrado = _auth.cifrar(_j.dumps(limpo, ensure_ascii=False)) if limpo else None
+    if dados.logo_base64 is not None:
+        user.logo_base64 = _validar_logo_base64(dados.logo_base64) if dados.logo_base64 else None
     db.commit()
     return {"ok": True}
 
