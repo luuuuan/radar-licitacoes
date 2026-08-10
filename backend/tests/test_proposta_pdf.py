@@ -74,6 +74,15 @@ def test_gera_pdf_com_logo_valida():
     assert pdf_bytes[:4] == b"%PDF"
 
 
+def test_marca_dagua_nao_quebra_com_imagem_corrompida():
+    """_marca_dagua é decorativa — imagem corrompida (passa na validação de
+    data URI mas o binário em si é lixo) não pode derrubar a geração do
+    PDF inteiro."""
+    remetente = dict(_REMETENTE_BASE, logo_base64="data:image/png;base64,QUJD")  # "ABC", não é PNG de verdade
+    pdf_bytes = gerar_pdf_proposta(remetente, _EDITAL_BASE, _PAYLOAD_BASE)
+    assert pdf_bytes[:4] == b"%PDF"
+
+
 def test_muitos_itens_gera_mais_de_uma_pagina_sem_quebrar():
     payload = dict(_PAYLOAD_BASE, itens=[
         {"descricao": f"Item {i}", "quantidade": 1, "preco_unit": 10.0} for i in range(80)

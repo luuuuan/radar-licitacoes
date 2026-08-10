@@ -68,7 +68,27 @@ class _PropostaPDF(FPDF):
         self._remetente = remetente
         self.set_auto_page_break(auto=True, margin=22)
 
+    def _marca_dagua(self):
+        """Logo grande, bem clara e girada atrás do conteúdo, repetida em
+        toda página — mesmo efeito do modelo real que essa proposta segue.
+        Silenciosa em qualquer falha (imagem grande demais, formato
+        inesperado etc.): marca d'água é só estética, nunca pode quebrar a
+        geração do PDF nem sujar a área de conteúdo se der errado."""
+        logo = _decodificar_logo(self._remetente.get("logo_base64"))
+        if not logo:
+            return
+        buf, _ext = logo
+        try:
+            lado = 110
+            cx, cy = self.w / 2, self.h / 2
+            with self.local_context(fill_opacity=0.07, stroke_opacity=0.07):
+                with self.rotation(20, x=cx, y=cy):
+                    self.image(buf, x=cx - lado / 2, y=cy - lado / 2, w=lado, h=lado)
+        except Exception:
+            pass
+
     def header(self):
+        self._marca_dagua()
         remetente = self._remetente
         logo = _decodificar_logo(remetente.get("logo_base64"))
         x_texto = 15
