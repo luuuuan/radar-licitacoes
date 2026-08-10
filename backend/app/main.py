@@ -1427,7 +1427,18 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     itens = list(match.detalhe.get("itens") or [])
     idx = next((i for i, d in enumerate(itens) if d.get("item") == numero), None)
     if idx is None:
-        raise HTTPException(404, "Item não encontrado neste edital")
+        # O item pode nunca ter entrado em match.detalhe: o motor de matching
+        # só grava um item ali quando o score passa de LIMIAR_ITEM_SUGESTAO
+        # (matching/engine.py) — mas a comparação de catálogo por IA (aba
+        # Análise por IA) roda uma busca independente e pode sugerir um
+        # produto pra um item que o motor descartou por completo. Sem isso,
+        # confirmar essa sugestão sempre dava 404 ("Item não encontrado").
+        existe = db.execute(select(ItemEdital.id).where(
+            ItemEdital.edital_id == edital_id, ItemEdital.numero == numero)).scalar_one_or_none()
+        if existe is None:
+            raise HTTPException(404, "Item não encontrado neste edital")
+        itens.append({"item": numero, "confianca": None, "candidatos": []})
+        idx = len(itens) - 1
 
     item = dict(itens[idx])
     item["produto_id"] = produto.id if produto else None

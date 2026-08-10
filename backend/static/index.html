@@ -2695,7 +2695,7 @@ async function _renderPaginaEdital(editalId, aba){
   _paginaEditalId = editalId;
   _analiseCache = null;   // não carrega a análise de um edital antigo pro novo
   _cotacaoSelecionados = new Set();   // idem pra seleção de itens da cotação
-  ['editais','encerrados','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
+  ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
   $('#kpis').classList.add('hidden');   // KPIs (Editais do dia/ativos/etc) só na tela inicial
@@ -2944,7 +2944,13 @@ function _corpoItensEdital(d){
   }
   function _seletorSugestaoHtml(it, escondido){
     const numero = it.numero;
-    const atualId = it.produto ? it.produto.id : null;
+    // sem produto já confirmado, pré-seleciona a MELHOR candidata (1ª da
+    // lista, sempre ordenada por score) em vez de deixar o <select> cair no
+    // padrão do navegador (1ª <option> = "Nenhuma destas") — achado real:
+    // isso fazia clicar em "Confirmar" sem antes mexer no combobox enviar
+    // produto_id:null (== "não é nenhum produto") mesmo quando a sugestão
+    // em cima era a certa.
+    const atualId = it.produto ? it.produto.id : (it.sugestoes[0] ? it.sugestoes[0].produto.id : null);
     const opcoes = it.sugestoes.map(s=>
       `<option value="${s.produto.id}" ${s.produto.id===atualId?'selected':''}>${esc(s.produto.descricao)}${s.score!=null?` (score ${s.score})`:''}</option>`
     ).join('');
