@@ -182,7 +182,7 @@ def _set_cookie_sessao(resp: _Resp, usuario_id: int):
 # desconhecida antes de guardar (o cliente não pode injetar chave arbitrária
 # num JSON que vai direto pro banco).
 _CAMPOS_DADOS_EMPRESA = {
-    "telefone", "representante_legal", "inscricao_estadual",
+    "telefone", "representante_legal", "representante_rg", "inscricao_estadual",
     "inscricao_municipal", "banco_nome", "banco_agencia", "banco_conta",
 }
 # tamanho máximo do data URI da logo (base64 infla ~33% sobre o binário —

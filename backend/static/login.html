@@ -206,8 +206,10 @@
           <p class="wizard-step-sub">Opcional — usados na proposta timbrada exportada pro edital. Pode pular e completar depois.</p>
           <label>Telefone</label>
           <input id="c-telefone" placeholder="(00) 00000-0000">
-          <label>Representante legal</label>
-          <input id="c-representante" placeholder="Quem assina a proposta">
+          <div class="row">
+            <div><label>Representante legal</label><input id="c-representante" placeholder="Quem assina a proposta"></div>
+            <div style="flex:0 0 110px"><label>RG</label><input id="c-representante-rg"></div>
+          </div>
           <div class="row">
             <div><label>Inscrição estadual</label><input id="c-ie"></div>
             <div><label>Inscrição municipal</label><input id="c-im"></div>
@@ -478,6 +480,7 @@ async function cadastrar(e){
   const temEndereco = Object.values(endereco).some(v=>v);
   const dadosEmpresa = {
     telefone:_campoOuVazio('#c-telefone'), representante_legal:_campoOuVazio('#c-representante'),
+    representante_rg:_campoOuVazio('#c-representante-rg'),
     inscricao_estadual:_campoOuVazio('#c-ie'), inscricao_municipal:_campoOuVazio('#c-im'),
     banco_nome:_campoOuVazio('#c-banco-nome'), banco_agencia:_campoOuVazio('#c-banco-ag'),
     banco_conta:_campoOuVazio('#c-banco-conta'),

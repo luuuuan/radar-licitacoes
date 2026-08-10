@@ -107,3 +107,60 @@ def test_decodificar_logo_none_ou_vazio():
 
 def test_decodificar_logo_string_invalida():
     assert _decodificar_logo("não é uma imagem") is None
+
+
+# --------- estrutura formal (modelo real de proposta) --------- #
+
+def test_inclui_rg_do_representante_quando_informado():
+    remetente = dict(_REMETENTE_BASE, empresa=dict(_REMETENTE_BASE["empresa"],
+                     representante_rg="41.241.411-0"))
+    txt = _texto(gerar_pdf_proposta(remetente, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert "RG" in txt
+    assert "41.241.411-0" in txt
+
+
+def test_sem_rg_nao_aparece_mencao_a_rg():
+    """representante_rg é opcional — sem ele, não inventa nem deixa "RG:"
+    solto no meio do texto."""
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert "inscrito no RG" not in txt
+
+
+def test_inclui_declaracao_de_ciencia_do_edital():
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert "DECLARO ESTAR CIENTE E DE ACORDO COM O EDITAL" in txt
+    assert "Termo de Refer" in txt   # "Referência" — assertiva tolerante a variação de acentuação na extração
+
+
+def test_inclui_identificacao_formal_do_proponente():
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert "IDENTIFICA" in txt and "PROPONENTE" in txt
+    assert "CNPJ/CPF sob o n" in txt
+
+
+def test_inclui_condicoes_padrao_conforme_edital():
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, _PAYLOAD_BASE))
+    for rotulo in ("VALIDADE DA PROPOSTA", "PRAZO DE ENTREGA", "PRAZO DE GARANTIA"):
+        assert rotulo in txt
+
+
+def test_dados_bancarios_nao_aparecem_sem_conta_cadastrada():
+    remetente = dict(_REMETENTE_BASE, empresa={})
+    txt = _texto(gerar_pdf_proposta(remetente, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert "DADOS BANC" not in txt
+
+
+def test_assinatura_repete_nome_e_documento_da_empresa():
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, _PAYLOAD_BASE))
+    assert txt.count("Empresa Teste LTDA") >= 2   # cabeçalho + assinatura
+    assert txt.count("12.345.678/0001-99") >= 2
+
+
+def test_cabecalho_repete_em_mais_de_uma_pagina():
+    payload = dict(_PAYLOAD_BASE, itens=[
+        {"descricao": f"Item {i}", "quantidade": 1, "preco_unit": 10.0} for i in range(80)
+    ])
+    r = PdfReader(io.BytesIO(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload)))
+    assert len(r.pages) >= 2
+    for page in r.pages:
+        assert "Empresa Teste LTDA" in page.extract_text()

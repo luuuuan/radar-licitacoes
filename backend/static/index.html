@@ -1079,8 +1079,12 @@
         <div class="field"><label>Representante legal</label><input id="pf-representante" style="width:100%" placeholder="Quem assina a proposta"></div>
       </div>
       <div class="grid2">
+        <div class="field"><label>RG do representante</label><input id="pf-representante-rg" style="width:100%"></div>
         <div class="field"><label>Inscrição estadual</label><input id="pf-ie" style="width:100%"></div>
+      </div>
+      <div class="grid2">
         <div class="field"><label>Inscrição municipal</label><input id="pf-im" style="width:100%"></div>
+        <div></div>
       </div>
       <div class="grid2">
         <div class="field"><label>Banco</label><input id="pf-banco-nome" style="width:100%"></div>
@@ -3449,7 +3453,7 @@ async function _montarPropostaEdital(id, ativo){
       <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
     <div class="toolbar" style="margin-top:10px">
       <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
-      <button class="btn ghost" onclick="window.open('/api/editais/${id}/proposta.pdf','_blank')">${ICN.baixar} Baixar proposta (PDF)</button>
+      <button class="btn ghost" onclick="baixarPropostaPdf()">${ICN.baixar} Baixar proposta (PDF)</button>
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
     </div>`;
@@ -3465,7 +3469,7 @@ function renderProposta(){
     tv+=totItem; tc+=(it.custo_unit||0)*(it.quantidade||0);
     return `<tr>
       <td><input value="${esc(it.descricao||'')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
-      <td><input type="number" step="any" value="${it.quantidade}" onchange="propSet(${idx},'quantidade',this.value)" style="width:80px"></td>
+      <td><input type="number" step="any" value="${it.quantidade}" disabled title="Quantidade fixada pelo edital — não pode ser alterada aqui" style="width:80px"></td>
       <td><input type="number" step="any" class="campo-valor" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
       <td><input type="number" step="any" class="campo-valor" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
@@ -3533,6 +3537,13 @@ async function salvarProposta(){
     $('#prop-msg').innerHTML=ICN.check+' proposta salva';
     setTimeout(()=>{$('#prop-msg').textContent='';},4000);
   }catch(e){ $('#prop-msg').textContent='erro ao salvar'; }
+}
+// o PDF é gerado no servidor a partir do que está SALVO — sem salvar antes,
+// um item excluído/editado só na tela (sem clicar em "Salvar proposta")
+// continuava aparecendo no PDF baixado, com os dados antigos.
+async function baixarPropostaPdf(){
+  await salvarProposta();
+  window.open(`/api/editais/${_propEditalId}/proposta.pdf`,'_blank');
 }
 
 function fecharModal(){ $('#modal-mount').innerHTML=''; }
@@ -3608,6 +3619,7 @@ async function loadPerfil(){
   const emp = p.dados_empresa||{};
   $('#pf-telefone').value = emp.telefone||'';
   $('#pf-representante').value = emp.representante_legal||'';
+  $('#pf-representante-rg').value = emp.representante_rg||'';
   $('#pf-ie').value = emp.inscricao_estadual||'';
   $('#pf-im').value = emp.inscricao_municipal||'';
   $('#pf-banco-nome').value = emp.banco_nome||'';
@@ -3726,6 +3738,7 @@ async function salvarPerfil(){
     },
     dados_empresa: {
       telefone: $('#pf-telefone').value, representante_legal: $('#pf-representante').value,
+      representante_rg: $('#pf-representante-rg').value,
       inscricao_estadual: $('#pf-ie').value, inscricao_municipal: $('#pf-im').value,
       banco_nome: $('#pf-banco-nome').value, banco_agencia: $('#pf-banco-ag').value,
       banco_conta: $('#pf-banco-conta').value,
