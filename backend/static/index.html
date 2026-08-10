@@ -459,31 +459,35 @@
      existe no celular). A partir do tablet (mesmo ponto em que a lateral de
      filtros vira sticky), o mesmo elemento é REALOCADO por JS pro topo da
      lista (ver _reposicionarBuscaItem) e aí sim ganha a rolagem/colapso. */
-  .busca-item-destaque{display:flex;align-items:center;gap:10px;padding:12px 16px;
-    background:var(--panel);border:1px solid var(--accent);border-radius:10px;
+  .busca-item-destaque{display:flex;align-items:center;gap:10px;padding:10px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
     margin-bottom:14px;color:var(--muted);width:100%;
     transition:max-width .25s ease,padding .25s ease}
+  /* botão "Pesquisar" com contorno próprio — antes era só ícone+texto soltos
+     dentro da mesma barra do campo, sem nenhuma separação visual do
+     placeholder do input (ficava tudo parecendo um texto só, achado real
+     ao conferir a tela). Vale pro desktop e pro celular por igual. */
   .busca-item-icone{flex-shrink:0;display:flex;align-items:center;gap:6px;
-    background:none;border:none;padding:0;color:inherit;cursor:pointer;
-    font:inherit;font-size:14px}
+    background:var(--accent);border:none;border-radius:8px;padding:8px 12px;
+    color:#fff;cursor:pointer;font:inherit;font-size:13px;font-weight:600}
   .busca-item-destaque input{flex:1;min-width:0;border:none;background:transparent;
-    outline:none;color:var(--txt);font-size:15px;padding:2px 0;
+    outline:none;color:var(--txt);font-size:15px;padding:2px 6px;
     transition:opacity .15s ease}
   .busca-item-destaque input::placeholder{color:var(--muted)}
   /* colapsada (só existe na versão desktop/tablet, ver JS): só o ícone,
      campo e rótulo "Pesquisar" escondidos — abre de novo ao clicar. */
-  .busca-item-destaque.colapsada{max-width:44px;padding:12px;cursor:pointer}
+  .busca-item-destaque.colapsada{max-width:44px;padding:6px;cursor:pointer;
+    background:transparent;border-color:transparent}
   .busca-item-destaque.colapsada input{width:0;opacity:0;pointer-events:none}
   .busca-item-destaque.colapsada .busca-item-rotulo{display:none}
+  .busca-item-destaque.colapsada .busca-item-icone{padding:10px;border-radius:10px}
   /* no celular, campo numa linha e botão "Pesquisar" cheio embaixo (igual
      aos outros botões do painel de Filtros) — em uma linha só ficava
-     espremido: o rótulo do botão colava no placeholder do campo, sem
-     nenhuma separação visual entre os dois. */
-  #slot-busca-mobile .busca-item-destaque{flex-wrap:wrap;padding:10px 12px}
-  #slot-busca-mobile .busca-item-destaque input{order:1;flex:1 1 100%;padding:6px 0}
+     espremido demais pro botão e o campo caberem lado a lado. */
+  #slot-busca-mobile .busca-item-destaque{flex-wrap:wrap}
+  #slot-busca-mobile .busca-item-destaque input{order:1;flex:1 1 100%;padding:6px 4px}
   #slot-busca-mobile .busca-item-icone{order:2;width:100%;justify-content:center;
-    padding:8px;margin-top:6px;border:1px solid var(--accent);border-radius:8px;
-    color:var(--accent);font-weight:600}
+    padding:10px;margin-top:2px}
   @media (min-width:681px){
     .editais-layout{flex-direction:row;align-items:flex-start;gap:20px}
     .filtros-btn-mobile{display:none}
@@ -1579,22 +1583,35 @@ async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value,
         ufs=[...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
-        st=$('#f-status').value, nl=$('#f-naolidos').checked;
+        st=$('#f-status').value, nl=$('#f-naolidos').checked,
+        hoje=$('#f-hoje') && $('#f-hoje').checked,
+        tipo=$('#f-tipo') ? $('#f-tipo').value : 'todos',
+        busca=$('#f-busca-item') ? $('#f-busca-item').value.trim() : '',
+        vmin=$('#f-valor-min') ? $('#f-valor-min').value : '',
+        vmax=$('#f-valor-max') ? $('#f-valor-max').value : '';
+  // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
+  // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
+  const temFiltroAtivo = !!(nivel || ufs.length || st || nl || hoje ||
+    tipo!=='todos' || busca || vmin!=='' || vmax!=='');
+  $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
   const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
   if(nivel)qs.set('nivel',nivel);
   ufs.forEach(u=>qs.append('uf',u));
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
-  if($('#f-hoje') && $('#f-hoje').checked) qs.set('hoje','true');
-  const ft=$('#f-tipo'); if(ft && ft.value!=='todos') qs.set('tipo',ft.value);
-  const bi=$('#f-busca-item'); if(bi && bi.value.trim()) qs.set('busca_item',bi.value.trim());
-  const vmin=$('#f-valor-min'); if(vmin && vmin.value!=='') qs.set('valor_min',vmin.value);
-  const vmax=$('#f-valor-max'); if(vmax && vmax.value!=='') qs.set('valor_max',vmax.value);
+  if(hoje) qs.set('hoje','true');
+  if(tipo!=='todos') qs.set('tipo',tipo);
+  if(busca) qs.set('busca_item',busca);
+  if(vmin!=='') qs.set('valor_min',vmin);
+  if(vmax!=='') qs.set('valor_max',vmax);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   if(!eds.length){
-    $('#lista-editais').innerHTML = PRODUTOS_COUNT
+    $('#lista-editais').innerHTML = temFiltroAtivo
+      ? `<div class="card estado-vazio"><p class="muted">Nenhum edital encontrado com os filtros aplicados. Tente ajustar ou limpar os filtros.</p>
+          <div class="acoes-vazio"><button class="btn" onclick="limparFiltros()">Limpar filtros</button></div></div>`
+      : PRODUTOS_COUNT
       ? `<div class="card estado-vazio"><p class="muted">Nenhum edital ativo ainda. Rode uma coleta para buscar editais que combinem com o seu catálogo.</p>
           <div class="acoes-vazio"><button class="btn" onclick="coletar()">Coletar agora</button></div></div>`
       : `<div class="card estado-vazio"><p class="muted">Nenhum edital ainda — comece cadastrando ao menos um produto/serviço no seu catálogo.</p>
