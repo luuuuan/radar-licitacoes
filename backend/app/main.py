@@ -1636,7 +1636,18 @@ def _lock_recalculo(usuario_id: int) -> threading.Lock:
     return _recalculo_locks.setdefault(usuario_id, threading.Lock())
 
 
-def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
+# seletor de modelo do reranker (tela de Recalcular): experimental, por
+# enquanto só pra essa conta testar antes de decidir se vale expor geral.
+_USUARIOS_SELETOR_RERANKER = {5}
+_MODELOS_RERANKER_PERMITIDOS = {
+    "Qwen/Qwen3-Reranker-0.6B",
+    "Qwen/Qwen3-Reranker-4B",
+    "Qwen/Qwen3-Reranker-8B",
+}
+
+
+def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None,
+                        modelo_reranker: str | None = None):
     lock = _lock_recalculo(usuario_id)
     if not lock.acquire(blocking=False):
         return
@@ -1651,7 +1662,8 @@ def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
 
         resultado = recalcular_matches(
             db, usuario_id=usuario_id, usar_ia=usar_ia, progresso=_prog,
-            deve_cancelar=lambda: _recalculo_cancelar.get(usuario_id, False))
+            deve_cancelar=lambda: _recalculo_cancelar.get(usuario_id, False),
+            modelo_reranker=modelo_reranker)
         _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
     except Exception as e:
         db.rollback()
@@ -1665,11 +1677,15 @@ def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None):
 
 @app.post("/api/recalcular")
 def recalcular(bg: BackgroundTasks, com_ia: bool = Query(True),
+               modelo_reranker: str | None = Query(None),
                user: Usuario = Depends(_auth.get_current_user)):
     """Dispara, em segundo plano, a reavaliação de todos os editais já coletados
     contra o catálogo atual DESTE usuário. Retorna na hora; o resultado é
     consultado em /api/recalcular/status.
-    com_ia=false recalcula só por texto (rápido, sem gastar cota)."""
+    com_ia=false recalcula só por texto (rápido, sem gastar cota).
+    modelo_reranker: sobrescreve o modelo padrão da DeepInfra — restrito a
+    _USUARIOS_SELETOR_RERANKER e a uma lista fechada de modelos válidos
+    (ignorado silenciosamente pra qualquer outra conta ou valor)."""
     lock = _lock_recalculo(user.id)
     if lock.locked():
         return {"ok": False, "em_andamento": True,
@@ -1678,7 +1694,11 @@ def recalcular(bg: BackgroundTasks, com_ia: bool = Query(True),
     _recalculo_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
     # com_ia=True respeita a config; com_ia=False força sem IA
     usar_ia = None if com_ia else False
-    bg.add_task(_rodar_recalculo_bg, user.id, usar_ia)
+    modelo = None
+    if (modelo_reranker and user.id in _USUARIOS_SELETOR_RERANKER
+            and modelo_reranker in _MODELOS_RERANKER_PERMITIDOS):
+        modelo = modelo_reranker
+    bg.add_task(_rodar_recalculo_bg, user.id, usar_ia, modelo)
     return {"ok": True, "mensagem": "Recálculo iniciado em segundo plano."}
 
 

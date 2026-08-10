@@ -35,7 +35,7 @@ def _mockar_reranker(monkeypatch, scores_por_indice: dict[int, float], default: 
     `scores_por_indice` cobre só os produtos com sinal — o resto usa
     `default` (0.0, "sem relação nenhuma", combinando com o que a API real
     devolve em casos sem relação: sempre <=0.014 nos testes reais)."""
-    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
         return [scores_por_indice.get(i, default) for i in range(len(documentos))]
     monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
 
@@ -81,7 +81,7 @@ def test_query_do_reranker_leva_instrucao_de_mesmo_produto(monkeypatch):
     catalogo = _catalogo()
     queries_recebidas = []
 
-    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
         queries_recebidas.append(query)
         return [0.0 for _ in documentos]
     monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
@@ -106,7 +106,7 @@ def test_edital_grande_um_item_fraco_nao_e_forte(monkeypatch):
     """40 itens irrelevantes + 1 que bate razoavelmente (produto 1, "papel")
     — o agregado não pode virar "forte" só por causa desse único item."""
     catalogo = _catalogo()
-    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
         if "papel" in query.lower():
             return [0.6, 0.0, 0.0]
         return [0.0, 0.0, 0.0]

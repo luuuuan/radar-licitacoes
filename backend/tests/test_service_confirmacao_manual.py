@@ -17,7 +17,7 @@ def _mockar_reranker_acha_marcador(monkeypatch):
     DEEPINFRA_API_KEY (zerada por padrão em todo teste, ver conftest.py) o
     motor não acha sinal nenhum e o edital nem vira Match."""
     monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "fake-key")
-    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2):
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
         return [0.95 if "marcador" in d.lower() else 0.0 for d in documentos]
     monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
 

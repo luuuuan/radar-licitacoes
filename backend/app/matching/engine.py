@@ -154,13 +154,17 @@ class MatchingEngine:
         "NÃO um item apenas parecido ou da mesma categoria geral.\n\nItem: "
     )
 
-    def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False):
+    def __init__(self, produtos: list[ProdutoCat], usar_ia: bool = False,
+                modelo_reranker: str | None = None):
         self.produtos = produtos
         self._textos_prod = [p.texto() for p in produtos]
         # "usar_ia" aqui é literalmente "o reranker roda ou não" — sem ele,
         # o motor fica só com código exato (sem corroboração, então nem
         # esse vira vencedor automático) e nenhum sinal textual.
         self.usar_ia = bool(usar_ia) and bool(settings.DEEPINFRA_API_KEY) and len(produtos) > 0
+        # sobrescreve settings.DEEPINFRA_MODELO_RERANKER só pra essa instância
+        # — seletor experimental do recálculo (main.py), restrito a uma conta.
+        self._modelo_reranker = modelo_reranker
 
         # Índices reversos de códigos -> produto, para match exato O(1)
         self._idx_codigo: dict[str, list[int]] = {}
@@ -177,7 +181,7 @@ class MatchingEngine:
         if not self.usar_ia or not texto_item or not self._textos_prod:
             return None
         return _rerank(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
-                       api_key=settings.DEEPINFRA_API_KEY)
+                       api_key=settings.DEEPINFRA_API_KEY, modelo=self._modelo_reranker)
 
     def _score_item(self, item: ItemEdt, texto_item: str | None = None,
                     scores: list[float] | None = None) -> tuple[float, ProdutoCat | None, str]:

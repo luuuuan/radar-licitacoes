@@ -195,9 +195,13 @@ _RERANKER_URL_TPL = "https://api.deepinfra.com/v1/inference/{modelo}"
 
 
 def rerank(query: str, documentos: list[str], timeout: int = 30,
-          api_key: str | None = None, tentativas: int = 2) -> list[float] | None:
+          api_key: str | None = None, tentativas: int = 2,
+          modelo: str | None = None) -> list[float] | None:
     """Pontua a relevância de cada item de `documentos` contra `query`
     (cross-encoder, DeepInfra) — mesma chave global de embeddings_deepinfra.
+    `modelo`: sobrescreve settings.DEEPINFRA_MODELO_RERANKER pra essa chamada
+    (ver MatchingEngine.modelo_reranker — só usado no seletor experimental do
+    recálculo, por enquanto restrito a uma conta).
 
     IMPORTANTE, testado contra a API real: ela só aceita `queries` e
     `documents` do MESMO TAMANHO, e usar mais de 1 query DISTINTA por
@@ -216,7 +220,7 @@ def rerank(query: str, documentos: list[str], timeout: int = 30,
         return None
     if ia_bloqueada(chave):
         return None
-    url = _RERANKER_URL_TPL.format(modelo=settings.DEEPINFRA_MODELO_RERANKER)
+    url = _RERANKER_URL_TPL.format(modelo=modelo or settings.DEEPINFRA_MODELO_RERANKER)
     body = {"queries": [query], "documents": documentos}
     for tentativa in range(1, max(1, tentativas) + 1):
         try:

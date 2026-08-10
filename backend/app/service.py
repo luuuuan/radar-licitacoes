@@ -127,13 +127,15 @@ def _mesclar_confirmacoes_manuais(detalhe_novo: list[dict], detalhe_antigo: list
 
 def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                            forcar_usar_ia: bool | None = None, progresso=None,
-                           deve_cancelar=None) -> dict:
+                           deve_cancelar=None, modelo_reranker: str | None = None) -> dict:
     """Gera/atualiza os matches de UM usuário contra os editais coletados,
     usando o catálogo e as regras de exclusão dele. Isolado por usuário.
 
     deve_cancelar: callable() -> bool, checado periodicamente (mesma cadência
     dos commits parciais) — permite abortar uma rodada longa a pedido do
-    usuário sem perder o que já foi processado até ali."""
+    usuário sem perder o que já foi processado até ali.
+    modelo_reranker: sobrescreve o modelo padrão da DeepInfra pra essa rodada
+    — seletor experimental do recálculo (main.py), restrito a uma conta."""
     deve_cancelar = deve_cancelar or (lambda: False)
     catalogo = _carregar_catalogo(db, usuario.id)
     produtos_validos_ids = {p.id for p in catalogo}
@@ -142,7 +144,7 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
     usar_ia = cfg.obter(db, "IA_ATIVA") == "1"
     if forcar_usar_ia is not None:   # recálculo pode forçar sem IA (rápido)
         usar_ia = forcar_usar_ia
-    engine = MatchingEngine(catalogo, usar_ia=usar_ia)
+    engine = MatchingEngine(catalogo, usar_ia=usar_ia, modelo_reranker=modelo_reranker)
 
     # Só considera editais que aparecem em ALGUM lugar da tela: ativos (prazo em
     # aberto) ou encerrados que o usuário está acompanhando (proposta enviada/
@@ -510,15 +512,19 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
 
 
 def recalcular_matches(db: Session, usuario_id: int, usar_ia: bool | None = None,
-                       progresso=None, deve_cancelar=None) -> dict:
+                       progresso=None, deve_cancelar=None,
+                       modelo_reranker: str | None = None) -> dict:
     """Reavalia todos os editais contra o catálogo ATUAL do usuário.
     - usar_ia=None: respeita a configuração; usar_ia=False: força recálculo só por
       texto (rápido, sem gastar cota — recomendado para a base inteira).
     - progresso(feito, total): callback opcional para reportar andamento.
-    - deve_cancelar: callable() -> bool, permite abortar a pedido do usuário."""
+    - deve_cancelar: callable() -> bool, permite abortar a pedido do usuário.
+    - modelo_reranker: sobrescreve o modelo padrão da DeepInfra (seletor
+      experimental, ver main.py — restrito a uma conta por enquanto)."""
     u = db.get(Usuario, usuario_id)
     if not u:
         return {"editais": 0, "atualizados": 0, "fortes": 0}
     return _gerar_matches_usuario(db, u, recalcular_todos=True,
                                   forcar_usar_ia=usar_ia, progresso=progresso,
-                                  deve_cancelar=deve_cancelar)
+                                  deve_cancelar=deve_cancelar,
+                                  modelo_reranker=modelo_reranker)

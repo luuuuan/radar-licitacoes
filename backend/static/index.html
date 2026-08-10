@@ -567,13 +567,13 @@
 <div id="loadingbar"></div>
 <div id="splash">
   <div class="radar"></div>
-  <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Carregando o Radar de Licitações…</div>
+  <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="1.6" style="vertical-align:-3px"><circle cx="12" cy="12" r="10" fill="none" opacity=".35"/><circle cx="12" cy="12" r="6.5" fill="none" opacity=".55"/><path d="M12 12 L12 2.3 A9.7 9.7 0 0 1 20 8.3 Z" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg> Carregando o Radar de Licitações…</div>
 </div>
 <div id="modal-mount"></div>
 <div id="topo-fixo">
 <header>
   <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <h1><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l6-3"/><path d="M12 12a4 4 0 1 0 4 4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg><span class="logo-txt"> Radar de Licitações</span></h1>
+  <h1><svg viewBox="0 0 24 24" width="26" height="26" stroke="currentColor" stroke-width="1.6" style="vertical-align:-4px"><circle cx="12" cy="12" r="10" fill="none" opacity=".35"/><circle cx="12" cy="12" r="6.5" fill="none" opacity=".55"/><path d="M12 12 L12 2.3 A9.7 9.7 0 0 1 20 8.3 Z" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg><span class="logo-txt"> Radar de Licitações</span></h1>
 
   <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
@@ -2419,8 +2419,17 @@ function abrirRecalcular(){
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
         <button class="btn" onclick="recalcular(false)">⚡ Recalcular rápido (sem IA)</button>
         <span class="muted" style="font-size:12px;margin-top:-6px">Recomendado para a base inteira. Usa só texto — rápido e não gasta cota da IA.</span>
+        ${USUARIO && USUARIO.id===5 ? `
+        <div class="field" style="margin:0">
+          <label style="font-size:12px">Modelo do reranker (teste — só nesta conta)</label>
+          <select id="rec-modelo-reranker" style="width:100%">
+            <option value="Qwen/Qwen3-Reranker-0.6B">0.6B — mais barato ($0,010 / 1M tokens)</option>
+            <option value="Qwen/Qwen3-Reranker-4B" selected>4B — padrão atual ($0,025 / 1M tokens)</option>
+            <option value="Qwen/Qwen3-Reranker-8B">8B — mais caro ($0,050 / 1M tokens)</option>
+          </select>
+        </div>` : ''}
         <button class="btn ghost" onclick="recalcular(true)">✨ Recalcular com IA</button>
-        <span class="muted" style="font-size:12px;margin-top:-6px">Mais preciso, porém bem mais lento e pode esgotar a cota diária do Gemini.</span>
+        <span class="muted" style="font-size:12px;margin-top:-6px">Mais preciso (usa o reranker), porém bem mais lento e tem custo por token na DeepInfra.</span>
       </div>
     </div></div>`;
 }
@@ -2483,11 +2492,16 @@ async function verificarRecalculoEmAndamento(){
 }
 
 async function recalcular(comIA){
+  // lê o modelo ANTES de fechar o modal (fecharModal remove o <select> do DOM)
+  const selModelo = $('#rec-modelo-reranker');
+  const modelo = selModelo ? selModelo.value : '';
   fecharModal();
   const el=$('#coleta-status');
+  let qs = '/api/recalcular?com_ia='+(comIA?'true':'false');
+  if(modelo) qs += '&modelo_reranker='+encodeURIComponent(modelo);
   let r;
   try{
-    r=await api('/api/recalcular?com_ia='+(comIA?'true':'false'),{method:'POST'});
+    r=await api(qs,{method:'POST'});
   }catch(e){
     el.textContent='Erro ao recalcular'; el.style.color='var(--destructive)';
     return;
