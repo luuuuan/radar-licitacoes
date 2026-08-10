@@ -1465,25 +1465,39 @@ function navPaginacao(r, fnPagina, paginaAtual){
 
 let paginaEditais = 1;
 
-// Campo de busca por item começa colapsado (só o ícone) — abre ao clicar,
-// fecha sozinho ao perder o foco se estiver vazio (com texto digitado, fica
-// aberto pra não parecer que a busca ativa sumiu). A pesquisa em si só roda
-// quando o usuário confirma (botão/ícone ou Enter) — não mais a cada
-// caractere/blur — e depois de pesquisar o campo limpa e recolhe de novo.
+// Campo de busca por item colapsa/expande seguindo o SCROLL da página (não
+// mais blur): rolou pra baixo, encolhe pro ícone; voltou pro topo, abre
+// sozinho de novo, mesmo sem clicar. Clicar enquanto colapsado ainda abre
+// na hora (pra pesquisar sem precisar rolar até o topo primeiro).
+//
+// Lê o estado ATUAL da classList a cada checagem em vez de guardar num
+// variável separada — evita dessincronia entre "abriu manualmente com um
+// clique" e "o scroll achava que já estava aberto/fechado" (que causaria
+// um _pesquisarItem() não recolher, ou o scroll não reabrir, dependendo de
+// qual mexeu por último). Como isso só muda LARGURA (nunca altura), não
+// tem o risco do loop de auto-alimentação que o cabeçalho compacto tinha
+// (ver correção em _atualizarNavCompacta) — a troca de estado aqui não
+// pode, por si só, mudar a posição de scroll que a disparou.
+const _LIMIAR_BUSCA_COLAPSA = 10;
+function _atualizarBuscaPorScroll(){
+  const wrap = document.querySelector('.busca-item-destaque');
+  if(!wrap) return;
+  const deveColapsar = window.scrollY > _LIMIAR_BUSCA_COLAPSA;
+  if(wrap.classList.contains('colapsada') === deveColapsar) return;
+  wrap.classList.toggle('colapsada', deveColapsar);
+}
 function _initBuscaItemDestaque(){
   const wrap = document.querySelector('.busca-item-destaque');
   const input = $('#f-busca-item');
   if(!wrap || !input) return;
-  wrap.classList.add('colapsada');
   wrap.addEventListener('click', ()=>{
     if(wrap.classList.contains('colapsada')){
       wrap.classList.remove('colapsada');
       input.focus();
     }
   });
-  input.addEventListener('blur', ()=>{
-    if(!input.value.trim()) wrap.classList.add('colapsada');
-  });
+  window.addEventListener('scroll', _atualizarBuscaPorScroll, {passive:true});
+  _atualizarBuscaPorScroll();   // estado inicial conforme o scroll de agora
 }
 // Ícone funciona como botão "Pesquisar" quando o campo já está aberto —
 // enquanto colapsado, o primeiro clique só revela o campo (não pesquisa
@@ -1502,9 +1516,8 @@ function _pesquisarItem(){
   loadEditais();   // lê o valor do campo de forma síncrona antes do primeiro
                     // await lá dentro — por isso é seguro limpar o campo já
                     // na sequência, sem perder o termo buscado.
-  const input = $('#f-busca-item');
-  input.value = '';
-  document.querySelector('.busca-item-destaque').classList.add('colapsada');
+  $('#f-busca-item').value = '';
+  _atualizarBuscaPorScroll();   // recolapsa só se realmente não estiver no topo
 }
 
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
@@ -1519,8 +1532,7 @@ function limparFiltros(){
   $('#f-busca-item').value = '';
   $('#f-valor-min').value = '';
   $('#f-valor-max').value = '';
-  const buscaWrap = document.querySelector('.busca-item-destaque');
-  if(buscaWrap) buscaWrap.classList.add('colapsada');
+  _atualizarBuscaPorScroll();
   loadEditais();
   fecharFiltrosMobile();
 }
