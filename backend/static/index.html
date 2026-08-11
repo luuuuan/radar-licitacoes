@@ -675,12 +675,12 @@
              slot-busca-desktop por JS (ver _reposicionarBuscaItem). -->
         <div id="slot-busca-mobile">
           <div class="busca-item-destaque">
+            <input type="text" id="f-busca-item" placeholder="Buscar edital por item — ex.: grampeador"
+                  onkeydown="if(event.key==='Enter')_pesquisarItem()">
             <button type="button" class="busca-item-icone" onclick="_cliqueIconeBusca(event)" aria-label="Pesquisar" title="Pesquisar">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
               <span class="busca-item-rotulo">Pesquisar</span>
             </button>
-            <input type="text" id="f-busca-item" placeholder="Buscar edital por item — ex.: grampeador"
-                  onkeydown="if(event.key==='Enter')_pesquisarItem()">
           </div>
         </div>
         <div class="field">
@@ -830,7 +830,7 @@
         <select id="filtro-fornecedor" onchange="filtrarProdutos()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
           <option value="">Todos os fornecedores</option>
         </select>
-        <button class="btn ghost" onclick="window.open('/api/produtos/exportar.xlsx','_blank')">Exportar catálogo (.xlsx)</button>
+        <button class="btn ghost" style="margin-left:auto" onclick="window.open('/api/produtos/exportar.xlsx','_blank')">Exportar catálogo (.xlsx)</button>
         <button class="btn" onclick="abrirFormProduto()">+ Cadastrar produto</button>
       </div>
     </div>
