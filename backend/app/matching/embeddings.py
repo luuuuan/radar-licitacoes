@@ -236,6 +236,16 @@ def rerank(query: str, documentos: list[str], timeout: int = 30,
         if r.status_code == 429:
             _pausar(chave, _COOLDOWN_429, "cota/limite de taxa atingido (reranker)")
             return None
+        if r.status_code == 402:
+            # sem saldo — ao contrário do 429 (reseta sozinho depois do
+            # cooldown), isso só volta a funcionar quando alguém repuser o
+            # saldo manualmente. Mesmo assim pausa (reaproveita o mesmo
+            # disjuntor do 429): sem isso, um recálculo de milhares de
+            # editais tentava a chamada de TODO item de TODO edital, sempre
+            # recusada, gerando uma linha de log por chamada e atrasando a
+            # rodada à toa — achado real em produção.
+            _pausar(chave, _COOLDOWN_429, "sem saldo (402) na DeepInfra")
+            return None
         if r.status_code in (500, 502, 503, 504):
             if tentativa < tentativas:
                 time.sleep(1.5 * tentativa)
