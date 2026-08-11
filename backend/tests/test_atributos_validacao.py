@@ -537,6 +537,39 @@ def test_itens_por_unidade_nao_mexe_quando_e_menor_que_o_valor_do_texto():
     assert [p.descricao for p in sem.criticas] == [p.descricao for p in com.criticas]
 
 
+def test_validacao_nao_pareia_numeros_soltos_nao_relacionados_da_mesma_familia():
+    """Caso real (edital 56531, item 19): a descrição menciona 'lâmina reta
+    c/ cerca de 7 cm' (medida da lâmina) e, mais adiante, cita outro item de
+    referência entre parênteses '(10,8 cm)' — dois números 'cm' soltos em
+    frases diferentes, sem relação nenhuma entre si (não é uma dimensão tipo
+    "7 x 10,8"). Antes desse fix, os dois caíam na mesma família
+    'comprimento' e eram tratados como PAR de dimensão (mesmo mecanismo do
+    "38 x 51"), comparando um produto real de 21cm contra um "requisito"
+    inventado de 7x10,8cm que nunca existiu no edital — reprovava um produto
+    que na real atendia. Achado ao investigar uma inconsistência relatada
+    pelo usuário: a IA (Gemini) tinha justificado 'atende' (21cm ~ 20cm),
+    mas a validação técnica determinística dizia 'Não atende'."""
+    item = ("Tesoura material: aço inoxidável, comprimento: cerca de 20, "
+           "características adicionais: lâmina reta c/ cerca de 7 cm, ponta "
+           "arredondada Tesoura escolar sem ponta (10,8 cm), aço inoxidável, "
+           "cabo de polipropileno, ponta arredondada")
+    produto = "Tesoura Inox Multiuso 21cm Brw"
+    r = validar(item, produto)
+    assert not r.criticas
+    assert any("múltiplos valores" in p.descricao for p in r.avisos)
+
+
+def test_validacao_ainda_reprova_valor_solto_unico_que_nao_bate():
+    """A correção acima não pode virar carta-branca: um ÚNICO valor solto
+    (sem ambiguidade nenhuma) continua reprovando normalmente quando não
+    bate — só o caso de MÚLTIPLOS valores soltos conflitantes vira aviso."""
+    item = "Régua com 30 cm de comprimento, material acrílico"
+    produto = "Régua Acrílica Transparente 15cm Waleu"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.critico for p in r.criticas)
+
+
 def test_itens_por_unidade_nao_afeta_unidades_que_nao_sao_contagem_de_pecas():
     """itens_por_unidade não pode "vazar" pra unidades tipo dígitos/volts —
     ali o número só diz quantos produtos vêm na caixa, sem relação nenhuma

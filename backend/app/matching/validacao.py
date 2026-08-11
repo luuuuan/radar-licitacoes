@@ -176,6 +176,35 @@ def _validar_numerico_simples(exigido, candidatos: list) -> list[Pendencia]:
     return pendencias
 
 
+def _validar_exigidos_soltos(familia: str, exigidos: list, candidatos: list) -> list[Pendencia]:
+    """Valida valor(es) "soltos" da mesma família do lado do ITEM — número
+    que não veio de uma cadeia explícita "AxB"/"AxBxC" (_pares_dimensao) nem
+    de um campo estruturado tipo comprimento/largura/altura (esses dois já
+    têm sinal próprio de que os valores pertencem à MESMA especificação, ver
+    cadeia_id/inferido em atributos.py).
+
+    Um valor só: comportamento normal (_validar_numerico_simples). Vários
+    valores DIFERENTES: dois números soltos que só coincidem em unidade não
+    são necessariamente a mesma medida (achado real: item cita "lâmina ...
+    cerca de 7 cm" e, numa frase adiante, referencia outro item "(10,8 cm)"
+    só como comparação — os dois "cm" acabavam virando um par de dimensão
+    inventado "7x10,8cm", reprovando um produto de 21cm que na real atendia).
+    Mesma filosofia já usada pro lado ofertado (_validar_numerico_simples,
+    "múltiplos valores"): sem como saber qual valor é o requisito de
+    verdade, vira aviso pra conferência manual, não reprovação automática."""
+    if len(exigidos) == 1:
+        return _validar_numerico_simples(exigidos[0], candidatos)
+    valores_canon = {familia_unidade(e.unidade, e.valor)[1] for e in exigidos}
+    if len(valores_canon) == 1:
+        return _validar_numerico_simples(exigidos[0], candidatos)
+    lista = ", ".join(e.bruto for e in exigidos)
+    return [Pendencia(
+        "numerico",
+        f"item menciona múltiplos valores de '{familia}' ({lista}) — confirmar manualmente qual é o requisito",
+        critico=False,
+    )]
+
+
 def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]:
     """Valida um GRUPO de exigências da MESMA família (ex.: par de dimensão
     "38 x 51", que vira 2 AtributoNumerico de comprimento) como CONJUNTO
@@ -233,22 +262,33 @@ def validar_com_requisitos(req: AtributosTecnicos, produto_texto: str,
     pendencias: list[Pendencia] = []
 
     # 1) atributos numéricos (capacidade, velocidade, dimensão...) — agrupa
-    # por FAMÍLIA primeiro: um par de dimensão (ex.: item "38 x 51") vira
-    # DOIS AtributoNumerico da mesma família (comprimento). Grupo com 2+
-    # exigências usa comparação de CONJUNTO (_validar_grupo_dimensao); grupo
-    # com só 1 usa o comportamento original de "melhor candidato"
-    # (_validar_numerico_simples) — ver os comentários de cada uma pro
-    # porquê da separação.
-    grupos: dict[str, list] = {}
+    # por FAMÍLIA, mas só trata como PAR/TRIO de dimensão (comparação de
+    # CONJUNTO, _validar_grupo_dimensao) quando os valores de fato vieram
+    # JUNTOS no texto: uma cadeia explícita "AxB"/"AxBxC" (cadeia_id) ou um
+    # campo estruturado tipo comprimento/largura/altura (inferido=True, ver
+    # atributos.py). Valores "soltos" da mesma família que não compartilham
+    # nenhum desses dois sinais vão pra _validar_exigidos_soltos — dois
+    # números em "cm" perdidos em frases diferentes do texto NÃO são
+    # necessariamente a mesma medida (ver seu docstring).
+    grupos: dict[tuple, list] = {}
+    soltos: dict[str, list] = {}
     for exigido in req.numericos:
         familia, _ = familia_unidade(exigido.unidade, exigido.valor)
-        grupos.setdefault(familia, []).append(exigido)
-    for familia, exigidos in grupos.items():
+        if exigido.cadeia_id is not None:
+            grupos.setdefault((familia, "cadeia", exigido.cadeia_id), []).append(exigido)
+        elif exigido.inferido:
+            grupos.setdefault((familia, "campo_estruturado"), []).append(exigido)
+        else:
+            soltos.setdefault(familia, []).append(exigido)
+    for (familia, *_resto), exigidos in grupos.items():
         candidatos = [o for o in of.numericos if familia_unidade(o.unidade, o.valor)[0] == familia]
         if len(exigidos) >= 2:
             pendencias.extend(_validar_grupo_dimensao(exigidos, candidatos))
         else:
             pendencias.extend(_validar_numerico_simples(exigidos[0], candidatos))
+    for familia, exigidos in soltos.items():
+        candidatos = [o for o in of.numericos if familia_unidade(o.unidade, o.valor)[0] == familia]
+        pendencias.extend(_validar_exigidos_soltos(familia, exigidos, candidatos))
 
     # 2) atributos categóricos (formato/modelo — igualdade exata, ex.: grampo 26/6)
     for chave, valor_exigido in req.categoricos.items():

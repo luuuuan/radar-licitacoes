@@ -196,11 +196,13 @@ def _unidade_comprimento_canonica(txt: str | None) -> str | None:
     return "m"
 
 
-def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, str]], list[tuple[int, int]]]:
+def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, str, int]], list[tuple[int, int]]]:
     """Acha cadeias 'NxNx...xN' e devolve (entradas no mesmo formato que o
-    scan por unidade de _extrair_numericos usa, spans SEM unidade explícita —
+    scan por unidade de _extrair_numericos usa, com um cadeia_id compartilhado
+    entre os membros do MESMO match — pra validacao.py só agrupar como par/
+    trio de dimensão valores que vieram juntos, spans SEM unidade explícita —
     pra marcar inferido=True via o mesmo mecanismo de spans_inferidos)."""
-    entradas: list[tuple[int, int, str, float, str]] = []
+    entradas: list[tuple[int, int, str, float, str, int]] = []
     sem_unidade: list[tuple[int, int]] = []
     for m in _DIMENSAO.finditer(texto_norm):
         partes = list(_NUM_UNID_NOMEADO.finditer(m.group(0)))
@@ -210,6 +212,7 @@ def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, s
         # senão qualquer uma que apareça, senão assume mm.
         unidade_comum = next((u for u in reversed(unidades) if u), None) or "mm"
         explicita = any(unidades)
+        cadeia_id = m.start()
         for parte, unidade_propria in zip(partes, unidades):
             ini = m.start() + parte.start("num")
             fim = m.start() + parte.end("num")
@@ -217,7 +220,7 @@ def _pares_dimensao(texto_norm: str) -> tuple[list[tuple[int, int, str, float, s
             unidade = unidade_propria or unidade_comum
             if _e_marca_3m(unidade, valor, parte.group(0)):
                 continue
-            entradas.append((ini, fim, unidade, valor, parte.group("num")))
+            entradas.append((ini, fim, unidade, valor, parte.group("num"), cadeia_id))
             if not explicita:
                 sem_unidade.append((ini, fim))
     return entradas, sem_unidade
@@ -277,6 +280,15 @@ class AtributoNumerico:
     # de texto explícito. validacao.py usa isso pra nunca deixar essa
     # suposição sozinha reprovar um produto (vira aviso, não crítica).
     inferido: bool = False
+    # id compartilhado entre os membros de uma MESMA cadeia "AxB"/"AxBxC"
+    # explícita no texto (ex.: os dois valores de "12x50cm" têm o mesmo
+    # cadeia_id; um "7 cm" solto em outra frase não tem nenhum). None quando
+    # o valor foi lido isolado (scan normal por unidade) — validacao.py usa
+    # isso pra só tratar como PAR/TRIO de dimensão valores que de fato vieram
+    # juntos no texto, não qualquer combinação de números soltos que caem na
+    # mesma família por coincidência de unidade (ver
+    # test_validacao_nao_pareia_numeros_soltos_nao_relacionados_da_mesma_familia).
+    cadeia_id: int | None = None
 
 
 def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] = ()) -> list[AtributoNumerico]:
@@ -296,7 +308,7 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
             bruto = m.group(0).strip()
             if _e_marca_3m(unidade, valor, bruto):
                 continue
-            brutos.append((m.start(), m.end(), unidade, valor, bruto))
+            brutos.append((m.start(), m.end(), unidade, valor, bruto, None))
 
     # pares de dimensão ("30x40cm", "12x50"...) — pode se sobrepor com o scan
     # acima quando os DOIS lados já têm unidade explícita (ex.: "40cm" seria
@@ -310,7 +322,7 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
 
     achados: list[AtributoNumerico] = []
     fim_anterior = 0
-    for inicio, fim, unidade, valor, bruto in brutos:
+    for inicio, fim, unidade, valor, bruto, cadeia_id in brutos:
         janela = texto_norm[max(0, inicio - _JANELA_CONTEXTO, fim_anterior):inicio]
         # também corta na última pontuação de separação de cláusula dentro
         # da janela (reforça o corte acima quando há vírgula/ponto no meio).
@@ -330,21 +342,27 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
         # lado de "(unidade assumida, não informada no texto)" é
         # contraditório e passa confiança que a unidade não tem.
         bruto_exibido = bruto.split()[0] if inferido else bruto
-        achados.append(AtributoNumerico(unidade, valor, operador, bruto_exibido, inferido))
+        achados.append(AtributoNumerico(unidade, valor, operador, bruto_exibido, inferido, cadeia_id))
         fim_anterior = fim
 
     # dedup por (unidade, valor, operador): texto de edital real costuma
     # repetir a mesma especificação em mais de uma frase — sem isso, cada
-    # menção virava uma pendência duplicada na validação.
-    vistos = set()
-    dedup: list[AtributoNumerico] = []
+    # menção virava uma pendência duplicada na validação. Quando a mesma
+    # ocorrência é achada pelos dois caminhos (o último número de uma cadeia
+    # "AxBxC" que também tem unidade colada, ex.: o "7cm" de "28 x 16 x 7cm",
+    # bate tanto no scan de par/trio quanto no scan solto por unidade),
+    # prefere a versão com cadeia_id — perder essa marca faria esse membro
+    # "cair" da cadeia e virar um valor solto por engano.
+    vistos: dict[tuple, AtributoNumerico] = {}
+    ordem: list[tuple] = []
     for a in achados:
         chave = (a.unidade, a.valor, a.operador)
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        dedup.append(a)
-    return dedup
+        if chave not in vistos:
+            vistos[chave] = a
+            ordem.append(chave)
+        elif vistos[chave].cadeia_id is None and a.cadeia_id is not None:
+            vistos[chave] = a
+    return [vistos[chave] for chave in ordem]
 
 
 # ---------------------------------------------------------------------------
