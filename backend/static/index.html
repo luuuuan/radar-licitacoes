@@ -2822,6 +2822,7 @@ window.addEventListener('popstate', ev=>{
 async function _renderPaginaEdital(editalId, aba){
   _paginaEditalId = editalId;
   _analiseCache = null;   // não carrega a análise de um edital antigo pro novo
+  _propostaCarregadaPara = null;   // idem pra proposta
   _cotacaoSelecionados = new Set();   // idem pra seleção de itens da cotação
   ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
@@ -2924,7 +2925,9 @@ async function abaEdital(nome, forcar){
       const html = await _corpoDocumentosEdital(id);
       if(ativo()) cont.innerHTML = html;
     } else if(nome==='proposta'){
-      cont.innerHTML = _spinnerHTML('Carregando proposta…');
+      // já carregada pra ESSE edital (ver _montarPropostaEdital) -> mostra
+      // direto, sem spinner nem ida ao servidor, igual a Análise por IA.
+      if(_propostaCarregadaPara !== id) cont.innerHTML = _spinnerHTML('Carregando proposta…');
       await _montarPropostaEdital(id, ativo);
     } else if(nome==='cotacao'){
       cont.innerHTML = _spinnerHTML('Carregando cotação…');
@@ -3433,24 +3436,41 @@ async function _verificarAnaliseEAtualizarCotacao(){
 
 let _propEditalId = null;
 
+// mesma ideia do cache da Análise por IA (_analiseCache): reabrir a aba
+// Proposta do MESMO edital não precisa buscar de novo no servidor — window.
+// _propItens já tem o que foi carregado (e qualquer edição feita desde
+// então, incluindo o que ainda não foi salvo). _propostaCarregadaPara vira
+// null em _renderPaginaEdital ao trocar de edital, forçando buscar de novo.
+let _propostaCarregadaPara = null;
+let _propObsAtual = '';
+
 async function _montarPropostaEdital(id, ativo){
+  if(_propostaCarregadaPara === id){
+    _renderizarPropostaEdital();
+    return;
+  }
   const p=await api(`/api/editais/${id}/proposta`);
   // usuário já saiu desta aba/edital enquanto a proposta carregava — não
   // sobrescreve o que está sendo mostrado agora, nem troca _propEditalId
   // (senão "Salvar proposta" salvaria no edital errado).
   if(ativo && !ativo()) return;
   _propEditalId = id;
+  _propostaCarregadaPara = id;
   window._propItens = (p.itens||[]).map(i=>({
     descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
   // itens que o edital de fato pede — usado só pra montar o modal de
   // "adicionar item" (propAbrirModalAdd), restrito ao que existe no edital.
   window._propItensEdital = p.itens_edital||[];
+  _propObsAtual = p.observacoes||'';
+  _renderizarPropostaEdital();
+}
+function _renderizarPropostaEdital(){
   $('#edital-conteudo').innerHTML = `
     <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
     <div id="prop-tabela"></div>
     <div class="field" style="margin-top:10px"><label>Observações</label>
-      <textarea id="prop-obs" style="width:100%;min-height:50px">${esc(p.observacoes||'')}</textarea></div>
+      <textarea id="prop-obs" style="width:100%;min-height:50px" oninput="_propObsAtual=this.value">${esc(_propObsAtual)}</textarea></div>
     <div class="toolbar" style="margin-top:10px">
       <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
       <button class="btn ghost" id="btn-baixar-proposta" onclick="baixarPropostaPdf(this)">${ICN.baixar} Baixar proposta (PDF)</button>
