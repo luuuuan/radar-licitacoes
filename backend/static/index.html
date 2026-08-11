@@ -1705,18 +1705,62 @@ async function loadEditais(resetPagina=true){
   if(vmax!=='') qs.set('valor_max',vmax);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
+  const semMatch = r.sem_match||[];
+  // "sem_match": editais que a BUSCA achou pelo texto do item, mas que o
+  // motor automático nunca avaliou (comum sem saldo/chave de IA — só código
+  // fiscal sozinho não vira match automático). Sem isso, buscar um item
+  // ficava restrito ao que o motor já tinha aprovado — inútil bem na hora
+  // em que o motor automático não está disponível.
+  const blocoSemMatch = (busca && semMatch.length)
+    ? `<h3 style="margin:${eds.length?'22px':'0'} 0 4px;font-size:14px">
+        Outros editais que mencionam "${esc(busca)}" (sem análise automática ainda)
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">O motor de compatibilidade automático não avaliou estes editais ainda (ex.: sem cota de IA disponível no momento). Abra o edital pra ver os itens e, se quiser, rode a Análise por IA manualmente lá dentro.</span></span>
+      </h3>${semMatch.map(cardEditalSemMatch).join('')}`
+    : '';
   if(!eds.length){
+    if(semMatch.length){
+      $('#lista-editais').innerHTML = blocoSemMatch;
+      return;
+    }
     $('#lista-editais').innerHTML = temFiltroAtivo
       ? `<div class="card estado-vazio"><p class="muted">Nenhum edital encontrado com os filtros aplicados. Tente ajustar ou limpar os filtros.</p>
           <div class="acoes-vazio"><button class="btn" onclick="limparFiltros()">Limpar filtros</button></div></div>`
       : PRODUTOS_COUNT
-      ? `<div class="card estado-vazio"><p class="muted">Nenhum edital ativo ainda. Rode uma coleta para buscar editais que combinem com o seu catálogo.</p>
+      ? `<div class="card estado-vazio"><p class="muted">Nenhum edital com correspondência automática ainda. Rode uma coleta, ou busque por um item específico acima — ela também acha editais que o motor automático ainda não avaliou.</p>
           <div class="acoes-vazio"><button class="btn" onclick="coletar()">Coletar agora</button></div></div>`
       : `<div class="card estado-vazio"><p class="muted">Nenhum edital ainda — comece cadastrando ao menos um produto/serviço no seu catálogo.</p>
           <div class="acoes-vazio"><button class="btn" onclick="tab('catalogo')">Cadastrar produto</button></div></div>`;
     return;
   }
-  $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais);
+  $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais) + blocoSemMatch;
+}
+// Card mais simples que cardEdital: edital achado só pela busca por item,
+// sem Match nenhum (nível/score/lido/interessante/status não existem —
+// ninguém avaliou ainda). Só identificação + itens que bateram + "Ver
+// edital", que abre a página normal (compatível com match=None desde a
+// correção de /detalhe pra esse caso).
+function cardEditalSemMatch(e){
+  const prazo = e.dias_restantes==null?'prazo n/d':
+    (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+  const linkEdital = linkSeguro(e.link);
+  const itens = (e.itens_batem||[]).map(d=>`• ${esc(d)}`).join('<br>');
+  return `<div class="card">
+    <div class="ed-top">
+      <div><strong>${esc(e.orgao||'Órgão não informado')}</strong></div>
+    </div>
+    <div class="ed-obj">${esc(e.objeto||'')}</div>
+    <div class="ed-meta">
+      <span>${esc(e.modalidade||'')}</span>
+      <span>${esc(e.municipio||'')}/${esc(e.uf||'')}</span>
+      <span>${fmtMoeda(e.valor_estimado)}</span>
+      <span class="prazo">${prazo}</span>
+    </div>
+    ${itens?`<div class="det">${itens}</div>`:''}
+    <div class="acoes">
+      ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
+    </div>
+  </div>`;
 }
 
 let paginaEncerrados = 1;

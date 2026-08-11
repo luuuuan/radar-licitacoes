@@ -1194,10 +1194,47 @@ def listar_editais(
             "status": match.status,
             "detalhe": detalhe,
         })
+
+    # Editais que mencionam o termo buscado mas NUNCA viraram Match (o motor
+    # de matching não achou nenhum sinal — comum sem saldo/chave da IA, já
+    # que só código fiscal sozinho não vira vencedor automático). Sem isso, a
+    # busca por item ficava presa ao mesmo universo "só o que o motor já
+    # aprovou", inútil bem na hora em que o motor automático não está
+    # disponível. Só computado quando a busca está ativa (evita custo extra
+    # em toda listagem normal); limitado a 20 pra não virar outra lista
+    # gigante sem paginação.
+    sem_match: list[dict] = []
+    if busca_item and busca_item.strip():
+        termo = f"%{busca_item.strip().lower()}%"
+        sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
+        q_sem_match = (
+            select(Edital)
+            .where(~Edital.id.in_(sub_com_match))
+            .where(select(ItemEdital.edital_id)
+                  .where(ItemEdital.edital_id == Edital.id)
+                  .where(func.lower(ItemEdital.descricao).like(termo)).exists())
+        )
+        if vista == "ativos":
+            q_sem_match = q_sem_match.where(
+                (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje_data))
+        q_sem_match = q_sem_match.order_by(Edital.coletado_em.desc()).limit(20)
+        for ed in db.execute(q_sem_match).scalars().all():
+            dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+            itens_batem = [it.descricao for it in ed.itens
+                          if busca_item.strip().lower() in (it.descricao or "").lower()][:3]
+            sem_match.append({
+                "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
+                "municipio": ed.municipio, "modalidade": ed.modalidade,
+                "valor_estimado": ed.valor_estimado,
+                "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+                "dias_restantes": dias, "link": ed.link, "itens_batem": itens_batem,
+            })
+
     return {
         "total": total, "pagina": pagina, "por_pagina": por_pagina,
         "paginas": (total + por_pagina - 1) // por_pagina,
         "resultados": out,
+        "sem_match": sem_match,
     }
 
 

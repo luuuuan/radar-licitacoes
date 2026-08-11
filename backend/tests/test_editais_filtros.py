@@ -38,6 +38,17 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None):
     return ed
 
 
+def _edital_sem_match(db, id_externo, itens=None, data_encerramento=None):
+    ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
+               objeto="Aquisicao", uf="SP", data_encerramento=data_encerramento)
+    db.add(ed)
+    db.commit()
+    for numero, descricao in enumerate(itens or [], start=1):
+        db.add(ItemEdital(edital_id=ed.id, numero=numero, descricao=descricao))
+    db.commit()
+    return ed
+
+
 def _listar(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
@@ -128,3 +139,66 @@ def test_busca_item_em_branco_nao_filtra_nada():
 
     r = _listar(db, u, busca_item="   ")
     assert r["total"] == 1
+
+
+# --------- sem_match: editais achados pela busca mas sem Match nenhum --------- #
+
+def test_busca_item_acha_edital_sem_match(monkeypatch):
+    """Sem sinal do motor automático (ex.: sem saldo de IA), o edital nunca
+    virou Match — a busca por item precisa achar mesmo assim, num campo
+    separado (sem_match), já que ele não entra no "resultados" normal."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_sem_match(db, "ed-sem-match", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert r["total"] == 0   # nao entra na contagem normal (sem Match)
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed.id
+    assert r["sem_match"][0]["itens_batem"] == ["Grampeador de mesa 26/6"]
+
+
+def test_busca_item_sem_match_nao_repete_edital_que_ja_tem_match():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_match(db, u, "ed1", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["sem_match"] == []   # já apareceu em "resultados", não duplica
+
+
+def test_sem_match_vazio_quando_busca_item_nao_informada():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_sem_match(db, "ed1", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u)
+
+    assert r["sem_match"] == []
+
+
+def test_sem_match_respeita_vista_ativos_por_padrao():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    ontem = datetime.date.today() - datetime.timedelta(days=1)
+    _edital_sem_match(db, "ed-encerrado", itens=["Grampeador de mesa"], data_encerramento=ontem)
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert r["sem_match"] == []
+
+
+def test_sem_match_limitado_a_20_resultados():
+    db = _sessao()
+    u = _usuario(db)
+    for i in range(25):
+        _edital_sem_match(db, f"ed{i}", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert len(r["sem_match"]) == 20
