@@ -113,7 +113,9 @@ def test_comparar_catalogo_sem_catalogo():
 
 def test_comparar_catalogo_feliz_normaliza_resposta(monkeypatch):
     resposta_ia = json.dumps({"itens": [
-        {"numero_item": 1, "produto_id": 7, "justificativa": "mesmo tipo de produto"},
+        {"numero_item": 1, "candidatos": [
+            {"produto_id": 7, "justificativa": "mesmo tipo de produto"},
+        ]},
     ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
 
@@ -124,14 +126,57 @@ def test_comparar_catalogo_feliz_normaliza_resposta(monkeypatch):
         api_key="fake-key")
 
     assert r["status"] == "ok"
-    assert r["itens"] == [{"numero": 1, "produto_id": 7, "justificativa": "mesmo tipo de produto"}]
+    assert r["itens"] == [{"numero": 1, "candidatos": [
+        {"produto_id": 7, "justificativa": "mesmo tipo de produto"},
+    ]}]
 
 
-def test_comparar_catalogo_ignora_produto_id_inventado(monkeypatch):
-    """A IA não pode inventar um produto_id que não existe no catálogo
-    mandado — isso quebraria o botão "Adicionar na cotação" no front."""
+def test_comparar_catalogo_aceita_ate_2_candidatos_por_item(monkeypatch):
+    """Pedido do usuário: quando existe mais de 1 produto genuinamente
+    compatível, a IA pode sugerir até 2 — o front mostra um modal pra
+    escolher qual vai pra cotação."""
     resposta_ia = json.dumps({"itens": [
-        {"numero_item": 1, "produto_id": 999, "justificativa": "x"},
+        {"numero_item": 1, "candidatos": [
+            {"produto_id": 7, "justificativa": "melhor opção"},
+            {"produto_id": 8, "justificativa": "também compatível"},
+        ]},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.comparar_catalogo_usuario(
+        "Objeto", [{"numero": 1, "descricao": "x"}],
+        [{"id": 7, "descricao": "y"}, {"id": 8, "descricao": "z"}], api_key="fake-key")
+
+    assert len(r["itens"][0]["candidatos"]) == 2
+    assert [c["produto_id"] for c in r["itens"][0]["candidatos"]] == [7, 8]
+
+
+def test_comparar_catalogo_corta_em_2_e_ignora_produto_id_inventado(monkeypatch):
+    """A IA não pode inventar um produto_id que não existe no catálogo
+    mandado — isso quebraria o botão "Adicionar na cotação" no front. Um
+    candidato inválido no meio não derruba os outros válidos do mesmo item,
+    e nunca sobra mais de 2."""
+    resposta_ia = json.dumps({"itens": [
+        {"numero_item": 1, "candidatos": [
+            {"produto_id": 999, "justificativa": "inventado"},
+            {"produto_id": 7, "justificativa": "válido"},
+            {"produto_id": 8, "justificativa": "também válido, mas já tem 2"},
+        ]},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.comparar_catalogo_usuario(
+        "Objeto", [{"numero": 1, "descricao": "x"}],
+        [{"id": 7, "descricao": "y"}, {"id": 8, "descricao": "z"}], api_key="fake-key")
+    assert r["itens"] == [{"numero": 1, "candidatos": [
+        {"produto_id": 7, "justificativa": "válido"},
+        {"produto_id": 8, "justificativa": "também válido, mas já tem 2"},
+    ]}]
+
+
+def test_comparar_catalogo_item_sem_candidato_valido_nenhum_fica_de_fora(monkeypatch):
+    resposta_ia = json.dumps({"itens": [
+        {"numero_item": 1, "candidatos": [{"produto_id": 999, "justificativa": "x"}]},
     ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
 
@@ -142,14 +187,14 @@ def test_comparar_catalogo_ignora_produto_id_inventado(monkeypatch):
 
 def test_comparar_catalogo_ignora_item_com_numero_nao_numerico(monkeypatch):
     resposta_ia = json.dumps({"itens": [
-        {"numero_item": "abc", "produto_id": 1, "justificativa": "x"},
-        {"numero_item": 2, "produto_id": 1, "justificativa": "ok"},
+        {"numero_item": "abc", "candidatos": [{"produto_id": 1, "justificativa": "x"}]},
+        {"numero_item": 2, "candidatos": [{"produto_id": 1, "justificativa": "ok"}]},
     ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 2, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
-    assert r["itens"] == [{"numero": 2, "produto_id": 1, "justificativa": "ok"}]
+    assert r["itens"] == [{"numero": 2, "candidatos": [{"produto_id": 1, "justificativa": "ok"}]}]
 
 
 def test_comparar_catalogo_erro_ia_propaga_status(monkeypatch):

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import settings
 from app.matching import engine as engine_mod
 from app.models import Base, Usuario, Edital, ItemEdital, Produto, Match
-from app.service import _gerar_matches_usuario, _mesclar_confirmacoes_manuais
+from app.service import _gerar_matches_usuario, _mesclar_confirmacoes_manuais, _match_engajado
 
 
 def _mockar_reranker_acha_marcador(monkeypatch):
@@ -148,3 +148,80 @@ def test_recalculo_nao_preserva_confirmacao_de_produto_ja_excluido(monkeypatch):
     # palpite fresco do motor, que escolhe `certo` (casa por texto)
     assert item["produto_id"] == certo.id
     assert item["confirmado_manualmente"] is False
+
+
+# --------- _match_engajado / recálculo não apaga Match engajado que virou "fraco" --------- #
+
+def _usuario_sem_catalogo(db, email="fraco@t.com"):
+    """Catálogo vazio -> engine.avaliar() sempre devolve nivel="fraco"
+    (ver matching/engine.py), sem depender de reranker/palavra-chave — o
+    jeito mais direto de forçar esse cenário de forma determinística."""
+    u = Usuario(nome="Teste", email=email, senha_hash="x")
+    db.add(u)
+    ed = Edital(fonte="PNCP", id_externo="ed-fraco", objeto="Servico de manutencao predial",
+               orgao="Orgao Teste", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Parafuso sextavado inox",
+                      quantidade=10, valor_unitario=1.0))
+    db.commit()
+    return u, ed
+
+
+def test_match_engajado_true_para_status_diferente_de_novo():
+    m = Match(status="vou_participar", lido=False, interessante=False)
+    assert _match_engajado(m) is True
+
+
+def test_match_engajado_true_para_lido_ou_interessante():
+    assert _match_engajado(Match(status="novo", lido=True, interessante=False)) is True
+    assert _match_engajado(Match(status="novo", lido=False, interessante=True)) is True
+
+
+def test_match_engajado_true_para_item_confirmado_manualmente():
+    m = Match(status="novo", lido=False, interessante=False,
+             detalhe={"itens": [{"item": 1, "confirmado_manualmente": True}]})
+    assert _match_engajado(m) is True
+
+
+def test_match_engajado_false_quando_nada_disso():
+    m = Match(status="novo", lido=False, interessante=False, detalhe=None)
+    assert _match_engajado(m) is False
+
+
+def test_recalculo_preserva_match_engajado_mesmo_virando_fraco(monkeypatch):
+    """Achado real: liberar os botões de status/lido/interessante pra editais
+    sem Match automático (ver test_marcar_status_sem_match.py) cria Matches
+    "vazios" (score=0, nivel="medio") só porque o usuário marcou algo — sem
+    esta guarda, o PRÓXIMO recálculo recalcularia nivel="fraco" (catálogo
+    vazio) e apagaria a linha na hora, perdendo o status que o usuário
+    acabou de definir."""
+    db = _sessao()
+    u, ed = _usuario_sem_catalogo(db)
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.0, nivel="medio",
+                  status="vou_participar")
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is not None
+    assert ainda_existe.status == "vou_participar"
+    assert ainda_existe.nivel == "fraco"   # score/nivel atualiza pra refletir a realidade
+
+
+def test_recalculo_continua_apagando_match_fraco_nao_engajado(monkeypatch):
+    """Comportamento de antes preservado: Match "fraco" que o usuário nunca
+    tocou (status "novo", não lido, não interessante, nada confirmado)
+    continua sendo removido, como sempre foi."""
+    db = _sessao()
+    u, ed = _usuario_sem_catalogo(db, email="fraco2@t.com")
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio")
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is None

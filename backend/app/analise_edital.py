@@ -510,10 +510,11 @@ def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documen
 _PROMPT_COMPARAR_CATALOGO = """Você é um especialista em compras públicas. Abaixo estão os ITENS que um edital de licitação está pedindo, e o CATÁLOGO de produtos que um fornecedor tem disponível (cada um com um ID).
 
 Para cada item do edital, verifique se ALGUM produto do catálogo é realmente compatível (mesmo tipo de produto/serviço, atende as características principais pedidas — não é só uma categoria parecida). Responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
-- "itens": array — só inclua um item aqui quando encontrar um produto do catálogo genuinamente compatível. Cada entrada:
+- "itens": array — só inclua um item aqui quando encontrar pelo menos 1 produto do catálogo genuinamente compatível. Cada entrada:
   - "numero_item": o número do item do edital (copiado exatamente, é um número).
-  - "produto_id": o ID do produto do catálogo mais compatível (é um número).
-  - "justificativa": string curta (1 frase) explicando por que esse produto atende.
+  - "candidatos": array com 1 ou 2 produtos do catálogo compatíveis com este item, do melhor pro segundo melhor. SÓ inclua um segundo candidato quando ele TAMBÉM for genuinamente compatível (mesmo critério do primeiro) — nunca complete artificialmente pra ter 2. Cada candidato:
+    - "produto_id": o ID do produto do catálogo (é um número).
+    - "justificativa": string curta (1 frase) explicando por que esse produto atende.
 
 Regras: não invente produto_id que não esteja na lista do catálogo abaixo. Não force compatibilidade só porque a categoria é parecida (ex.: "papel sulfite" não é o mesmo produto que "papel fotográfico"; "álcool em gel" não é o mesmo que "álcool líquido") — se nenhum produto realmente atender, simplesmente não inclua esse item no array. Responda em português.
 
@@ -567,13 +568,30 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
             continue
         try:
             numero = int(it.get("numero_item"))
-            produto_id = int(it.get("produto_id"))
         except (TypeError, ValueError):
             continue
-        if produto_id not in ids_validos:
+        candidatos_brutos = it.get("candidatos")
+        if not isinstance(candidatos_brutos, list):
             continue
-        itens.append({"numero": numero, "produto_id": produto_id,
-                      "justificativa": str(it.get("justificativa") or "")})
+        candidatos = []
+        vistos: set[int] = set()
+        for c in candidatos_brutos:
+            if not isinstance(c, dict):
+                continue
+            try:
+                produto_id = int(c.get("produto_id"))
+            except (TypeError, ValueError):
+                continue
+            if produto_id not in ids_validos or produto_id in vistos:
+                continue
+            vistos.add(produto_id)
+            candidatos.append({"produto_id": produto_id,
+                              "justificativa": str(c.get("justificativa") or "")})
+            if len(candidatos) == 2:
+                break
+        if not candidatos:
+            continue
+        itens.append({"numero": numero, "candidatos": candidatos})
     return {"status": "ok", "itens": itens}
 
 

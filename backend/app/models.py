@@ -150,7 +150,8 @@ class Edital(Base):
     itens_completados_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     itens: Mapped[list["ItemEdital"]] = relationship(
-        back_populates="edital", cascade="all, delete-orphan"
+        back_populates="edital", cascade="all, delete-orphan",
+        order_by="ItemEdital.numero",
     )
     match: Mapped["Match | None"] = relationship(
         back_populates="edital", cascade="all, delete-orphan", uselist=False

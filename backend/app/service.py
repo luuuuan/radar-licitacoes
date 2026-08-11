@@ -125,6 +125,23 @@ def _mesclar_confirmacoes_manuais(detalhe_novo: list[dict], detalhe_antigo: list
     return resultado
 
 
+def _match_engajado(m: Match) -> bool:
+    """True quando o usuário mexeu neste Match por conta própria (marcou
+    lido/interessante, mudou o status do pipeline, ou confirmou manualmente
+    algum item) — mesmo que o motor automático não ache sinal nenhum agora
+    (nivel "fraco"). Usado pra recálculo não apagar silenciosamente um
+    Match que só existe porque o usuário criou na mão (ver
+    _match_do_usuario_por_edital/confirmar_item_edital em main.py), que sem
+    essa checagem seria recriado com score=0/nivel="medio" e IMEDIATAMENTE
+    apagado no próximo recálculo, perdendo status/lido/interessante/
+    confirmações — achado real ao liberar os botões de acompanhamento pra
+    editais sem Match automático."""
+    if m.status != "novo" or m.lido or m.interessante:
+        return True
+    itens = (m.detalhe or {}).get("itens") or []
+    return any(it.get("confirmado_manualmente") for it in itens)
+
+
 def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
                            forcar_usar_ia: bool | None = None, progresso=None,
                            deve_cancelar=None, modelo_reranker: str | None = None) -> dict:
@@ -270,11 +287,17 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         resultado = engine.avaliar(ed.objeto or "", itens_edt)
         # não guardamos matches "fracos" (baixa compatibilidade): entopem a base
         # e não representam oportunidade real. Se um match existente virou fraco
-        # (ex.: no recálculo após mudar o catálogo), removemos.
+        # (ex.: no recálculo após mudar o catálogo), removemos — A MENOS que o
+        # usuário já tenha se engajado com ele (ver _match_engajado): aí só
+        # atualiza score/nivel pra refletir a realidade, mas preserva a linha.
         if resultado.nivel == "fraco":
             if existente:
-                db.delete(existente)
-                existentes_map.pop(ed.id, None)
+                if _match_engajado(existente):
+                    existente.score = resultado.score
+                    existente.nivel = resultado.nivel
+                else:
+                    db.delete(existente)
+                    existentes_map.pop(ed.id, None)
             continue
         detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)

@@ -1238,18 +1238,29 @@ def listar_editais(
     }
 
 
-def _match_do_usuario(db, match_id, user) -> Match:
-    m = db.get(Match, match_id)
-    if not m or m.usuario_id != user.id:
-        raise HTTPException(404, "Match não encontrado")
-    return m
+def _match_do_usuario_por_edital(db, edital_id: int, user: Usuario, nivel_criacao: str = "medio") -> Match:
+    """Busca o Match do usuário pra este edital, criando um na hora se não
+    existir ainda — mesmo padrão já usado em confirmar_item_edital. Editais
+    sem sinal nenhum pro motor automático (nivel "fraco") nunca ganham Match
+    sozinhos, mas marcar como lido/interessante ou mudar o status é, por si
+    só, sinal suficiente de que o usuário está de olho nesse edital."""
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    if match:
+        return match
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    match = Match(edital_id=edital_id, usuario_id=user.id, score=0.0, nivel=nivel_criacao)
+    db.add(match)
+    return match
 
 
-@app.post("/api/editais/{match_id}/marcar")
-def marcar(match_id: int, dados: MarcarIn,
+@app.post("/api/editais/{edital_id}/marcar")
+def marcar(edital_id: int, dados: MarcarIn,
            user: Usuario = Depends(_auth.get_current_user),
            db: Session = Depends(get_session)):
-    m = _match_do_usuario(db, match_id, user)
+    m = _match_do_usuario_por_edital(db, edital_id, user)
     if dados.lido is not None:
         m.lido = dados.lido
     if dados.interessante is not None:
@@ -1265,13 +1276,13 @@ class StatusIn(BaseModel):
     status: str
 
 
-@app.post("/api/editais/{match_id}/status")
-def mudar_status(match_id: int, dados: StatusIn,
+@app.post("/api/editais/{edital_id}/status")
+def mudar_status(edital_id: int, dados: StatusIn,
                  user: Usuario = Depends(_auth.get_current_user),
                  db: Session = Depends(get_session)):
     if dados.status not in STATUS_VALIDOS:
         raise HTTPException(400, f"Status inválido. Use um de: {', '.join(sorted(STATUS_VALIDOS))}")
-    m = _match_do_usuario(db, match_id, user)
+    m = _match_do_usuario_por_edital(db, edital_id, user)
     m.status = dados.status
     db.commit()
     return {"ok": True}
@@ -2143,16 +2154,25 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
         itens_map = {it.numero: it for it in itens_edital}
         enriquecidos = []
         for it in saida["itens"]:
-            p = produtos_map.get(it["produto_id"])
             ie = itens_map.get(it["numero"])
-            if not p or not ie:
+            if not ie:
+                continue
+            candidatos = []
+            for c in it["candidatos"]:
+                p = produtos_map.get(c["produto_id"])
+                if not p:
+                    continue
+                candidatos.append({
+                    "produto_id": p.id, "produto": _produto_json(p),
+                    "justificativa": c["justificativa"],
+                    "validacao_tecnica": _validacao_tecnica_json(ie.descricao, p, 1.0),
+                    **_custo_e_margem(ie.valor_unitario, p, ie.unidade_medida),
+                })
+            if not candidatos:
                 continue
             enriquecidos.append({
                 "numero": it["numero"], "descricao_item": ie.descricao,
-                "produto_id": p.id, "produto": _produto_json(p),
-                "justificativa": it["justificativa"],
-                "validacao_tecnica": _validacao_tecnica_json(ie.descricao, p, 1.0),
-                **_custo_e_margem(ie.valor_unitario, p, ie.unidade_medida),
+                "candidatos": candidatos,
             })
         saida["itens"] = enriquecidos
     resultado["comparacao_catalogo_ia"] = saida

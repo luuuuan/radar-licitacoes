@@ -37,7 +37,9 @@ def _semear(db):
 
 
 _resposta_docs = json.dumps({"itens": [{"exigido": "CND", "atendido": True, "documento": "Certidao", "observacao": ""}]})
-_resposta_catalogo = json.dumps({"itens": [{"numero_item": 1, "produto_id": 1, "justificativa": "ok"}]})
+_resposta_catalogo = json.dumps({"itens": [
+    {"numero_item": 1, "candidatos": [{"produto_id": 1, "justificativa": "ok"}]},
+]})
 
 
 def test_cancelado_antes_de_comecar_nao_chama_ia_nenhuma():

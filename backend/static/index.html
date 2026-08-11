@@ -1104,6 +1104,7 @@
         </div>
         <div style="flex:1">
           <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" onchange="selecionarLogoPerfil(this)">
+          <div class="muted" style="font-size:11px;margin-top:4px">Recomendado: imagem quadrada (largura = altura), a partir de 300x300px. PNG com fundo transparente fica melhor.</div>
           <div class="muted" id="pf-logo-status" style="font-size:11px;margin-top:4px"></div>
           <button type="button" class="btn ghost discreto" id="pf-logo-remover" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="removerLogoPerfil()">Remover logo</button>
         </div>
@@ -1546,7 +1547,7 @@ function cardEdital(e){
     <div class="acoes">
       ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
-      <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.match_id}, this.value)" title="Acompanhamento">
+      <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.edital_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
         <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
         <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
@@ -1555,8 +1556,8 @@ function cardEdital(e){
         <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
       </select>
       <span style="flex:1"></span>
-      <button class="btn ghost" onclick="marcar(${e.match_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-      <button class="btn ghost" onclick="marcar(${e.match_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+      <button class="btn ghost" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
     </div>
   </div>`;
 }
@@ -1759,6 +1760,17 @@ function cardEditalSemMatch(e){
     <div class="acoes">
       ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
+      <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.edital_id}, this.value)" title="Acompanhamento">
+        <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
+        <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
+        <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
+        <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
+        <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
+        <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
+      </select>
+      <span style="flex:1"></span>
+      <button class="btn ghost" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
     </div>
   </div>`;
 }
@@ -2697,6 +2709,11 @@ function _verificacaoDocumentosIAHTML(v){
   </div>`;
 }
 
+// numero do item -> lista de candidatos (produto+preço+justificativa) da
+// última comparação de catálogo renderizada — alimenta o modal "escolher
+// produto" (escolherProdutoIA) sem precisar buscar de novo no servidor.
+let _comparacaoCatalogoItensAtual = {};
+
 // Segunda opinião da IA comparando TODO o catálogo do usuário com os itens
 // deste edital — independente do motor de matching por texto (TF-IDF/
 // palavra-chave). "Adicionar na cotação" aqui CONFIRMA o produto pro item
@@ -2712,10 +2729,15 @@ function _comparacaoCatalogoIAHTML(c){
   if(!c.itens.length){
     return `<div class="muted" style="margin-top:10px;font-size:12px">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
   }
+  // guarda os candidatos por item pro modal "escolher produto" ler depois,
+  // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
+  _comparacaoCatalogoItensAtual = {};
   const linhas = c.itens.map(it=>{
+    _comparacaoCatalogoItensAtual[it.numero] = it.candidatos;
     const naCotacao = _cotacaoSelecionados.has(String(it.numero));
-    const p = it.produto || {};
-    const vt = it.validacao_tecnica;
+    const principal = it.candidatos[0];
+    const p = principal.produto || {};
+    const vt = principal.validacao_tecnica;
     // badge compacta de specs: reaproveita a MESMA validação determinística
     // (medidas/material/características) que já roda pros itens que o motor
     // de matching compatibilizou — pega exatamente o caso real que motivou
@@ -2729,20 +2751,31 @@ function _comparacaoCatalogoIAHTML(c){
       specsBadge = `<div title="${esc(pendencias.join(' | '))}" style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`;
     }
     let mg='—', mgCls='';
-    if(it.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
-    else if(it.margem!=null){ mg=fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:''); mgCls=it.margem>=0?'margem-pos':'margem-neg'; }
+    if(principal.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
+    else if(principal.margem!=null){ mg=fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:''); mgCls=principal.margem>=0?'margem-pos':'margem-neg'; }
     const siteForn = linkSeguro(p.fornecedor_site);
+    // 3 estados: já na cotação (desabilitado) · só 1 candidato (adiciona
+    // direto) · 2 candidatos (abre modal pra escolher, mostrando o custo
+    // dos dois — pedido explícito do usuário).
+    let acaoBtn;
+    if(naCotacao){
+      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(true)}" disabled>${ICN.check} na cotação</button>`;
+    } else if(it.candidatos.length>1){
+      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" onclick="escolherProdutoIA(${it.numero})">Escolher produto (${it.candidatos.length} opções)</button>`;
+    } else {
+      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}"
+          onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${principal.produto_id}, this)">
+          + Adicionar na cotação
+        </button>`;
+    }
     return `<tr>
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td style="font-size:13px">${esc(it.descricao_item||'')}</td>
       <td style="font-size:13px">${esc(p.descricao||'')}${specsBadge}</td>
       <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
-      <td class="muted" style="font-size:12px">${esc(it.justificativa||'')}</td>
+      <td class="muted" style="font-size:12px">${esc(principal.justificativa||'')}</td>
       <td style="white-space:nowrap">
-        <button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(naCotacao)}"
-          onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${it.produto_id}, this)" ${naCotacao?'disabled':''}>
-          ${naCotacao ? ICN.check+' na cotação' : '+ Adicionar na cotação'}
-        </button>
+        ${acaoBtn}
         ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:4px;padding:2px 8px;font-size:11px">fornecedor ↗</a>`:''}
       </td>
     </tr>`;
@@ -2770,6 +2803,41 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
     if(btn) btn.disabled = false;
     toast('Não foi possível adicionar este item.', 'erro');
   }
+}
+
+// Modal "escolher produto" — só aparece quando a IA sugeriu 2 candidatos
+// genuinamente compatíveis pro mesmo item (ver _comparacaoCatalogoIAHTML).
+// Mostra o custo/margem dos dois lado a lado pra decisão informada.
+function escolherProdutoIA(numero){
+  const candidatos = _comparacaoCatalogoItensAtual[numero] || [];
+  const cards = candidatos.map(c=>{
+    const p = c.produto || {};
+    let mg='—', mgCls='';
+    if(c.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
+    else if(c.margem!=null){ mg=fmtMoeda(c.margem)+(c.margem_pct!=null?` (${c.margem_pct}%)`:''); mgCls=c.margem>=0?'margem-pos':'margem-neg'; }
+    const custo = c.custo_comparavel!=null ? fmtMoeda(c.custo_comparavel) : (p.preco_custo!=null?fmtMoeda(p.preco_custo):'—');
+    return `<div class="card" style="margin-top:10px">
+      <strong>${esc(p.descricao||'')}</strong>
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(c.justificativa||'')}</div>
+      <div class="precos" style="margin-top:8px">
+        <div class="preco-box"><div class="v">${custo}</div><div class="l">meu custo</div></div>
+        <div class="preco-box"><div class="v ${mgCls}">${mg}</div><div class="l">margem potencial</div></div>
+      </div>
+      <button class="btn" style="margin-top:8px" onclick="confirmarCandidatoIA(${numero}, ${c.produto_id})">Usar este produto</button>
+    </div>`;
+  }).join('');
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:480px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Escolher produto</h2>
+      <p class="muted" style="font-size:12px;margin-top:4px">A IA encontrou mais de um produto do seu catálogo compatível com este item. Escolha qual vai pra cotação.</p>
+      ${cards}
+    </div>
+  </div>`;
+}
+function confirmarCandidatoIA(numero, produtoId){
+  fecharModal();
+  adicionarItemIaNaCotacao(numero, produtoId, document.getElementById('ia-cat-btn-'+numero));
 }
 
 // mensagem de erro_ia varia conforme o motivo real (r.detalhe) — sem isso,
@@ -2902,31 +2970,31 @@ function _renderCabecalhoEdital(){
         <h2 style="margin:0 0 4px">${esc(e.orgao||'Órgão')}</h2>
         <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}${e.valor_estimado!=null?' · '+fmtMoeda(e.valor_estimado):''}</div>
       </div>
-      ${e.match_id?`<select class="status-sel st-${e.status}" onchange="_mudarStatusPaginaEdital(this.value)" title="Acompanhamento">
+      <select class="status-sel st-${e.status}" onchange="_mudarStatusPaginaEdital(this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
         <option value="vou_participar"${e.status==='vou_participar'?' selected':''}>Vou participar</option>
         <option value="proposta_enviada"${e.status==='proposta_enviada'?' selected':''}>Proposta enviada</option>
         <option value="ganho"${e.status==='ganho'?' selected':''}>Ganho</option>
         <option value="perdido"${e.status==='perdido'?' selected':''}>Perdido</option>
         <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
-      </select>`:''}
+      </select>
     </div>
     <p style="line-height:1.45;margin:12px 0">${esc(e.objeto||'')}</p>
     <div class="toolbar">
       ${linkPortal?`<a class="btn ghost" href="${esc(linkPortal)}" target="_blank">Abrir edital no portal ${ICN.externo}</a>`:''}
-      ${e.match_id?`<button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-      <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>`:''}
+      <button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
     </div>
   </div>`;
 }
 
 async function _marcarPaginaEdital(campo, val){
-  await marcar(_paginaEditalDetalhe.edital.match_id, campo, val);
+  await marcar(_paginaEditalDetalhe.edital.id, campo, val);
   _paginaEditalDetalhe.edital[campo] = val;
   _renderCabecalhoEdital();
 }
 async function _mudarStatusPaginaEdital(status){
-  await mudarStatus(_paginaEditalDetalhe.edital.match_id, status);
+  await mudarStatus(_paginaEditalDetalhe.edital.id, status);
   _paginaEditalDetalhe.edital.status = status;
   _renderCabecalhoEdital();
 }
@@ -3500,7 +3568,17 @@ async function _montarPropostaEdital(id, ativo){
   if(ativo && !ativo()) return;
   _propEditalId = id;
   _propostaCarregadaPara = id;
-  window._propItens = (p.itens||[]).map(i=>({
+  // proposta ainda não salva: começa só com o que já foi adicionado à
+  // cotação (aba Itens/margem ou Análise IA), não com TODOS os itens do
+  // edital — mesmo filtro que a aba Cotação já usa. Proposta já salva
+  // (p.existe) continua vindo do backend do jeito que está, sem filtro.
+  const d = _paginaEditalDetalhe;
+  const itensDetalhe = (d && d.itens) || [];
+  const itensIniciais = p.existe ? p.itens : itensDetalhe
+    .filter(it => it.compativel && _cotacaoSelecionados.has(String(it.numero)))
+    .map(it => ({descricao: it.descricao || '', quantidade: it.quantidade || 0,
+                 custo_unit: 0, preco_unit: it.valor_orgao || 0}));
+  window._propItens = (itensIniciais||[]).map(i=>({
     descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
   // itens que o edital de fato pede — usado só pra montar o modal de
