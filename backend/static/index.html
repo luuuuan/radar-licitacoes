@@ -46,7 +46,7 @@
   /* cabeçalho + menu ficam juntos numa barra só, grudada no topo ao rolar
      (position:sticky — não precisa de padding-top compensando, o navegador já
      reserva o espaço dela no fluxo normal antes de "grudar").
-     Só a partir de 1200px (@media lá embaixo) ela vira position:fixed com um
+     Só a partir de 1500px (@media lá embaixo) ela vira position:fixed com um
      "espaçador" (#topo-spacer) reservando o lugar: nessa largura a barra tem
      altura ANIMADA (o modo compacto encolhe ela), e sendo sticky isso reduz a
      altura rolável da página bem no meio do scroll do usuário — cabo de
@@ -83,7 +83,7 @@
     background:transparent;border-bottom:none;padding:0;
     transition:max-width .3s ease,opacity .2s ease,margin .2s ease,
       background-color .25s ease,color .25s ease,border-color .25s ease}
-  @media (max-width:1199px){
+  @media (max-width:1499px){
     .nav-compacta{display:none}
   }
   @media (prefers-reduced-motion:reduce){
@@ -98,7 +98,7 @@
   .kpi .n{font-size:24px;font-weight:700}
   .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
   nav{display:flex;gap:6px;flex-wrap:wrap}
-  @media (min-width:1200px){
+  @media (min-width:1500px){
     /* overflow:hidden só entra junto com o recolhimento (.compacto lá embaixo)
        — em repouso (altura normal) precisa ficar visible, senão corta o
        dropdown "Meu negócio"/"Conta" que abre pra baixo do próprio #nav */
@@ -433,8 +433,19 @@
   /* ---- Modo compacto: só em telas bem largas (senão a lógica de menu já
      preenche a linha do cabeçalho e voltaria a quebrar), a logo encolhe e o
      menu reduzido some/aparece junto ao cabeçalho depois de rolar. Abaixo de
-     1200px mantém as duas linhas normais, sem esse comportamento. ---- */
-  @media (min-width:1200px){
+     1500px mantém as duas linhas normais, sem esse comportamento.
+
+     O limiar de 1500px (não 1200px, que era o valor original) foi medido
+     com Playwright: nessa linha única cabem 5 abas + 2 dropdowns + status da
+     coleta + tema + Recalcular + Coletar agora + nome da empresa + Sair, e
+     esse conteúdo (com nowrap, ver abaixo) só cabe de verdade a partir de
+     ~1385px de largura — abaixo disso os botões/badges QUEBRAVAM o texto em
+     2 linhas (a altura real do cabeçalho passava a exceder os 72px fixos do
+     modo compacto, sobrepondo o conteúdo da página logo abaixo) e o final da
+     linha (nome da empresa, botão Sair) ficava cortado fora da tela, sem
+     scroll pra alcançar — achado real reportado pelo usuário em notebooks
+     comuns (1280/1366px de largura). ---- */
+  @media (min-width:1500px){
     /* fixed (não sticky) só aqui — ver comentário em #topo-fixo lá em cima.
        O espaçador reserva a altura da barra pro conteúdo não ficar embaixo
        dela; a altura muda junto com a animação do modo compacto. */
@@ -448,6 +459,19 @@
        de overflow:visible pra não cortar o dropdown "Meu negócio"/"Conta" que
        abre pra baixo */
     #topo-fixo.compacto .nav-compacta{max-width:700px;opacity:1;margin-left:16px;overflow:visible}
+    /* nunca deixa um rótulo quebrar em 2 linhas dentro da barra compacta —
+       o limiar de 1500px acima já garante espaço pra tudo caber nowrap; sem
+       essa regra, qualquer variação (fonte do SO, zoom do navegador) podia
+       voltar a quebrar texto e destravar o bug de sobreposição descrito no
+       comentário do @media. */
+    #topo-fixo.compacto header,
+    #topo-fixo.compacto header *{white-space:nowrap}
+    /* nome da empresa é o único texto sem tamanho previsível dessa barra
+       (razão social digitada pelo usuário) — trunca com "…" em vez de
+       arriscar estourar a largura de novo com um nome muito longo, mesmo
+       padrão já usado em .nav-footer .nav-user-nome pro mesmo campo na
+       gaveta do celular. */
+    #topo-fixo.compacto #user-nome{max-width:170px;overflow:hidden;text-overflow:ellipsis}
     /* Folga extra no fim da página — sem ela, em telas com pouco conteúdo
        (poucos editais, abas curtas etc.) o scroll máximo fica bem perto do
        limiar de 60px que liga o modo compacto: ligar o compacto encolhe o
@@ -541,10 +565,10 @@
     .editais-principal{flex:1;min-width:0}
     /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
        ~130px, sem o encolhimento do modo compacto — esse só existe a
-       partir de 1200px, ver abaixo) + uma folga de 8px. */
+       partir de 1500px, ver abaixo) + uma folga de 8px. */
     #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px}
   }
-  @media (min-width:1200px){
+  @media (min-width:1500px){
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
        (147px/72px, ver #topo-fixo.compacto acima) — acompanha os dois
        valores reais (medidos com Playwright), não um chute. */
@@ -1368,7 +1392,7 @@ function toggleMenu(){
 }
 
 // Modo compacto do cabeçalho: só tem efeito visual em telas largas (ver CSS,
-// @media min-width:1200px) — a logo encolhe e o menu reduzido (#nav-compacta)
+// @media min-width:1500px) — a logo encolhe e o menu reduzido (#nav-compacta)
 // aparece na mesma linha assim que a página rola um pouco.
 //
 // Histerese proposital (liga acima de 60px, só desliga em scrollY<=0) — sem
