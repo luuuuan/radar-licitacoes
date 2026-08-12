@@ -540,10 +540,25 @@
     transition:opacity .15s ease}
   .busca-item-destaque input::placeholder{color:var(--muted)}
   /* colapsada (só existe na versão desktop/tablet, ver JS): só o ícone,
-     campo e rótulo "Pesquisar" escondidos — abre de novo ao clicar. */
+     campo e rótulo "Pesquisar" escondidos — abre de novo ao clicar. Fundo
+     opaco (igual ao estado normal, não mais transparente): achado real —
+     com a caixa realmente colada no topo via position:sticky (ver correção
+     do "display:contents" em #slot-busca-desktop), ela passa a sobrepor os
+     cards da lista rolando por baixo; um fundo transparente deixava o texto
+     dos cards vazando por trás do ícone, um visual quebrado. */
   .busca-item-destaque.colapsada{max-width:44px;padding:6px;cursor:pointer;
-    background:transparent;border-color:transparent}
-  .busca-item-destaque.colapsada input{width:0;opacity:0;pointer-events:none}
+    background:var(--panel)}
+  /* flex:none (achado real) — sem isso, o "width:0" abaixo não tem efeito
+     nenhum: o input tem flex:1 (flex-basis:0%,flex-grow:1) na regra normal,
+     e flex-basis vence "width" no eixo principal do flex. Com flex-grow:1
+     ainda ativo, o input INVISÍVEL continuava crescendo pra preencher o
+     espaço disponível, empurrando o ícone pro canto oposto da caixa — e
+     como #slot-busca-desktop .busca-item-destaque{max-width:520px} (ID)
+     tem mais especificidade que esta classe dupla, a caixa nem encolhia de
+     verdade (ver regra abaixo, que corrige isso também). O resultado
+     visível: o ícone "Pesquisar" ficava colado no lado ERRADO da barra
+     depois de rolar a página, em vez de virar um botão pequeno e sozinho. */
+  .busca-item-destaque.colapsada input{flex:none;width:0;opacity:0;pointer-events:none}
   .busca-item-destaque.colapsada .busca-item-rotulo{display:none}
   .busca-item-destaque.colapsada .busca-item-icone{padding:10px;border-radius:10px}
   /* no celular, campo numa linha e botão "Pesquisar" cheio embaixo (igual
@@ -563,10 +578,26 @@
       background:transparent;border:none;border-radius:0;max-height:calc(100vh - 32px)}
     .filtros-lateral .uf-checks{grid-template-columns:1fr 1fr}
     .editais-principal{flex:1;min-width:0}
+    /* achado real: sem "display:contents" aqui, esta div (que só existe como
+       alvo pro JS mover o campo de busca entre celular/desktop, ver
+       _reposicionarBuscaItem) vira o "containing block" do filho sticky —
+       e como ela encolhe pro tamanho exato do próprio filho (sem sobra de
+       espaço nenhuma), o position:sticky não tem onde "grudar": o campo
+       nunca fica de fato preso no topo, só rola junto com o resto da
+       página como se fosse position:static. "display:contents" remove essa
+       div do cálculo de layout (sem tirá-la do DOM — appendChild continua
+       funcionando normal), fazendo o filho contar .editais-principal (bem
+       mais alta) como containing block, do jeito que o sticky precisa. */
+    #slot-busca-desktop{display:contents}
     /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1500px, ver abaixo) + uma folga de 8px. */
     #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px}
+    /* achado real: sem essa regra, o max-width:520px acima (seletor por ID)
+       vence o max-width:44px de ".colapsada" (duas classes, especificidade
+       menor) e a caixa nunca encolhia de verdade ao rolar a página — ficava
+       larga e transparente, só com o ícone visível preso numa ponta. */
+    #slot-busca-desktop .busca-item-destaque.colapsada{max-width:44px}
   }
   @media (min-width:1500px){
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
@@ -1622,6 +1653,16 @@ function _atualizarBuscaPorScroll(){
   if(!_buscaEhDesktop()) return;   // colapso-por-scroll só existe a partir do tablet
   const wrap = document.querySelector('.busca-item-destaque');
   if(!wrap) return;
+  // achado real: no desktop, clicar no ícone pra reabrir o campo colapsado
+  // foca o input — e o navegador ajusta o scroll pra garantir que o campo
+  // recém-focado fique visível, disparando um evento de scroll mesmo sem o
+  // usuário ter rolado nada. Sem esta guarda, esse scroll "fantasma" batia
+  // direto no limiar (ainda scrollado) e recolapsava o campo na mesma
+  // fração de segundo em que abria — mesma causa raiz do bug já conhecido
+  // no celular (ver comentário acima), só que essa variante só aparece
+  // quando o campo realmente gruda/colapsa de verdade (ver correção do
+  // "display:contents" em #slot-busca-desktop).
+  if(document.activeElement === $('#f-busca-item')) return;
   const deveColapsar = window.scrollY > _LIMIAR_BUSCA_COLAPSA;
   if(wrap.classList.contains('colapsada') === deveColapsar) return;
   wrap.classList.toggle('colapsada', deveColapsar);
