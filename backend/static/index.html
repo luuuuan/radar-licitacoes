@@ -2442,7 +2442,7 @@ async function loadColetaStatus(){
           ? `Calculando compatibilidade (${s.fase_feitos}/${s.fase_total})...`
           : 'Calculando compatibilidade com seu catálogo...';
       } else if(s.fase==='buscando'){
-        texto = 'Buscando editais no PNCP...';
+        texto = 'Buscando editais...';
       }
       el.innerHTML=ICN.relogio+' '+esc(texto); el.style.color='var(--medio)';
     } else if(s.estado==='nunca'){
