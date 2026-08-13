@@ -2228,6 +2228,7 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
                 continue
             enriquecidos.append({
                 "numero": it["numero"], "descricao_item": ie.descricao,
+                "valor_orgao": ie.valor_unitario, "quantidade": ie.quantidade,
                 "candidatos": candidatos,
             })
         saida["itens"] = enriquecidos

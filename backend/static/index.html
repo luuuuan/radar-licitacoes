@@ -2836,7 +2836,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
   const linhas = c.itens.map(it=>{
-    _comparacaoCatalogoItensAtual[it.numero] = it.candidatos;
+    _comparacaoCatalogoItensAtual[it.numero] = it;
     const naCotacao = _cotacaoSelecionados.has(String(it.numero));
     const principal = it.candidatos[0];
     const p = principal.produto || {};
@@ -2846,12 +2846,19 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
     // de matching compatibilizou — pega exatamente o caso real que motivou
     // isso ("Fita ... largura 50mm" vs sugestão "... 48mm x 50m": categoria
     // certa, medida errada, e a IA sozinha não tinha percebido).
+    // Achado real: o motivo do "Atende parcialmente" ficava só no title
+    // (tooltip) — quase ninguém passa o mouse ali, então a classificação
+    // parecia contradizer a justificativa em texto livre da IA logo ao lado
+    // (ex.: badge "parcial" + texto da IA dizendo "atende perfeitamente").
+    // Mostrar a pendência embaixo do badge resolve a aparência de
+    // contradição sem mudar a classificação em si.
     let specsBadge = '';
     if(vt){
       const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
       const icone = vt.classificacao==='Não atende' ? '✗' : (vt.classificacao==='Atende' ? '✓' : '⚠');
       const pendencias = [...vt.criticas, ...vt.avisos];
-      specsBadge = `<div title="${esc(pendencias.join(' | '))}" style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`;
+      specsBadge = `<div style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`
+        + (pendencias.length ? `<div class="muted" style="font-size:10px;margin-top:1px">${esc(pendencias.join(' · '))}</div>` : '');
     }
     let mg='—', mgCls='';
     if(principal.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
@@ -2879,6 +2886,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
       <td class="muted" style="font-size:12px">${esc(principal.justificativa||'')}</td>
       <td style="white-space:nowrap">
         ${acaoBtn}
+        <button class="btn ghost" onclick="abrirDetalheItemIA(${it.numero})" style="margin-left:4px;padding:2px 8px;font-size:11px">${ICN.detalhe} detalhes</button>
         ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:4px;padding:2px 8px;font-size:11px">fornecedor ↗</a>`:''}
       </td>
     </tr>`;
@@ -2913,7 +2921,7 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
 // genuinamente compatíveis pro mesmo item (ver _comparacaoCatalogoIAHTML).
 // Mostra o custo/margem dos dois lado a lado pra decisão informada.
 function escolherProdutoIA(numero){
-  const candidatos = _comparacaoCatalogoItensAtual[numero] || [];
+  const candidatos = (_comparacaoCatalogoItensAtual[numero] || {}).candidatos || [];
   const cards = candidatos.map(c=>{
     const p = c.produto || {};
     let mg='—', mgCls='';
@@ -2936,6 +2944,49 @@ function escolherProdutoIA(numero){
       <h2>Escolher produto</h2>
       <p class="muted" style="font-size:12px;margin-top:4px">A IA encontrou mais de um produto do seu catálogo compatível com este item. Escolha qual vai pra cotação.</p>
       ${cards}
+    </div>
+  </div>`;
+}
+// Mesmo padrão do modal "Ver detalhes" da aba Itens/margem (abrirDetalheItem),
+// mas alimentado pelos dados da COMPARAÇÃO POR IA (_comparacaoCatalogoItensAtual),
+// não pelo motor de matching determinístico — não dá pra reaproveitar
+// abrirDetalheItem() direto: ele lê _paginaEditalDetalhe.itens, que pode ter
+// um produto diferente (ou nenhum) pra este mesmo item, já que é uma fonte
+// de match independente. Mostra sempre o candidato principal (1º da lista);
+// pra comparar os 2 candidatos lado a lado já existe "Escolher produto".
+function abrirDetalheItemIA(numero){
+  const it = _comparacaoCatalogoItensAtual[numero];
+  if(!it) return;
+  const principal = (it.candidatos||[])[0];
+  if(!principal) return;
+  const p = principal.produto || {};
+  const vt = principal.validacao_tecnica;
+  const pendencias = vt ? [...vt.criticas, ...vt.avisos] : [];
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:560px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Item ${esc(it.numero??'')}</h2>
+      <p style="margin:8px 0 0;line-height:1.5;font-size:14px">${esc(it.descricao_item||'')}</p>
+      ${_paresHTML('Do edital', [
+        ['Valor do órgão (unit.)', it.valor_orgao!=null?fmtMoeda(it.valor_orgao):null],
+        ['Quantidade pedida', it.quantidade],
+      ])}
+      ${_paresHTML('Produto do catálogo (sugestão da IA)', [
+        ['Descrição', p.descricao],
+        ['Preço de custo', p.preco_custo!=null?fmtMoeda(p.preco_custo):null],
+        ['Preço de venda', p.preco_venda!=null?fmtMoeda(p.preco_venda):null],
+        ['Unidade de venda', p.unidade_venda],
+        ['Itens por unidade (embalagem)', p.itens_por_unidade],
+        ['Custo comparável (mesma base do órgão)', principal.custo_comparavel!=null?fmtMoeda(principal.custo_comparavel):null],
+        ['Margem potencial', principal.margem!=null?(fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:'')):null],
+      ])}
+      ${principal.justificativa?`<div style="margin-top:10px"><strong>Justificativa da IA</strong>
+        <p class="muted" style="margin:4px 0 0;font-size:13px;line-height:1.5">${esc(principal.justificativa)}</p>
+      </div>`:''}
+      ${vt ? `<div style="margin-top:10px"><strong>Validação técnica</strong>
+        <div style="margin-top:4px;font-size:13px;color:${CORES_VALIDACAO[vt.classificacao]||''};font-weight:600">${esc(vt.classificacao)}</div>
+        ${pendencias.length?`<ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${pendencias.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}
+      </div>` : ''}
     </div>
   </div>`;
 }
@@ -3698,7 +3749,7 @@ function _renderizarPropostaEdital(){
     <div class="field" style="margin-top:10px"><label>Observações</label>
       <textarea id="prop-obs" style="width:100%;min-height:50px" oninput="_propObsAtual=this.value">${esc(_propObsAtual)}</textarea></div>
     <div class="toolbar" style="margin-top:10px">
-      <button class="btn" onclick="salvarProposta()">Salvar proposta</button>
+      <button class="btn" onclick="salvarProposta(this)">Salvar proposta</button>
       <button class="btn ghost" id="btn-baixar-proposta" onclick="baixarPropostaPdf(this)">${ICN.baixar} Baixar proposta (PDF)</button>
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
@@ -3775,14 +3826,44 @@ function propAddDoEdital(numero){
 }
 function propDel(idx){ window._propItens.splice(idx,1); renderProposta(); }
 
-async function salvarProposta(){
+// usa fetch cru (não api()) de propósito: api() nunca rejeita a promise em
+// erro HTTP (só faz r.json(), sem checar r.ok) — uma sessão expirada ou um
+// erro do servidor aparecia como "proposta salva" mesmo sem ter salvo nada,
+// e o usuário só percebia que "não tinha acontecido nada" quando notava que
+// os dados tinham sumido depois. Erro/sucesso agora também aparecem em toast
+// (a mensagem em #prop-msg é pequena e fica só ali, fácil de não notar).
+async function salvarProposta(btn){
+  const original = btn ? btn.innerHTML : null;
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-inline" style="border-color:rgba(255,255,255,.35);border-top-color:#fff;vertical-align:-3px"></span> Salvando...`;
+  }
   try{
-    await api(`/api/editais/${_propEditalId}/proposta`,{method:'POST',
+    const r = await fetch(`/api/editais/${_propEditalId}/proposta`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({itens:window._propItens, observacoes:$('#prop-obs').value})});
-    $('#prop-msg').innerHTML=ICN.check+' proposta salva';
-    setTimeout(()=>{$('#prop-msg').textContent='';},4000);
-  }catch(e){ $('#prop-msg').textContent='erro ao salvar'; }
+    if(!r.ok){
+      let msg = 'Não foi possível salvar a proposta.';
+      try{ const j = await r.json(); if(j.detail) msg = j.detail; }catch(e){}
+      throw new Error(msg);
+    }
+    // só mostra feedback próprio quando chamada direto pelo botão (btn) — a
+    // chamada interna de baixarPropostaPdf() (sem btn) trata erro/sucesso
+    // com o próprio toast dela, pra não duplicar mensagem.
+    if(btn){
+      $('#prop-msg').innerHTML=ICN.check+' proposta salva';
+      setTimeout(()=>{$('#prop-msg').textContent='';},4000);
+      toast('Proposta salva.', 'ok');
+    }
+  }catch(e){
+    if(btn){
+      $('#prop-msg').textContent='erro ao salvar';
+      toast(e.message || 'Não foi possível salvar a proposta agora. Tente de novo.', 'erro');
+    }
+    throw e;   // baixarPropostaPdf depende de saber que salvar falhou pra não gerar o PDF
+  }finally{
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
 }
 // o PDF é gerado no servidor a partir do que está SALVO — sem salvar antes,
 // um item excluído/editado só na tela (sem clicar em "Salvar proposta")

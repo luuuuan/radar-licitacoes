@@ -36,7 +36,7 @@ def _semear(db):
     db.add(ed)
     db.commit()
     db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Caneta esferografica azul",
-                      valor_unitario=3.0))
+                      valor_unitario=3.0, quantidade=25))
     db.commit()
     return u, ed, p1, p2
 
@@ -56,6 +56,10 @@ def test_dois_candidatos_ganham_produto_custo_e_margem_proprios():
 
     itens = out["comparacao_catalogo_ia"]["itens"]
     assert len(itens) == 1
+    # dados do item do edital (preço, quantidade) — alimentam o modal "Ver
+    # detalhes" da comparação por IA, sem precisar de outra chamada.
+    assert itens[0]["valor_orgao"] == 3.0
+    assert itens[0]["quantidade"] == 25
     candidatos = itens[0]["candidatos"]
     assert len(candidatos) == 2
     assert candidatos[0]["produto_id"] == p1.id
