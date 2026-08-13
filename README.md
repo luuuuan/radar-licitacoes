@@ -1,4 +1,4 @@
-# 📡 Radar de Licitações
+# 🔎 Minha Licitação
 
 Sistema que **busca diariamente editais de licitação pública** e identifica
 automaticamente aqueles cujos itens batem com os produtos/serviços que sua

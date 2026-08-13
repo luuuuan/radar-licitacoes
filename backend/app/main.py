@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Radar de Licitações", version="2.0", lifespan=lifespan)
+app = FastAPI(title="Minha Licitação", version="2.0", lifespan=lifespan)
 
 # Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
 _ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar", "/redefinir-senha"}
@@ -135,8 +135,8 @@ def _email_html_verificacao(nome: str, link: str) -> str:
     <tr><td align="center">
       <table role="presentation" width="480" cellpadding="0" cellspacing="0"
              style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
-        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
-          Radar de Licitações
+        <tr><td style="background:#14121A;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
+          Minha Licitação
         </td></tr>
         <tr><td style="padding:28px">
           <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
@@ -145,7 +145,7 @@ def _email_html_verificacao(nome: str, link: str) -> str:
             confirmar o seu e-mail.
           </p>
           <p style="margin:0 0 24px;text-align:center">
-            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
+            <a href="{link}" style="background:#6D28D9;color:#fff;text-decoration:none;
                padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
               Confirmar meu e-mail
             </a>
@@ -153,13 +153,13 @@ def _email_html_verificacao(nome: str, link: str) -> str:
           <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
             Se o botão não funcionar, copie e cole este endereço no navegador:
           </p>
-          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
+          <p style="margin:0 0 20px;font-size:12px;color:#6D28D9;word-break:break-all">{link}</p>
           <p style="margin:0;font-size:12px;color:#94a3b8">
             Se você não criou esta conta, é só ignorar esta mensagem.
           </p>
         </td></tr>
       </table>
-      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Minha Licitação</p>
     </td></tr>
   </table>
 </body></html>"""
@@ -258,13 +258,13 @@ def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
         base = settings.APP_BASE_URL.rstrip("/")
         link = f"{base}/verificar?token={u.token_verificacao}"
         corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a sua conta no "
-                 f"Radar de Licitações:\n{link}\n\n"
+                 f"Minha Licitação:\n{link}\n\n"
                  "Se você não criou esta conta, ignore esta mensagem.\n\n"
-                 "— Radar de Licitações")
+                 "— Minha Licitação")
         html = _email_html_verificacao(u.nome, link)
         # envia em segundo plano: o cadastro responde na hora, sem esperar o e-mail
         bg.add_task(_email_mod.enviar_para, email,
-                    "Confirme seu cadastro — Radar de Licitações", corpo, html)
+                    "Confirme seu cadastro — Minha Licitação", corpo, html)
         return {"ok": True, "verificar_email": True,
                 "mensagem": "Enviamos um link de confirmação para o seu e-mail. "
                             "Confira também a caixa de spam."}
@@ -333,8 +333,8 @@ def _email_html_reset_senha(nome: str, link: str) -> str:
     <tr><td align="center">
       <table role="presentation" width="480" cellpadding="0" cellspacing="0"
              style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
-        <tr><td style="background:#1a2129;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
-          Radar de Licitações
+        <tr><td style="background:#14121A;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
+          Minha Licitação
         </td></tr>
         <tr><td style="padding:28px">
           <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
@@ -343,7 +343,7 @@ def _email_html_reset_senha(nome: str, link: str) -> str:
             para escolher uma nova senha. Este link expira em 1 hora.
           </p>
           <p style="margin:0 0 24px;text-align:center">
-            <a href="{link}" style="background:#2563eb;color:#fff;text-decoration:none;
+            <a href="{link}" style="background:#6D28D9;color:#fff;text-decoration:none;
                padding:12px 26px;border-radius:8px;font-size:14px;font-weight:bold;display:inline-block">
               Redefinir minha senha
             </a>
@@ -351,14 +351,14 @@ def _email_html_reset_senha(nome: str, link: str) -> str:
           <p style="margin:0 0 8px;font-size:12px;color:#5b6770">
             Se o botão não funcionar, copie e cole este endereço no navegador:
           </p>
-          <p style="margin:0 0 20px;font-size:12px;color:#2563eb;word-break:break-all">{link}</p>
+          <p style="margin:0 0 20px;font-size:12px;color:#6D28D9;word-break:break-all">{link}</p>
           <p style="margin:0;font-size:12px;color:#94a3b8">
             Se você não pediu essa alteração, é só ignorar esta mensagem — sua senha
             continua a mesma.
           </p>
         </td></tr>
       </table>
-      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Radar de Licitações</p>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Minha Licitação</p>
     </td></tr>
   </table>
 </body></html>"""
@@ -383,12 +383,12 @@ def auth_esqueci_senha(dados: EsqueciSenhaIn, bg: BackgroundTasks,
         base = settings.APP_BASE_URL.rstrip("/")
         link = f"{base}/redefinir-senha?token={u.token_reset_senha}"
         corpo = (f"Olá, {u.nome}!\n\nRecebemos um pedido para redefinir a sua senha "
-                 f"no Radar de Licitações. Este link expira em 1 hora:\n{link}\n\n"
+                 f"no Minha Licitação. Este link expira em 1 hora:\n{link}\n\n"
                  "Se você não pediu essa alteração, ignore esta mensagem.\n\n"
-                 "— Radar de Licitações")
+                 "— Minha Licitação")
         html = _email_html_reset_senha(u.nome, link)
         bg.add_task(_email_mod.enviar_para, email,
-                    "Redefinir senha — Radar de Licitações", corpo, html)
+                    "Redefinir senha — Minha Licitação", corpo, html)
 
     return {"ok": True, "mensagem": mensagem}
 
@@ -586,11 +586,11 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
                 _tg.enviar_para_chat(
                     chat_id, "✅ Telegram conectado!",
                     f"Pronto, {u.nome}! Você vai receber aqui os avisos de novas "
-                    "oportunidades do Radar de Licitações.")
+                    "oportunidades do Minha Licitação.")
                 return {"ok": True}
         from .notifications import telegram as _tg
         _tg.enviar_para_chat(
-            chat_id, "Radar de Licitações",
+            chat_id, "Minha Licitação",
             "Para conectar, abra o link de vínculo na tela 'Meu perfil' do sistema.")
     return {"ok": True}
 
@@ -764,7 +764,7 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
         "Se o telefone bater com um fornecedor já cadastrado na aba Fornecedores, "
         "o produto é vinculado a ele automaticamente (nome/contato/site vêm de lá "
         "— não precisa preencher as 3 colunas seguintes). Preencha-as só se o "
-        "fornecedor ainda não estiver cadastrado.", "Radar de Licitações")
+        "fornecedor ainda não estiver cadastrado.", "Minha Licitação")
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)

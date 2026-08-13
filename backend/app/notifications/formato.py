@@ -38,10 +38,9 @@ def item_edital(ed, nivel: str | None = None) -> dict:
 
 # ----------------------------- E-MAIL (HTML) ----------------------------- #
 # Mesma identidade visual usada no dashboard e nos e-mails de conta (cabeçalho
-# escuro + azul de destaque) — antes esta função usava roxo, uma cor que não
-# aparece em nenhum outro lugar do produto.
-_ESCURO = "#1a2129"
-_AZUL = "#2563eb"
+# escuro + violeta de destaque).
+_ESCURO = "#14121A"
+_VIOLETA = "#6D28D9"
 _COR_NIVEL = {"forte": "#16a34a", "medio": "#ca8a04"}
 _BG_NIVEL = {"forte": "rgba(22,163,74,.1)", "medio": "rgba(202,138,4,.1)"}
 _NOME_NIVEL = {"forte": "Alta compatibilidade", "medio": "Média compatibilidade"}
@@ -89,7 +88,7 @@ def email_html(titulo: str, intro: str, itens: list[dict],
             botao = (
                 f'<a href="{_esc(it["link"])}" '
                 f'style="display:inline-block;margin-top:10px;padding:8px 16px;'
-                f'background:{_AZUL};color:#fff;text-decoration:none;border-radius:6px;'
+                f'background:{_VIOLETA};color:#fff;text-decoration:none;border-radius:6px;'
                 f'font-size:14px">Abrir edital</a>'
             )
         cartoes.append(f"""
@@ -107,14 +106,14 @@ def email_html(titulo: str, intro: str, itens: list[dict],
     return f"""<!DOCTYPE html><html><body style="margin:0;background:#f4f6f9;padding:20px;font-family:Arial,Helvetica,sans-serif">
   <div style="max-width:600px;margin:0 auto">
     <div style="background:{_ESCURO};padding:18px 20px;border-radius:10px 10px 0 0">
-      <div style="color:#8b98a5;font-size:11px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:4px">Radar de Licitações</div>
+      <div style="color:#8b98a5;font-size:11px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:4px">Minha Licitação</div>
       <div style="color:#fff;font-size:18px;font-weight:700">{_esc(titulo)}</div>
     </div>
     <div style="background:#fff;padding:16px 20px;border-radius:0 0 10px 10px;border:1px solid #e5e7eb;border-top:none">
       <p style="color:#374151;font-size:14px;margin:4px 0 8px">{_esc(intro)}</p>
       {corpo_cartoes}
       <p style="color:#9ca3af;font-size:12px;margin-top:20px;border-top:1px solid #eee;padding-top:12px">
-        Radar de Licitações · você recebe este aviso porque ativou as notificações no seu perfil.
+        Minha Licitação · você recebe este aviso porque ativou as notificações no seu perfil.
       </p>
     </div>
   </div>

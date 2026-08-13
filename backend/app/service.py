@@ -386,7 +386,7 @@ def _notificar_usuario(usuario, fortes: list[Edital]):
     n = len(itens)
     titulo = (f"🎯 {n} novas oportunidades de alta compatibilidade"
               if n > 1 else "🎯 Nova oportunidade de alta compatibilidade")
-    intro = "Encontramos no Radar editais que combinam bem com os seus produtos."
+    intro = "Encontramos no Minha Licitação editais que combinam bem com os seus produtos."
     notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",))
 
 

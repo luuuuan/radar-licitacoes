@@ -3,23 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="icon" type="image/svg+xml" href="/static/favicon-radar.svg">
-<title>Radar de Licitações</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon-ml.svg">
+<meta name="theme-color" content="#6D28D9">
+<title>Minha Licitação</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
   :root{
     --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
-    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#6D28D9;
     --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
-    --destructive:#ef4444; --ring:#3b82f6; --overlay:rgba(0,0,0,.6);
-    --font-body:'Source Sans 3',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-    --font-heading:'Lexend',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --destructive:#ef4444; --ring:#6D28D9; --overlay:rgba(0,0,0,.6);
+    --accent-claro:#A78BFA; --accent-pale:#DDD6FE;
+    --font-body:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --font-heading:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
   :root[data-theme="light"]{
     --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
-    --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
+    --txt:#1a2129; --muted:#5b6770; --accent:#6D28D9;
     --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
-    --destructive:#dc2626; --ring:#2563eb; --overlay:rgba(15,23,42,.45);
+    --destructive:#dc2626; --ring:#6D28D9; --overlay:rgba(15,23,42,.45);
   }
   *{box-sizing:border-box}
   /* troca de tema (claro/escuro) suave em vez de instantânea */
@@ -165,17 +167,11 @@
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
     transition:opacity .4s ease}
   #splash.out{opacity:0;pointer-events:none}
-  .radar{width:90px;height:90px;border-radius:50%;position:relative;
-    border:2px solid var(--line);overflow:hidden}
-  .radar::before{content:"";position:absolute;inset:0;border-radius:50%;
-    background:conic-gradient(from 0deg, transparent 0 280deg, rgba(59,130,246,.55) 360deg);
-    animation:spin 1.3s linear infinite}
-  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
-    background:radial-gradient(circle, transparent 30%, rgba(59,130,246,.08) 31%, transparent 32%,
-      transparent 60%, rgba(59,130,246,.08) 61%, transparent 62%)}
+  .radar{width:90px;height:90px;border:none;overflow:visible;
+    background:none;border-radius:0;position:relative}
   @keyframes spin{to{transform:rotate(360deg)}}
   #splash .t{font-size:15px;color:var(--muted);letter-spacing:.5px}
-  /* mesmo radar do splash, só que pequeno e contido (não tela cheia) —
+  /* mesmo indicador do splash, só que pequeno e contido (não tela cheia) —
      usado em carregamentos internos, ex.: abrir a página de um edital */
   .radar.pequeno{width:36px;height:36px}
   .radar-carregando{display:flex;flex-direction:column;align-items:center;
@@ -186,6 +182,32 @@
   .spinner-inline{display:inline-block;width:15px;height:15px;flex-shrink:0;
     border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
     animation:spin .8s linear infinite}
+  /* nove pontos pulsando em onda no sentido horário — indicador de
+     carregamento da marca. Os :nth-child abaixo formam a onda; não
+     reordene os <circle> no SVG ou o efeito vira aleatório. */
+  .ml-dots{width:100%;height:100%;display:block}
+  .ml-dots circle{fill:var(--accent-claro);transform-box:fill-box;
+    transform-origin:center;animation:ml-pulse 1.4s ease-in-out infinite}
+  .ml-dots .core{fill:var(--accent);animation:ml-core 1.4s ease-in-out infinite}
+  .ml-dots circle:nth-child(1){animation-delay:0s}
+  .ml-dots circle:nth-child(2){animation-delay:.1s}
+  .ml-dots circle:nth-child(3){animation-delay:.2s}
+  .ml-dots circle:nth-child(5){animation-delay:.3s}
+  .ml-dots circle:nth-child(8){animation-delay:.4s}
+  .ml-dots circle:nth-child(7){animation-delay:.5s}
+  .ml-dots circle:nth-child(6){animation-delay:.6s}
+  .ml-dots circle:nth-child(4){animation-delay:.7s}
+  @keyframes ml-pulse{
+    0%,100%{opacity:.25;transform:scale(.85)}
+    50%    {opacity:1;transform:scale(1)}
+  }
+  @keyframes ml-core{
+    0%,100%{transform:scale(1)}
+    50%    {transform:scale(1.14)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .ml-dots circle,.ml-dots .core{animation:none;opacity:.7}
+  }
 
   /* ---- Modal de detalhes ---- */
   .modal{position:fixed;inset:0;background:var(--overlay);z-index:5000;
@@ -621,14 +643,21 @@
 <body>
 <div id="loadingbar"></div>
 <div id="splash">
-  <div class="radar"></div>
-  <div class="t"><svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="1.6" style="vertical-align:-3px"><circle cx="12" cy="12" r="10" fill="none" opacity=".35"/><circle cx="12" cy="12" r="6.5" fill="none" opacity=".55"/><path d="M12 12 L12 2.3 A9.7 9.7 0 0 1 20 8.3 Z" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg> Carregando o Radar de Licitações…</div>
+  <div class="radar">
+    <svg class="ml-dots" viewBox="0 0 64 64" role="status" aria-label="Carregando">
+      <circle cx="14" cy="14" r="4.5"/><circle cx="32" cy="14" r="4.5"/><circle cx="50" cy="14" r="4.5"/>
+      <circle cx="14" cy="32" r="4.5"/><circle cx="50" cy="32" r="4.5"/>
+      <circle cx="14" cy="50" r="4.5"/><circle cx="32" cy="50" r="4.5"/><circle cx="50" cy="50" r="4.5"/>
+      <circle class="core" cx="32" cy="32" r="9"/>
+    </svg>
+  </div>
+  <div class="t">Carregando…</div>
 </div>
 <div id="modal-mount"></div>
 <div id="topo-fixo">
 <header>
   <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <h1><svg viewBox="0 0 24 24" width="26" height="26" stroke="currentColor" stroke-width="1.6" style="vertical-align:-4px"><circle cx="12" cy="12" r="10" fill="none" opacity=".35"/><circle cx="12" cy="12" r="6.5" fill="none" opacity=".55"/><path d="M12 12 L12 2.3 A9.7 9.7 0 0 1 20 8.3 Z" fill="currentColor" stroke="none"/><circle cx="16.5" cy="7" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg><span class="logo-txt"> Radar de Licitações</span></h1>
+  <h1><svg viewBox="0 0 64 64" width="26" height="26" style="vertical-align:-4px" aria-hidden="true"><circle cx="14" cy="14" r="4.5" fill="#4c4360"/><circle cx="32" cy="14" r="4.5" fill="#4c4360"/><circle cx="50" cy="14" r="4.5" fill="#4c4360"/><circle cx="14" cy="32" r="4.5" fill="#4c4360"/><circle cx="50" cy="32" r="4.5" fill="#4c4360"/><circle cx="14" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="50" r="4.5" fill="#4c4360"/><circle cx="50" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="32" r="9" fill="var(--accent-claro)"/></svg><span class="logo-txt"> Minha Licitação</span></h1>
 
   <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
@@ -2955,7 +2984,7 @@ function _spinnerHTML(texto, extra){
 // página de um edital, pra dar uma sensação mais "do app" que o spinner
 // genérico de texto.
 function _radarCarregandoHTML(texto){
-  return `<div class="radar-carregando"><div class="radar pequeno"></div><div class="t">${esc(texto)}</div></div>`;
+  return `<div class="radar-carregando"><div class="radar pequeno"><svg class="ml-dots" viewBox="0 0 64 64" role="status" aria-label="Carregando"><circle cx="14" cy="14" r="4.5"/><circle cx="32" cy="14" r="4.5"/><circle cx="50" cy="14" r="4.5"/><circle cx="14" cy="32" r="4.5"/><circle cx="50" cy="32" r="4.5"/><circle cx="14" cy="50" r="4.5"/><circle cx="32" cy="50" r="4.5"/><circle cx="50" cy="50" r="4.5"/><circle class="core" cx="32" cy="32" r="9"/></svg></div><div class="t">${esc(texto)}</div></div>`;
 }
 
 // Guarda o quanto a página tinha rolado ANTES de entrar no edital — sem

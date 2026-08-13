@@ -3,19 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/svg+xml" href="/static/favicon-radar.svg">
-<title>Página não encontrada — Radar de Licitações</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon-ml.svg">
+<meta name="theme-color" content="#6D28D9">
+<title>Página não encontrada — Minha Licitação</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
   :root{
     --bg:#0f1419; --panel:#1a2129; --panel2:#222b35; --line:#2c3742;
-    --txt:#e6edf3; --muted:#8b98a5; --accent:#3b82f6;
-    --font-body:'Source Sans 3',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-    --font-heading:'Lexend',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --txt:#e6edf3; --muted:#8b98a5; --accent:#6D28D9;
+    --font-body:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --font-heading:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
   :root[data-theme="light"]{
     --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f5; --line:#d8dee6;
-    --txt:#1a2129; --muted:#5b6770; --accent:#2563eb;
+    --txt:#1a2129; --muted:#5b6770; --accent:#6D28D9;
   }
   *{box-sizing:border-box}
   *{transition:background-color .25s ease,color .25s ease,border-color .25s ease}
@@ -29,7 +30,7 @@
   .radar-disco{position:relative;width:150px;height:150px;border-radius:50%;
     border:2px solid var(--line);overflow:hidden;background:var(--panel)}
   .radar-disco::before{content:"";position:absolute;inset:0;border-radius:50%;
-    background:conic-gradient(from 0deg, transparent 0 300deg, rgba(59,130,246,.5) 360deg);
+    background:conic-gradient(from 0deg, transparent 0 300deg, rgba(109,40,217,.5) 360deg);
     animation:girar 2.6s linear infinite}
   .radar-disco::after{content:"";position:absolute;inset:0;border-radius:50%;
     background:radial-gradient(circle, transparent 24%, var(--line) 25%, transparent 26%,
@@ -67,7 +68,7 @@
     </div>
     <div class="numero-404">404</div>
     <h1>Página não encontrada</h1>
-    <p>O radar não encontrou nada neste endereço. A página pode ter sido movida ou o link está incorreto.</p>
+    <p>Não encontramos nada neste endereço. A página pode ter sido movida ou o link está incorreto.</p>
     <a class="btn" href="/">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
       Ir para o início

@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # Envia para qualquer destinatário sem precisar verificar domínio.
     BREVO_API_KEY: str = ""
     BREVO_FROM_EMAIL: str = ""   # ex.: "voce@gmail.com" (remetente verificado no Brevo)
-    BREVO_FROM_NOME: str = "Radar de Licitações"
+    BREVO_FROM_NOME: str = "Minha Licitação"
 
     # Notificações por Telegram
     TELEGRAM_BOT_TOKEN: str = ""
