@@ -82,6 +82,8 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("recalculo_checkpoint_em", "TIMESTAMP"),
     ("dados_empresa_cifrado", "TEXT"),
     ("logo_base64", "TEXT"),
+    ("versao_catalogo", "INTEGER DEFAULT 0"),
+    ("versao_documentos", "INTEGER DEFAULT 0"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
 for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),

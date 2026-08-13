@@ -2777,7 +2777,7 @@ function cadastrarDocumentoChecklist(idx){
 // edital — diferente do checklist acima (_checklistDocsHTML), que só
 // compara pelo NOME cadastrado. Só existe quando a análise rodou fresca
 // (não em cache hit) e o usuário tem ao menos 1 documento com arquivo.
-function _verificacaoDocumentosIAHTML(v){
+function _verificacaoDocumentosIAHTML(v, desatualizada){
   if(!v || v.status==='sem_requisitos' || v.status==='sem_ia') return '';
   if(v.status==='sem_documentos'){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Nenhum dos seus documentos cadastrados tem arquivo anexado ainda — anexe um PDF/imagem ao editar um documento na aba <b>Documentos</b> pra ativar esta verificação.</div>`;
@@ -2790,7 +2790,12 @@ function _verificacaoDocumentosIAHTML(v){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Verificação rodou, mas não encontrou exigências de habilitação claras pra cruzar com seus documentos.</div>`;
   }
   const atendidos = v.itens.filter(i=>i.atendido).length;
+  const aviso = desatualizada ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
+    ⚠ Seus documentos cadastrados mudaram desde esta verificação — o resultado abaixo pode estar desatualizado.
+    <button class="btn ghost" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Atualizar análise</button>
+  </div>` : '';
   return `<div style="margin-top:14px">
+    ${aviso}
     <strong>Verificação por IA dos seus documentos (${atendidos}/${v.itens.length} atendidos)</strong>
     <p class="muted" style="font-size:11px;margin:2px 0 6px">Lê o conteúdo dos arquivos anexados na aba Documentos — diferente do checklist acima, que só compara pelo nome cadastrado.</p>
     <ul style="margin:4px 0 0;padding-left:18px">
@@ -2814,7 +2819,7 @@ let _comparacaoCatalogoItensAtual = {};
 // (mesmo endpoint da sugestão de confiança média) e só depois marca a
 // seleção da cotação — sem confirmar, o item não entraria na cotação.xlsx/
 // margem (mesma regra de confianca/confirmado_manualmente de sempre).
-function _comparacaoCatalogoIAHTML(c){
+function _comparacaoCatalogoIAHTML(c, desatualizada){
   if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
   if(c.status==='erro_ia'){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
@@ -2823,6 +2828,10 @@ function _comparacaoCatalogoIAHTML(c){
   if(!c.itens.length){
     return `<div class="muted" style="margin-top:10px;font-size:12px">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
   }
+  const aviso = desatualizada ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
+    ⚠ Seu catálogo mudou desde esta comparação — o resultado abaixo pode estar desatualizado.
+    <button class="btn ghost" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Atualizar análise</button>
+  </div>` : '';
   // guarda os candidatos por item pro modal "escolher produto" ler depois,
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
@@ -2875,6 +2884,7 @@ function _comparacaoCatalogoIAHTML(c){
     </tr>`;
   }).join('');
   return `<div style="margin-top:16px">
+    ${aviso}
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
     <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem. A validação de medidas/características abaixo do produto é automática (não é a IA) — confira sempre antes de confirmar.</p>
     <div style="overflow-x:auto"><table>
@@ -3449,8 +3459,8 @@ async function _corpoAnaliseEdital(id, forcar, signal){
         ${r.validade_documentos_habilitacao?`<div class="muted" style="font-size:12px;margin-top:2px">Prazo de emissão exigido: ${esc(r.validade_documentos_habilitacao)}</div>`:''}
         ${_checklistDocsHTML(r.checklist_documentos)}
       </div>`:''}
-      ${_verificacaoDocumentosIAHTML(r.verificacao_documentos_ia)}
-      ${_comparacaoCatalogoIAHTML(r.comparacao_catalogo_ia)}
+      ${_verificacaoDocumentosIAHTML(r.verificacao_documentos_ia, r.verificacao_documentos_desatualizada)}
+      ${_comparacaoCatalogoIAHTML(r.comparacao_catalogo_ia, r.comparacao_catalogo_desatualizada)}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}

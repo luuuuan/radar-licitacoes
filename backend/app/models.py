@@ -70,6 +70,11 @@ class Usuario(Base):
     recalculo_checkpoint_edital_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recalculo_checkpoint_coletado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     recalculo_checkpoint_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # incrementados a cada criação/edição/exclusão de produto ou documento —
+    # usados como chave de invalidação do cache em AnaliseIAExtras (ver
+    # main.py:_anexar_verificacao_ia_documentos/_anexar_comparacao_catalogo_ia).
+    versao_catalogo: Mapped[int] = mapped_column(Integer, default=0)
+    versao_documentos: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Fornecedor(Base):
@@ -206,6 +211,28 @@ class Match(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
+
+
+class AnaliseIAExtras(Base):
+    """Cache por (edital, usuário) das duas checagens extras da Análise por
+    IA — comparação de catálogo e verificação de documentos de habilitação —
+    que são por usuário (não por edital, ao contrário de Edital.analise_ia) e
+    caras (cada uma é uma chamada de IA). Reaproveitado enquanto
+    Usuario.versao_catalogo/versao_documentos não mudarem desde o último
+    cálculo; cada checagem tem seu próprio campo de versão porque uma pode
+    ficar desatualizada sem a outra (editar um documento não invalida a
+    comparação de catálogo, e vice-versa)."""
+    __tablename__ = "analise_ia_extras"
+    __table_args__ = (UniqueConstraint("usuario_id", "edital_id", name="uq_analise_extras_user_edital"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
+    comparacao_catalogo_ia: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON
+    versao_catalogo_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verificacao_documentos_ia: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    versao_documentos_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class RegraExclusao(Base):

@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras
 from .service import processar_coleta
 from .catalogo import catmat
 
@@ -843,6 +843,7 @@ def criar_produto(dados: ProdutoIn, user: Usuario = Depends(_auth.get_current_us
                   db: Session = Depends(get_session)):
     p = Produto(**dados.model_dump(), usuario_id=user.id)
     db.add(p)
+    user.versao_catalogo += 1
     db.commit()
     db.refresh(p)
     return {"id": p.id}
@@ -855,6 +856,7 @@ def atualizar_produto(produto_id: int, dados: ProdutoIn,
     p = _produto_do_usuario(db, produto_id, user)
     for campo, valor in dados.model_dump().items():
         setattr(p, campo, valor)
+    user.versao_catalogo += 1
     db.commit()
     return {"ok": True, "id": p.id}
 
@@ -978,6 +980,8 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                 criados += 1
         except Exception as e:
             erros.append(f"linha {n}: {e}")
+    if criados or atualizados:
+        user.versao_catalogo += 1
     db.commit()
     return {"status": "ok", "criados": criados, "atualizados": atualizados,
             "ignorados": ignorados, "erros": erros[:20]}
@@ -1014,6 +1018,7 @@ def remover_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_u
     p = _produto_do_usuario(db, produto_id, user)
     db.delete(p)
     _limpar_matches_do_produto(db, user.id, produto_id)
+    user.versao_catalogo += 1
     db.commit()
     return {"ok": True}
 
@@ -1034,6 +1039,8 @@ def remover_produtos_varios(dados: ProdutosIdsIn,
         db.delete(p)
         _limpar_matches_do_produto(db, user.id, produto_id)
         removidos += 1
+    if removidos:
+        user.versao_catalogo += 1
     db.commit()
     return {"ok": True, "removidos": removidos}
 
@@ -2088,49 +2095,98 @@ def _anexar_checklist_documentos(resultado: dict, user: Usuario, db: Session) ->
     return resultado
 
 
-def _anexar_verificacao_ia_documentos(resultado: dict, user: Usuario, db: Session,
-                                      api_key: str | None) -> dict:
+def _obter_cache_extras(db: Session, user: Usuario, edital_id: int) -> "AnaliseIAExtras | None":
+    return db.execute(select(AnaliseIAExtras).where(
+        AnaliseIAExtras.usuario_id == user.id, AnaliseIAExtras.edital_id == edital_id
+    )).scalars().first()
+
+
+def _upsert_cache_extras(db: Session, user: Usuario, edital_id: int, cache: "AnaliseIAExtras | None",
+                         *, campo_valor: str, valor_json: str | None,
+                         campo_versao: str, versao: int) -> None:
+    if not cache:
+        cache = AnaliseIAExtras(usuario_id=user.id, edital_id=edital_id)
+        db.add(cache)
+    setattr(cache, campo_valor, valor_json)
+    setattr(cache, campo_versao, versao)
+    db.commit()
+
+
+def _anexar_verificacao_ia_documentos(resultado: dict, ed: Edital, user: Usuario, db: Session,
+                                      api_key: str | None, forcar: bool = False) -> dict:
     """Verificação por CONTEÚDO (IA) dos documentos que o usuário já tem
     cadastrados (aba Documentos, cada um com o texto extraído do arquivo
     anexado no cadastro) contra o que este edital exige — complementar ao
     checklist por NOME (_anexar_checklist_documentos, sempre grátis e
-    instantâneo, roda em toda leitura). Isto aqui só roda numa análise
-    FRESCA (chamado só no branch que gera a análise, não no cache hit): é
-    uma chamada de IA a mais, então só vale rodar quando o usuário já está
-    esperando a análise mesmo. NÃO fica em cache — ed.analise_ia é
-    compartilhado entre todos que veem este edital, e isto é por usuário."""
+    instantâneo, roda em toda leitura).
+
+    É por usuário (não por edital, ao contrário de Edital.analise_ia), então
+    fica cacheada à parte em AnaliseIAExtras, versionada por
+    Usuario.versao_documentos: só chama a IA de novo quando nunca foi
+    calculada pra este edital, quando o usuário pediu explicitamente
+    (forcar=True, botão "Realizar nova análise") ou quando a versão mudou —
+    e mesmo nesse último caso, devolve o resultado antigo (com a flag
+    "verificacao_documentos_desatualizada") em vez de gastar uma chamada de
+    IA sem o usuário ter pedido; achado real: gerava uma chamada de IA a
+    cada abertura da aba, mesmo sem nada ter mudado no catálogo/documentos."""
     if resultado.get("status") != "ok":
+        return resultado
+    import json as _json
+    cache = _obter_cache_extras(db, user, ed.id)
+    tem_cache = cache is not None and cache.versao_documentos_calc is not None
+    if tem_cache and not forcar:
+        if cache.verificacao_documentos_ia:
+            resultado["verificacao_documentos_ia"] = _json.loads(cache.verificacao_documentos_ia)
+        if cache.versao_documentos_calc != user.versao_documentos:
+            resultado["verificacao_documentos_desatualizada"] = True
         return resultado
     docs_usuario = db.execute(
         select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True,  # noqa: E712
                                 Documento.texto_extraido.is_not(None))
     ).scalars().all()
-    if not docs_usuario:
-        return resultado
-    from . import analise_edital as ia
-    resultado["verificacao_documentos_ia"] = ia.verificar_documentos_usuario(
-        resultado.get("objeto") or "", resultado.get("requisitos_tecnicos"),
-        resultado.get("documentos_habilitacao"),
-        [{"nome": d.nome, "texto": d.texto_extraido} for d in docs_usuario],
-        api_key=api_key,
-    )
+    saida = None
+    if docs_usuario:
+        from . import analise_edital as ia
+        saida = ia.verificar_documentos_usuario(
+            resultado.get("objeto") or "", resultado.get("requisitos_tecnicos"),
+            resultado.get("documentos_habilitacao"),
+            [{"nome": d.nome, "texto": d.texto_extraido} for d in docs_usuario],
+            api_key=api_key,
+        )
+    _upsert_cache_extras(db, user, ed.id, cache,
+        campo_valor="verificacao_documentos_ia",
+        valor_json=_json.dumps(saida, ensure_ascii=False) if saida else None,
+        campo_versao="versao_documentos_calc", versao=user.versao_documentos)
+    if saida:
+        resultado["verificacao_documentos_ia"] = saida
     return resultado
 
 
 def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
-                                   api_key: str | None) -> dict:
+                                   api_key: str | None, forcar: bool = False) -> dict:
     """Segunda opinião da IA: manda o CATÁLOGO COMPLETO do usuário e os itens
     deste edital pra comparação direta — independente do motor de matching
-    por texto (matching/engine.py). Mesma regra do
-    _anexar_verificacao_ia_documentos: só roda numa análise FRESCA (não em
-    cache hit) e não fica em cache (é por usuário, não por edital)."""
+    por texto (matching/engine.py). Mesma regra de cache versionado do
+    _anexar_verificacao_ia_documentos, só que por Usuario.versao_catalogo."""
     if resultado.get("status") != "ok":
+        return resultado
+    import json as _json
+    cache = _obter_cache_extras(db, user, ed.id)
+    tem_cache = cache is not None and cache.versao_catalogo_calc is not None
+    if tem_cache and not forcar:
+        if cache.comparacao_catalogo_ia:
+            resultado["comparacao_catalogo_ia"] = _json.loads(cache.comparacao_catalogo_ia)
+        if cache.versao_catalogo_calc != user.versao_catalogo:
+            resultado["comparacao_catalogo_desatualizada"] = True
         return resultado
     itens_edital = db.execute(
         select(ItemEdital).where(ItemEdital.edital_id == ed.id)).scalars().all()
     catalogo = db.execute(
         select(Produto).where(Produto.usuario_id == user.id)).scalars().all()
     if not itens_edital or not catalogo:
+        _upsert_cache_extras(db, user, ed.id, cache,
+            campo_valor="comparacao_catalogo_ia", valor_json=None,
+            campo_versao="versao_catalogo_calc", versao=user.versao_catalogo)
         return resultado
     from . import analise_edital as ia
     saida = ia.comparar_catalogo_usuario(
@@ -2175,6 +2231,9 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
                 "candidatos": candidatos,
             })
         saida["itens"] = enriquecidos
+    _upsert_cache_extras(db, user, ed.id, cache,
+        campo_valor="comparacao_catalogo_ia", valor_json=_json.dumps(saida, ensure_ascii=False),
+        campo_versao="versao_catalogo_calc", versao=user.versao_catalogo)
     resultado["comparacao_catalogo_ia"] = saida
     return resultado
 
@@ -2199,19 +2258,23 @@ def analise_cancelar(edital_id: int, user: Usuario = Depends(_auth.get_current_u
 
 
 def _rodar_extras_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
-                     api_key: str | None, deve_cancelar) -> dict:
+                     api_key: str | None, deve_cancelar, forcar: bool = False) -> dict:
     """Roda verificação de documentos + comparação de catálogo, checando
     cancelamento ENTRE as duas etapas (nunca no meio de uma chamada já em
     voo). Usado tanto no cache hit quanto numa análise fresca — mesma
-    checagem nos dois lugares."""
+    checagem nos dois lugares. `forcar` (== o ?forcar=true da rota, botão
+    "Realizar nova análise") é o único jeito de recalcular as duas checagens
+    quando o catálogo/documentos mudaram — sem isso, uma mudança só marca o
+    resultado anterior como desatualizado (ver _anexar_verificacao_ia_documentos
+    e _anexar_comparacao_catalogo_ia), nunca gasta uma chamada de IA sozinha."""
     if deve_cancelar():
         resultado["cancelado"] = True
         return resultado
-    resultado = _anexar_verificacao_ia_documentos(resultado, user, db, api_key)
+    resultado = _anexar_verificacao_ia_documentos(resultado, ed, user, db, api_key, forcar)
     if deve_cancelar():
         resultado["cancelado"] = True
         return resultado
-    return _anexar_comparacao_catalogo_ia(resultado, ed, user, db, api_key)
+    return _anexar_comparacao_catalogo_ia(resultado, ed, user, db, api_key, forcar)
 
 
 @app.get("/api/editais/{edital_id}/analise")
@@ -2231,17 +2294,18 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     # análise já feita: mostra do cache (é leitura, não consome IA pro texto
     # do edital em si), desde que tenha sido gerada com a versão atual do
     # prompt. Versão antiga -> refaz. Verificação de documentos/comparação de
-    # catálogo rodam de novo AQUI TAMBÉM (mesmo em cache hit) — são por
-    # usuário, não por edital, e catálogo/documentos podem ter mudado desde
-    # a última vez; sem isso, só apareciam na 1ª análise de cada edital e
-    # sumiam depois (achado real: usuário via os itens sugeridos só na
-    # primeira vez que clicava "Realizar análise com IA").
+    # catálogo são cacheadas à parte, por usuário, em AnaliseIAExtras — só
+    # recalculam (gastando uma chamada de IA) na 1ª vez pra este edital ou
+    # quando forcar=True; se o catálogo/documentos mudaram nesse meio tempo,
+    # o resultado anterior volta marcado como desatualizado em vez de ser
+    # refeito sem o usuário pedir (ver _anexar_verificacao_ia_documentos e
+    # _anexar_comparacao_catalogo_ia).
     if ed.analise_ia and not forcar:
         try:
             cache = _json.loads(ed.analise_ia)
             if cache.get("versao") == ia.VERSAO_PROMPT:
                 cache["cache"] = True
-                cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar)
+                cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar, forcar)
                 return _anexar_checklist_documentos(cache, user, db)
             # versão antiga: cai para baixo e refaz com o prompt novo
         except ValueError:
@@ -2257,7 +2321,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
         ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
-    resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar)
+    resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar, forcar)
     return _anexar_checklist_documentos(resultado, user, db)
 
 
@@ -2809,6 +2873,7 @@ async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = For
                  link=link or None, observacao=observacao or None, texto_extraido=texto,
                  usuario_id=user.id)
     db.add(d)
+    user.versao_documentos += 1
     db.commit()
     return {"id": d.id}
 
@@ -2837,6 +2902,7 @@ async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor:
     if texto is not None:
         d.texto_extraido = texto
     d.avisado_para = None  # validade mudou -> permite avisar de novo
+    user.versao_documentos += 1
     db.commit()
     return {"ok": True}
 
@@ -2846,6 +2912,7 @@ def remover_documento(doc_id: int, user: Usuario = Depends(_auth.get_current_use
                       db: Session = Depends(get_session)):
     d = _documento_do_usuario(db, doc_id, user)
     db.delete(d)
+    user.versao_documentos += 1
     db.commit()
     return {"ok": True}
 
