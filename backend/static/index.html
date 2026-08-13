@@ -2431,7 +2431,20 @@ async function loadColetaStatus(){
     const s=await api('/api/coleta/status');
     _setBtnColetarOcupado(s.estado==='em_andamento');
     if(s.estado==='em_andamento'){
-      el.innerHTML=ICN.relogio+' Coletando agora...'; el.style.color='var(--medio)';
+      // "fase" só existe desde que o backend passou a reportar em qual etapa
+      // a coleta está — sem isso, o indicador ficava "Coletando agora..." do
+      // início ao fim, mesmo já tendo terminado de buscar no PNCP fazia
+      // tempo e só faltando calcular compatibilidade usuário por usuário
+      // (parecia uma trava sem explicação nenhuma).
+      let texto = 'Coletando agora...';
+      if(s.fase==='compatibilidade'){
+        texto = s.fase_total>1
+          ? `Calculando compatibilidade (${s.fase_feitos}/${s.fase_total})...`
+          : 'Calculando compatibilidade com seu catálogo...';
+      } else if(s.fase==='buscando'){
+        texto = 'Buscando editais no PNCP...';
+      }
+      el.innerHTML=ICN.relogio+' '+esc(texto); el.style.color='var(--medio)';
     } else if(s.estado==='nunca'){
       el.textContent='Nenhuma coleta ainda'; el.style.color='var(--muted)';
     } else if(s.estado==='travado'){

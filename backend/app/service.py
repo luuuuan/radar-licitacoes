@@ -3,6 +3,7 @@ Serviço de orquestração: coleta -> persiste -> casa com o catálogo ->
 pontua -> notifica. É chamado pela tarefa diária (Celery) e pelos scripts.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from .models import utcnow
 
@@ -390,15 +391,106 @@ def _notificar_usuario(usuario, fortes: list[Edital]):
     notificar_usuario_lote(usuario, titulo, intro, itens, canais=("email",))
 
 
+# Poucas threads de propósito: cada usuário pode disparar chamadas de IA
+# (reranking de confiança média) e consultas ao banco — concorrência alta
+# demais só estressaria a cota de IA e o pool de conexões do Postgres sem
+# ganho real de velocidade (o gargalo real de cada usuário é I/O — banco e,
+# às vezes, IA — não CPU, então poucas threads já ajudam bastante).
+_MAX_THREADS_COLETA = 4
+
+
+def _gerar_matches_usuario_isolado(usuario_id: int, fonte_label: str, inicio: datetime,
+                                   deve_cancelar) -> dict:
+    """Roda _gerar_matches_usuario com a SUA PRÓPRIA sessão de banco — cada
+    worker da ThreadPoolExecutor precisa da sua: uma Session do SQLAlchemy
+    não é segura pra usar de mais de uma thread ao mesmo tempo. Mesmo
+    tratamento de erro por usuário que o laço sequencial já tinha (uma falha
+    aqui não pode derrubar os outros usuários da rodada)."""
+    from .database import SessionLocal
+    db = SessionLocal()
+    try:
+        u = db.get(Usuario, usuario_id)
+        if not u:
+            return {"fortes": 0}
+        try:
+            r = _gerar_matches_usuario(db, u, recalcular_todos=False, deve_cancelar=deve_cancelar)
+            db.add(LogColeta(
+                usuario_id=u.id, fonte=fonte_label, origem="cron",
+                iniciado_em=inicio, finalizado_em=utcnow(),
+                editais_vistos=r.get("editais", 0),
+                editais_novos=r.get("atualizados", 0),
+                matches_fortes=r.get("fortes", 0),
+            ))
+            db.commit()
+            return {"fortes": r.get("fortes", 0)}
+        except Exception as e:
+            log.exception("Falha ao gerar matches do usuário %s", usuario_id)
+            try:
+                db.rollback()
+                db.add(LogColeta(
+                    usuario_id=usuario_id, fonte=fonte_label, origem="cron",
+                    iniciado_em=inicio, finalizado_em=utcnow(), erro=str(e)[:500],
+                ))
+                db.commit()
+            except Exception:
+                log.exception("Também falhou ao registrar o erro do usuário %s "
+                              "(provável conexão com o banco indisponível).", usuario_id)
+                db.rollback()
+            return {"fortes": 0}
+    finally:
+        db.close()
+
+
+def _gerar_matches_varios_usuarios(alvos: list, fonte_label: str, inicio: datetime,
+                                   deve_cancelar, progresso_fase=None) -> int:
+    """Processa vários usuários em paralelo (pool de threads, cada uma com
+    sua própria sessão de banco) em vez de um de cada vez. Achado real: numa
+    coleta com mais de um usuário, essa etapa sequencial era o maior tempo
+    gasto DEPOIS de já ter terminado de buscar no PNCP — o indicador do
+    dashboard continuava mostrando só "coleta em andamento", parecendo uma
+    trava. deve_cancelar já é cooperativo dentro de _gerar_matches_usuario
+    (commits parciais a cada 200 editais) — aqui só evita SUBMETER usuários
+    novos depois do pedido de cancelamento; os que já estão rodando terminam
+    normalmente (param sozinhos no próprio checkpoint interno)."""
+    total = len(alvos)
+    feitos = 0
+    fortes_total = 0
+    with ThreadPoolExecutor(max_workers=min(_MAX_THREADS_COLETA, total)) as executor:
+        futuros = {}
+        for u in alvos:
+            if deve_cancelar():
+                break
+            futuro = executor.submit(_gerar_matches_usuario_isolado, u.id, fonte_label, inicio, deve_cancelar)
+            futuros[futuro] = u.id
+        for futuro in as_completed(futuros):
+            try:
+                r = futuro.result()
+                fortes_total += r.get("fortes", 0)
+            except Exception:
+                log.exception("Worker de matches falhou por completo pro usuário %s", futuros[futuro])
+            feitos += 1
+            if progresso_fase:
+                progresso_fase("compatibilidade", feitos, total)
+    return fortes_total
+
+
 def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
-                     usuario_id: int | None = None, deve_cancelar=None) -> dict:
+                     usuario_id: int | None = None, deve_cancelar=None,
+                     progresso_fase=None) -> dict:
     """Coleta editais do PNCP (compartilhados) e gera matches.
     - usuario_id definido: gera matches só para esse usuário (coleta manual).
     - usuario_id None: gera para todos os usuários já ativos (cron diário).
     - deve_cancelar: callable() -> bool, permite abortar a pedido do usuário
       (checado na gravação dos editais coletados e repassado pro cálculo de
       matches). A busca em si no PNCP (conector.coletar()) não é
-      interrompível no meio — só o que vem DEPOIS dela."""
+      interrompível no meio — só o que vem DEPOIS dela.
+    - progresso_fase: callable(fase, feitos, total) opcional, chamado ao
+      trocar de etapa ("buscando" -> "compatibilidade") e a cada usuário
+      concluído — alimenta o indicador de fase em /api/coleta/status (achado
+      real: o indicador só dizia "coleta em andamento" do início ao fim, sem
+      distinguir "ainda buscando no PNCP" de "já terminou de buscar, agora
+      calculando compatibilidade pro catálogo de cada usuário" — parecia uma
+      trava mesmo quando só estava processando usuário por usuário)."""
     deve_cancelar = deve_cancelar or (lambda: False)
     if conectores is None:
         from . import configuracoes as cfg
@@ -426,6 +518,8 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
         db.add(log_usuario)
         db.commit()
 
+    if progresso_fase:
+        progresso_fase("buscando", 0, len(conectores))
     for conector in conectores:
         log_coleta = LogColeta(fonte=conector.nome, iniciado_em=utcnow())
         db.add(log_coleta)
@@ -486,53 +580,68 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
     # rótulo das fontes usadas (ex.: "PNCP" ou "PNCP + Transparência")
     fonte_label = " + ".join(c.nome.upper() for c in conectores)
     inicio_user = utcnow()
-    for u in alvos:
-        if deve_cancelar():
-            if log_usuario is not None and log_usuario.finalizado_em is None:
-                log_usuario.erro = "cancelado"
-                log_usuario.finalizado_em = utcnow()
-                db.commit()
-            break
-        try:
-            r = _gerar_matches_usuario(db, u, recalcular_todos=False, deve_cancelar=deve_cancelar)
-            resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
-            # registra no Histórico DESTE usuário o que entrou na conta dele
-            if log_usuario is not None and u.id == usuario_id:
-                # coleta manual: atualiza o próprio registro "em andamento"
-                # em vez de criar um segundo, pra não duplicar o histórico
-                log_usuario.fonte = fonte_label
-                log_usuario.finalizado_em = utcnow()
-                log_usuario.editais_vistos = r.get("editais", 0)
-                log_usuario.editais_novos = r.get("atualizados", 0)
-                log_usuario.matches_fortes = r.get("fortes", 0)
-                if r.get("cancelado"):
+    if progresso_fase:
+        progresso_fase("compatibilidade", 0, len(alvos))
+
+    # cron com mais de 1 usuário: essa é a etapa que mais demora numa coleta
+    # com vários usuários (a busca no PNCP acima já rodou uma vez só,
+    # compartilhada) — processa em paralelo em vez de um usuário de cada vez.
+    # Coleta manual (usuario_id definido, sempre 1 usuário em alvos) continua
+    # sequencial: não tem o que paralelizar, e log_usuario (registro "em
+    # andamento" ESPECÍFICO da coleta manual) só faz sentido nesse caminho.
+    if usuario_id is None and len(alvos) > 1:
+        resumo["fortes"] = resumo.get("fortes", 0) + _gerar_matches_varios_usuarios(
+            alvos, fonte_label, inicio_user, deve_cancelar, progresso_fase)
+    else:
+        for u in alvos:
+            if deve_cancelar():
+                if log_usuario is not None and log_usuario.finalizado_em is None:
                     log_usuario.erro = "cancelado"
-            else:
-                db.add(LogColeta(
-                    usuario_id=u.id, fonte=fonte_label, origem="cron",
-                    iniciado_em=inicio_user, finalizado_em=utcnow(),
-                    editais_vistos=r.get("editais", 0),
-                    editais_novos=r.get("atualizados", 0),
-                    matches_fortes=r.get("fortes", 0),
-                ))
-            db.commit()
-        except Exception as e:
-            log.exception("Falha ao gerar matches do usuário %s", u.id)
-            # a própria recuperação do erro (rollback + salvar o erro no log)
-            # também pode falhar se foi a conexão com o banco que caiu — sem
-            # este try/except aqui dentro, essa segunda falha escapa e derruba
-            # a coleta inteira, deixando todo mundo depois de u sem log fechado.
-            try:
-                db.rollback()
-                if log_usuario is not None and u.id == usuario_id:
-                    log_usuario.erro = str(e)[:500]
                     log_usuario.finalizado_em = utcnow()
                     db.commit()
-            except Exception:
-                log.exception("Também falhou ao registrar o erro do usuário %s "
-                              "(provável conexão com o banco indisponível) — seguindo "
-                              "para o próximo usuário.", u.id)
-                db.rollback()
+                break
+            try:
+                r = _gerar_matches_usuario(db, u, recalcular_todos=False, deve_cancelar=deve_cancelar)
+                resumo["fortes"] = resumo.get("fortes", 0) + r["fortes"]
+                # registra no Histórico DESTE usuário o que entrou na conta dele
+                if log_usuario is not None and u.id == usuario_id:
+                    # coleta manual: atualiza o próprio registro "em andamento"
+                    # em vez de criar um segundo, pra não duplicar o histórico
+                    log_usuario.fonte = fonte_label
+                    log_usuario.finalizado_em = utcnow()
+                    log_usuario.editais_vistos = r.get("editais", 0)
+                    log_usuario.editais_novos = r.get("atualizados", 0)
+                    log_usuario.matches_fortes = r.get("fortes", 0)
+                    if r.get("cancelado"):
+                        log_usuario.erro = "cancelado"
+                else:
+                    db.add(LogColeta(
+                        usuario_id=u.id, fonte=fonte_label, origem="cron",
+                        iniciado_em=inicio_user, finalizado_em=utcnow(),
+                        editais_vistos=r.get("editais", 0),
+                        editais_novos=r.get("atualizados", 0),
+                        matches_fortes=r.get("fortes", 0),
+                    ))
+                db.commit()
+                if progresso_fase:
+                    progresso_fase("compatibilidade", alvos.index(u) + 1, len(alvos))
+            except Exception as e:
+                log.exception("Falha ao gerar matches do usuário %s", u.id)
+                # a própria recuperação do erro (rollback + salvar o erro no log)
+                # também pode falhar se foi a conexão com o banco que caiu — sem
+                # este try/except aqui dentro, essa segunda falha escapa e derruba
+                # a coleta inteira, deixando todo mundo depois de u sem log fechado.
+                try:
+                    db.rollback()
+                    if log_usuario is not None and u.id == usuario_id:
+                        log_usuario.erro = str(e)[:500]
+                        log_usuario.finalizado_em = utcnow()
+                        db.commit()
+                except Exception:
+                    log.exception("Também falhou ao registrar o erro do usuário %s "
+                                  "(provável conexão com o banco indisponível) — seguindo "
+                                  "para o próximo usuário.", u.id)
+                    db.rollback()
 
     purgar_logs_antigos(db)
     log.info("Coleta concluída: %s", resumo)

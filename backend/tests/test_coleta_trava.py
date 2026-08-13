@@ -60,7 +60,7 @@ def test_rodar_coleta_bg_forca_liberacao_de_trava_presa_e_roda_normalmente(monke
     mock_db.execute.return_value.scalars.return_value.all.return_value = []   # sem órfãos pra limpar
     chamou_processar = {"n": 0}
 
-    def _processar_falso(db, usuario_id=None, deve_cancelar=None):
+    def _processar_falso(db, usuario_id=None, deve_cancelar=None, progresso_fase=None):
         chamou_processar["n"] += 1
 
     monkeypatch.setattr(m, "SessionLocal", lambda: mock_db)
@@ -226,3 +226,45 @@ def test_coleta_status_nunca_quando_sem_trava_e_sem_historico():
     u = _usuario(db)
     r = m.coleta_status(user=u, db=db)
     assert r["estado"] == "nunca"
+
+
+def _limpar_estado_fase():
+    m._coleta_fase, m._coleta_fase_feitos, m._coleta_fase_total = None, 0, None
+
+
+def test_coleta_status_reporta_fase_quando_em_andamento():
+    """Achado real: o indicador do dashboard só dizia "coleta em andamento"
+    do início ao fim, mesmo já tendo terminado de buscar no PNCP fazia tempo
+    e só faltando calcular compatibilidade usuário por usuário — parecia uma
+    trava sem explicação nenhuma."""
+    _limpar_estado_trava()
+    _limpar_estado_fase()
+    db = _sessao()
+    u = _usuario(db)
+    m._coleta_lock.acquire()
+    m._coleta_iniciada_em = m._utcnow_main()
+    m._coleta_fase, m._coleta_fase_feitos, m._coleta_fase_total = "compatibilidade", 2, 5
+    try:
+        r = m.coleta_status(user=u, db=db)
+        assert r["fase"] == "compatibilidade"
+        assert r["fase_feitos"] == 2
+        assert r["fase_total"] == 5
+    finally:
+        _limpar_estado_trava()
+        _limpar_estado_fase()
+
+
+def test_coleta_status_fase_nula_quando_ociosa():
+    _limpar_estado_trava()
+    _limpar_estado_fase()
+    db = _sessao()
+    u = _usuario(db)
+    fim = m._utcnow_main() - timedelta(hours=1)
+    db.add(LogColeta(usuario_id=u.id, fonte="PNCP", origem="cron",
+                     iniciado_em=fim - timedelta(minutes=30), finalizado_em=fim))
+    db.commit()
+    r = m.coleta_status(user=u, db=db)
+    assert r["estado"] == "ocioso"
+    assert r["fase"] is None
+    assert r["fase_feitos"] is None
+    assert r["fase_total"] is None

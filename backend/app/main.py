@@ -1616,6 +1616,15 @@ _coleta_cancelar = False
 # detectar trava PRESA (ver _coleta_travada), não pro indicador de "travado"
 # do dashboard (esse já usa iniciado_em do LogColeta, não isto aqui).
 _coleta_iniciada_em: datetime | None = None
+# Fase atual da coleta em andamento — "buscando" (baixando/gravando editais
+# do PNCP) ou "compatibilidade" (calculando compatibilidade pro catálogo de
+# cada usuário, ver service.py:processar_coleta). Achado real: o indicador
+# do dashboard só dizia "coleta em andamento" do início ao fim — quando a
+# busca no PNCP já tinha terminado fazia tempo e só faltava processar
+# usuário por usuário, parecia uma trava sem explicação nenhuma.
+_coleta_fase: str | None = None
+_coleta_fase_feitos = 0
+_coleta_fase_total: int | None = None
 # Mesmo limiar do indicador "Última coleta não finalizou" (/api/coleta/status)
 # — uma coleta de verdade sempre termina bem antes disso (histórico real:
 # 50min a ~2h). Achado real: uma coleta manual travou (sem nunca liberar a
@@ -1653,8 +1662,13 @@ def _limpar_logs_coleta_orfaos(db: Session):
     db.commit()
 
 
+def _atualizar_fase_coleta(fase: str, feitos: int, total: int) -> None:
+    global _coleta_fase, _coleta_fase_feitos, _coleta_fase_total
+    _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = fase, feitos, total
+
+
 def _rodar_coleta_bg(usuario_id: int | None = None):
-    global _coleta_cancelar, _coleta_iniciada_em
+    global _coleta_cancelar, _coleta_iniciada_em, _coleta_fase, _coleta_fase_feitos, _coleta_fase_total
     import logging
     if _coleta_travada():
         # a trava está presa há mais tempo que qualquer coleta legítima
@@ -1674,10 +1688,12 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
             "Coleta já em andamento — ignorando novo disparo.")
         return
     _coleta_iniciada_em = _utcnow_main()
+    _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = None, 0, None
     db = SessionLocal()
     try:
         _limpar_logs_coleta_orfaos(db)
-        processar_coleta(db, usuario_id=usuario_id, deve_cancelar=lambda: _coleta_cancelar)
+        processar_coleta(db, usuario_id=usuario_id, deve_cancelar=lambda: _coleta_cancelar,
+                         progresso_fase=_atualizar_fase_coleta)
         # após coletar, verifica prazos encerrando e documentos vencendo
         # (e-mail sai daqui; Telegram é só o resumo com botões, logo abaixo)
         from .lembretes import verificar_todos
@@ -1703,6 +1719,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
         db.close()
         _coleta_cancelar = False
         _coleta_iniciada_em = None
+        _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = None, 0, None
         # RuntimeError = a trava já tinha sido forçada por outro disparo
         # (ver _coleta_travada) por essa mesma rodada ter passado de 3h —
         # janela rara e aceita: o alternativa (travar pra sempre até um
@@ -2579,14 +2596,23 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     "em_andamento"/"travado" é ESTADO GLOBAL (a trava _coleta_lock vale pra
     todo mundo, não só pra este usuário) — usa a MESMA trava que barra o
     botão manual (ver /api/coletar), em vez de inferir pelo último LogColeta
-    deste usuário. Achado real: numa coleta de cron (processa usuário por
-    usuário em sequência), o registro "terminou" de UM usuário só é criado
-    quando chega a vez dele — enquanto isso, esse usuário via o botão manual
+    deste usuário. Achado real: numa coleta de cron (processa vários
+    usuários), o registro "terminou" de UM usuário só é criado quando a vez
+    dele é concluída — enquanto isso, esse usuário via o botão manual
     recusar com "já existe uma coleta em andamento" (a trava global, correta)
     ao mesmo tempo que o indicador do dashboard mostrava "ocioso" (o LogColeta
     dele ainda não tinha sido tocado nesta rodada) — duas fontes de verdade
     desalinhadas. As estatísticas (novos/vistos/fortes) continuam por
-    usuário, já que só ficam prontas quando a rodada chega na conta dele."""
+    usuário, já que só ficam prontas quando a rodada chega na conta dele.
+
+    "fase"/"fase_feitos"/"fase_total": em qual etapa a coleta em andamento
+    está — "buscando" (baixando/gravando editais do PNCP, uma vez só,
+    compartilhado) ou "compatibilidade" (calculando compatibilidade pro
+    catálogo de cada usuário — desde a paralelização, "feitos" pode não
+    andar na ordem de submissão, os usuários terminam conforme cada um fica
+    pronto). Achado real: antes disso, o indicador só dizia "coleta em
+    andamento" do início ao fim — parecia uma trava mesmo quando a busca no
+    PNCP já tinha terminado fazia tempo e só faltava processar usuários."""
     agora = _utcnow_main()
     em_andamento = _coleta_lock.locked()
     travado = False
@@ -2610,6 +2636,9 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     return {
         "estado": estado,
         "iniciada_ha_seg": iniciada_ha_seg,
+        "fase": _coleta_fase if em_andamento else None,
+        "fase_feitos": _coleta_fase_feitos if em_andamento else None,
+        "fase_total": _coleta_fase_total if em_andamento else None,
         "ultima_fim_seg": int((agora - ultima_ok.finalizado_em).total_seconds())
             if ultima_ok and ultima_ok.finalizado_em else None,
         "novos": ultima_ok.editais_novos if ultima_ok else None,
