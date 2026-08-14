@@ -3650,6 +3650,61 @@ function _marcarSelecaoCotacao(numero, marcado){
   else _cotacaoSelecionados.delete(String(numero));
   const chkTodos = $('#chk-cotacao-todos');
   if(chkTodos) chkTodos.checked = Array.from(document.querySelectorAll('.chk-cotacao-item')).every(el=>el.checked);
+  // ponto único: os 3 jeitos de adicionar um item à cotação (botão da aba
+  // Itens/margem, checkbox da própria aba Cotação, "Adicionar na cotação"
+  // da comparação por IA) passam todos por aqui — então sincronizar a
+  // Proposta aqui cobre os 3 de uma vez, em vez de replicar a chamada em
+  // cada botão. Só ao ADICIONAR (não ao remover): tirar um item da cotação
+  // não deve apagar ele de uma proposta que o usuário já vinha preenchendo.
+  if(marcado) _sincronizarItemNaProposta(numero);
+}
+
+// Achado real: um item adicionado à cotação DEPOIS que a proposta já tinha
+// sido salva ficava de fora dela até o usuário lembrar de abrir a aba
+// Proposta e adicionar manualmente. Agora todo item que entra na cotação
+// entra também na proposta (se ainda não estiver lá) e a proposta é salva
+// na hora — funciona mesmo se a aba Proposta nunca foi aberta neste edital
+// (busca/salva direto no servidor) ou se já foi (atualiza o estado em tela
+// também, sem precisar trocar de aba pra ver o item novo). Falha aqui é
+// silenciosa de propósito: a cotação já foi confirmada, que é o que importa
+// pro fluxo em andamento — não vale travar o usuário por causa de um
+// efeito colateral.
+async function _sincronizarItemNaProposta(numero){
+  const id = _paginaEditalId;
+  const item = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
+    .find(it => String(it.numero) === String(numero));
+  if(!id || !item) return;
+  try{
+    let itens, observacoes;
+    if(_propostaCarregadaPara === id){
+      itens = window._propItens || [];
+      observacoes = _propObsAtual;
+    } else {
+      const p = await api(`/api/editais/${id}/proposta`);
+      // proposta nunca salva (p.existe===false): o "itens" que o backend
+      // devolve nesse caso é só um esqueleto de pré-visualização com TODOS
+      // os itens do edital (ver _proposta_payload), não o que de fato está
+      // salvo — usar isso aqui salvaria a proposta inteira prematuramente.
+      // Começa do zero; cada item vai entrando um de cada vez conforme é
+      // adicionado à cotação (mesmo caminho, chamado de novo a cada item).
+      itens = p.existe ? (p.itens || []) : [];
+      observacoes = p.observacoes || '';
+    }
+    const descItem = (item.descricao||'').trim().toLowerCase();
+    const jaTem = itens.some(i => i.numero!=null ? String(i.numero)===String(numero)
+      : (i.descricao||'').trim().toLowerCase()===descItem);
+    if(jaTem) return;
+    itens = [...itens, {numero: item.numero, descricao: item.descricao || '',
+      quantidade: item.quantidade || 0, custo_unit: 0, preco_unit: item.valor_orgao || 0}];
+    const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({itens, observacoes})});
+    if(!r.ok) return;
+    if(_propostaCarregadaPara === id){
+      window._propItens = itens;
+      if(_abaEditalAtual==='proposta') renderProposta();
+    }
+  }catch(e){}
 }
 
 // Cor do botão "Adicionar na cotação" quando o item já foi adicionado —
@@ -3764,10 +3819,10 @@ async function _montarPropostaEdital(id, ativo){
   const itensDetalhe = (d && d.itens) || [];
   const itensIniciais = p.existe ? p.itens : itensDetalhe
     .filter(it => it.compativel && _cotacaoSelecionados.has(String(it.numero)))
-    .map(it => ({descricao: it.descricao || '', quantidade: it.quantidade || 0,
+    .map(it => ({numero: it.numero, descricao: it.descricao || '', quantidade: it.quantidade || 0,
                  custo_unit: 0, preco_unit: it.valor_orgao || 0}));
   window._propItens = (itensIniciais||[]).map(i=>({
-    descricao:i.descricao||'', quantidade:+i.quantidade||0,
+    numero: i.numero, descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
   // itens que o edital de fato pede — usado só pra montar o modal de
   // "adicionar item" (propAbrirModalAdd), restrito ao que existe no edital.
@@ -3830,9 +3885,15 @@ function propSet(idx,campo,val){
 // antes dava pra digitar qualquer descrição livre, inclusive item que o
 // edital nem pede.
 function propAbrirModalAdd(){
-  const jaTem = new Set((window._propItens||[]).map(i=>(i.descricao||'').trim().toLowerCase()));
-  const disponiveis = (window._propItensEdital||[]).filter(it=>!jaTem.has((it.descricao||'').trim().toLowerCase()));
+  // dedup por número quando dá (mais confiável que descrição — evita achar
+  // "já tem" ou "não tem" errado quando dois itens têm descrição parecida);
+  // cai pra descrição só pra proposta salva antes desta mudança, cujos itens
+  // ainda não têm número gravado.
+  const jaTem = new Set((window._propItens||[]).map(i=>i.numero!=null ? 'n:'+i.numero
+    : 'd:'+(i.descricao||'').trim().toLowerCase()));
+  const disponiveis = (window._propItensEdital||[]).filter(it=>!jaTem.has('n:'+it.numero));
   const linhas = disponiveis.map(it=>`<tr>
+      <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td>${esc(it.descricao)}</td>
       <td style="white-space:nowrap">${it.quantidade}</td>
       <td><button class="btn" style="padding:4px 10px;font-size:12px" onclick="propAddDoEdital(${it.numero})">+ adicionar</button></td>
@@ -3843,7 +3904,7 @@ function propAbrirModalAdd(){
       <h2>Adicionar item do edital</h2>
       ${disponiveis.length ? `
       <div style="overflow-x:auto;max-height:400px;overflow-y:auto;margin-top:10px"><table>
-        <thead><tr><th>Item</th><th>Qtd</th><th></th></tr></thead>
+        <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th></th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>` : `<p class="muted" style="margin-top:10px">Todos os itens do edital já estão na proposta.</p>`}
     </div>
@@ -3852,7 +3913,7 @@ function propAbrirModalAdd(){
 function propAddDoEdital(numero){
   const it = (window._propItensEdital||[]).find(i=>i.numero===numero);
   if(!it) return;
-  window._propItens.push({descricao:it.descricao||'', quantidade:+it.quantidade||1,
+  window._propItens.push({numero: it.numero, descricao:it.descricao||'', quantidade:+it.quantidade||1,
     custo_unit:0, preco_unit:+it.valor_unitario||0});
   renderProposta();
   propAbrirModalAdd();  // re-render com o item recém-adicionado já fora da lista
