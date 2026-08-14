@@ -38,9 +38,10 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None):
     return ed
 
 
-def _edital_sem_match(db, id_externo, itens=None, data_encerramento=None):
+def _edital_sem_match(db, id_externo, itens=None, data_encerramento=None, uf="SP", valor_estimado=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
-               objeto="Aquisicao", uf="SP", data_encerramento=data_encerramento)
+               objeto="Aquisicao", uf=uf, data_encerramento=data_encerramento,
+               valor_estimado=valor_estimado)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -202,3 +203,30 @@ def test_sem_match_limitado_a_20_resultados():
     r = _listar(db, u, busca_item="grampeador")
 
     assert len(r["sem_match"]) == 20
+
+
+def test_sem_match_respeita_filtro_de_uf():
+    """Achado real: selecionar um estado e depois buscar por um item trazia
+    editais de QUALQUER estado no bloco "sem análise automática ainda" — essa
+    consulta não aplicava o filtro de uf (só a busca principal aplicava)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_pr = _edital_sem_match(db, "ed-pr", itens=["Papel A4 75g"], uf="PR")
+    _edital_sem_match(db, "ed-sp", itens=["Papel A4 75g"], uf="SP")
+
+    r = _listar(db, u, busca_item="papel a4", uf=["PR"])
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_pr.id
+
+
+def test_sem_match_respeita_filtro_de_valor():
+    db = _sessao()
+    u = _usuario(db)
+    ed_caro = _edital_sem_match(db, "ed-caro", itens=["Papel A4 75g"], valor_estimado=50000.0)
+    _edital_sem_match(db, "ed-barato", itens=["Papel A4 75g"], valor_estimado=1000.0)
+
+    r = _listar(db, u, busca_item="papel a4", valor_min=10000)
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_caro.id

@@ -1224,6 +1224,27 @@ def listar_editais(
         if vista == "ativos":
             q_sem_match = q_sem_match.where(
                 (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje_data))
+        # mesmos filtros de edital aplicados na busca principal (uf, valor,
+        # tipo, hoje) — achado real: esta consulta só levava em conta o termo
+        # buscado e a "vista", ignorando os demais filtros da tela; resultado
+        # era o bloco "sem análise automática" misturando editais de qualquer
+        # estado/valor/tipo mesmo com filtros ativos (nivel/status/lido não
+        # se aplicam aqui, já que por definição estes editais não têm Match).
+        if uf:
+            q_sem_match = q_sem_match.where(Edital.uf.in_([u.upper() for u in uf]))
+        if tipo != "todos":
+            prefixo_sm = "m" if tipo == "produtos" else "s"
+            q_sem_match = q_sem_match.where(
+                select(ItemEdital.edital_id)
+                .where(ItemEdital.edital_id == Edital.id)
+                .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo_sm)
+                .exists())
+        if valor_min is not None:
+            q_sem_match = q_sem_match.where(Edital.valor_estimado >= valor_min)
+        if valor_max is not None:
+            q_sem_match = q_sem_match.where(Edital.valor_estimado <= valor_max)
+        if hoje:
+            q_sem_match = q_sem_match.where(Edital.data_abertura == date.today())
         q_sem_match = q_sem_match.order_by(Edital.coletado_em.desc()).limit(20)
         for ed in db.execute(q_sem_match).scalars().all():
             dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
