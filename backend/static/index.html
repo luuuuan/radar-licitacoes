@@ -2859,7 +2859,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   }
   if(c.status!=='ok' || !c.itens) return '';
   if(!c.itens.length){
-    return `<div class="muted" style="margin-top:10px;font-size:12px">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
+    return `<div style="margin-top:10px;font-size:14px;font-weight:600;color:var(--medio)">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
   }
   const aviso = desatualizada ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
     ⚠ Seu catálogo mudou desde esta comparação — o resultado abaixo pode estar desatualizado.
