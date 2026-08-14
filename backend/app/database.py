@@ -42,6 +42,7 @@ def init_db() -> None:
             conn.rollback()
     Base.metadata.create_all(engine)
     _migrar_colunas_novas()
+    _migrar_indices_novos()
 
 
 # Colunas adicionadas após a 1ª versão. Como o create_all não altera tabelas
@@ -151,6 +152,52 @@ def _migrar_colunas_novas() -> None:
                     conn.rollback()
                     if "exist" not in str(e).lower() and "duplicate" not in str(e).lower():
                         log.warning("Migração de constraint de matches: %s", e)
+
+
+def _migrar_indices_novos() -> None:
+    """Índices adicionados após a 1ª versão (mesma lógica de _migrar_colunas_novas,
+    mas pra CREATE INDEX — create_all() não mexe em tabela já existente, então
+    uma coluna que ganha index=True no modelo não fica indexada sozinha em quem
+    já tinha o banco criado antes). CREATE INDEX IF NOT EXISTS já é idempotente
+    nos dois bancos (sqlite e postgres), sem precisar de branch por dialeto
+    como em _migrar_colunas_novas.
+
+    Achado real: itens_edital.edital_id nunca teve índice — é lido em quase
+    toda tela de edital (detalhe, cotação, comparação por IA) e é o coração
+    da busca por item (GET /api/editais?busca_item=...), que fazia um EXISTS
+    correlacionado nessa tabela sem nenhum índice de apoio: varredura
+    completa da tabela a cada consulta."""
+    eh_sqlite = engine.url.get_backend_name() == "sqlite"
+    indices = [
+        "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
+    ]
+    with engine.connect() as conn:
+        for sql in indices:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.warning("Migração de índice falhou (%s): %s", sql, e)
+
+        if not eh_sqlite:
+            # Busca por item usa LIKE '%termo%' (curinga no início — um índice
+            # comum não ajuda nesse padrão). pg_trgm com GIN faz esse tipo de
+            # busca por substring ser rápido de verdade; só existe no Postgres,
+            # por isso fora do loop acima (sqlite do dev/testes não precisa,
+            # o volume de dados local é pequeno o bastante pra não importar).
+            try:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                conn.commit()
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_itens_edital_descricao_trgm "
+                    "ON itens_edital USING gin (lower(descricao) gin_trgm_ops)"
+                ))
+                conn.commit()
+                log.info("Migração: índice trigram de itens_edital.descricao garantido")
+            except Exception as e:
+                conn.rollback()
+                log.warning("Migração do índice trigram (pg_trgm) falhou: %s", e)
 
 
 def get_session():

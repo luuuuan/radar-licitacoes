@@ -167,7 +167,10 @@ class ItemEdital(Base):
     __tablename__ = "itens_edital"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"))
+    # index=True: lido em quase toda tela de edital (detalhe, cotação,
+    # comparação por IA...) e na busca por item (ver main.py, GET /api/editais)
+    # — sem índice, cada uma dessas consultas varria a tabela inteira.
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
     numero: Mapped[int | None] = mapped_column(Integer, nullable=True)
     descricao: Mapped[str] = mapped_column(Text)
     material_ou_servico: Mapped[str | None] = mapped_column(String(20), nullable=True)
