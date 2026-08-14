@@ -1730,6 +1730,20 @@ function _initBuscaItemDestaque(){
       input.focus();
     }
   });
+  // clique fora do campo (só desktop/tablet — no celular o campo fica
+  // sempre aberto, ver _reposicionarBuscaItem) com o campo vazio: encolhe
+  // de volta pro ícone, mesma animação já usada no colapso por scroll.
+  // Checa o alvo do clique (não blur/focusout) pra não depender do campo
+  // realmente perder o foco — clicar num espaço vazio da página nem sempre
+  // move o foco de verdade.
+  document.addEventListener('click', (e)=>{
+    if(!_buscaEhDesktop()) return;
+    if(wrap.classList.contains('colapsada')) return;
+    if(input.value.trim() !== '') return;
+    if(wrap.contains(e.target)) return;
+    wrap.classList.add('colapsada');
+    input.blur();
+  });
   window.addEventListener('scroll', _atualizarBuscaPorScroll, {passive:true});
   window.addEventListener('resize', _reposicionarBuscaItem);
   _reposicionarBuscaItem();
