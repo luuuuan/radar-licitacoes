@@ -1762,10 +1762,16 @@ function _cliqueIconeBusca(e){
   }
 }
 function _pesquisarItem(){
-  loadEditais();   // lê o valor do campo de forma síncrona antes do primeiro
-                    // await lá dentro — por isso é seguro limpar o campo já
-                    // na sequência, sem perder o termo buscado.
-  $('#f-busca-item').value = '';
+  // Achado real: limpar o campo aqui apagava o termo buscado do estado da
+  // busca, não só da caixa — qualquer filtro aplicado DEPOIS (uf, valor,
+  // nível...) disparava um loadEditais() novo que lia o campo já vazio,
+  // perdendo "busca_item" da consulta (e junto o bloco "sem análise
+  // automática", que só existe quando busca_item está presente). Resultado:
+  // pesquisar e em seguida aplicar um filtro fazia os editais da busca
+  // sumirem. O campo colapsa (escondido via CSS, ver .colapsada) sem
+  // precisar zerar o valor — o termo continua ativo, igual aos outros
+  // filtros, até o usuário apagá-lo ou limpar os filtros.
+  loadEditais();
   _atualizarBuscaPorScroll();   // recolapsa só se realmente não estiver no topo
 }
 
