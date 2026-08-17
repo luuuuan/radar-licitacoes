@@ -67,6 +67,11 @@ dashboard "dorme"** no free tier do Render — a coleta acontece de qualquer jei
    monta o web service sozinho.
 3. Antes de finalizar (ou depois, em **Environment** do serviço), preencha:
    - **`DATABASE_URL`** → a string do Supabase da Parte 1.
+   - **`APP_BASE_URL`** → a URL pública do app (ex.: `https://radar-licitacoes.onrender.com`
+     antes de configurar um domínio próprio). Usada nos links de e-mail (verificação de
+     cadastro, redefinição de senha) e no webhook do Telegram — **se depois você
+     configurar um domínio próprio no Render (ex.: `app.minhalicitacao.com`), atualize
+     esta variável também**, senão os e-mails continuam saindo com o link antigo.
    - (se for usar alertas) `SMTP_*`, `NOTIFICAR_EMAIL`, `TELEGRAM_*`.
    - `PNCP_UFS` já vem como `PR,SP` — ajuste para os seus estados.
 4. **Create / Deploy**. O primeiro build leva 1–3 min. Quando ficar verde, abra
