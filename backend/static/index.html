@@ -748,6 +748,7 @@
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
        Mantenha os itens em sincronia com o <nav id="nav"> logo abaixo. -->
   <nav class="nav-compacta" id="nav-compacta">
+    <button data-tab="inicio" onclick="tab('inicio')">Início</button>
     <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
     <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
@@ -792,6 +793,7 @@
 <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div id="slot-header-extra-mobile"></div>
+    <button data-tab="inicio" onclick="tab('inicio')">Início</button>
     <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
     <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
     <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
@@ -824,7 +826,8 @@
 <div id="topo-spacer"></div>
 
 <div class="wrap">
-  <div class="kpis" id="kpis">
+  <!-- INÍCIO: painel do dia (editais do dia + KPIs pessoais + agenda + documentos) -->
+  <section id="t-inicio" class="kpis hidden">
     <div class="painel-head">
       <span class="atualizado" id="painel-atualizado"></span>
       <button class="btn-atualizar" type="button" id="btn-atualizar-painel" onclick="atualizarPainel(this)">
@@ -837,7 +840,7 @@
       <div class="widget" id="painel-agenda"></div>
       <div class="widget" id="painel-docs"></div>
     </div>
-  </div>
+  </section>
 
   <!-- EDITAIS -->
   <section id="t-editais">
@@ -1597,11 +1600,7 @@ function tab(name){
     const grupo = ativo.closest('.nav-grupo-wrap');
     if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   });
-  ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
-  // KPIs (Editais do dia/ativos/compatibilidade/etc) só fazem sentido na
-  // tela inicial (lista de editais ativos) — em qualquer outra aba, ou
-  // dentro da página de um edital específico, só ocupam espaço.
-  $('#kpis').classList.toggle('hidden', name!=='editais');
+  ['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // a página de um edital (#t-edital) não faz parte da lista acima — sem
   // isso, ir para qualquer aba normal a partir dela (inclusive pelos cards
   // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
@@ -1621,6 +1620,12 @@ function tab(name){
   $('#nav').classList.remove('open');
   $('#nav-overlay').classList.remove('open');
   document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
+  // Início não é a aba padrão (essa continua sendo Editais encontrados) —
+  // agenda/documentos só valem a pena buscar quando o usuário de fato entra
+  // aqui, não em toda carga de página. Reaproveita atualizarPainel() (mesma
+  // função do botão "Atualizar") pra também deixar os KPIs/hero em dia,
+  // sem duplicar a lógica de busca em outro lugar.
+  if(name==='inicio') atualizarPainel();
   if(name==='encerrados') loadEncerrados();
   if(name==='favoritos') loadFavoritos();
   if(name==='catalogo') loadProdutos();
@@ -3372,10 +3377,9 @@ async function _renderPaginaEdital(editalId, aba){
   _analiseCache = null;   // não carrega a análise de um edital antigo pro novo
   _propostaCarregadaPara = null;   // idem pra proposta
   _cotacaoSelecionados = new Set();   // idem pra seleção de itens da cotação
-  ['editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
+  ['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
-  $('#kpis').classList.add('hidden');   // KPIs (Editais do dia/ativos/etc) só na tela inicial
   $('#edital-cabecalho').innerHTML = _radarCarregandoHTML('Carregando o edital…');
   $('#edital-conteudo').innerHTML = '';
   // barra de abas só aparece depois que /detalhe termina — clicar numa aba
@@ -4469,8 +4473,11 @@ async function sair(){
   _initBuscaItemDestaque();
   _reposicionarHeaderExtra();
   window.addEventListener('resize', _reposicionarHeaderExtra);
-  Promise.all([loadResumo(), loadAgenda(), loadDocumentosResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
-    _marcarPainelAtualizado();
+  // loadResumo() continua na carga inicial (PRODUTOS_COUNT alimenta o estado
+  // vazio da aba Editais, que é a padrão); agenda/documentos são só do
+  // painel "Início" — carregam sozinhos quando o usuário entra nessa aba
+  // (ver tab()), não em toda carga de página.
+  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
