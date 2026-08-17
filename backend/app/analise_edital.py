@@ -18,6 +18,10 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
+import shutil
+import subprocess
+import tempfile
 import time
 
 import requests
@@ -97,6 +101,62 @@ def _e_zip(conteudo: bytes) -> bool:
     return conteudo[:4] == b"PK\x03\x04"
 
 
+# Assinatura do OLE2/Compound File Binary Format — formato dos arquivos
+# antigos do Office (.doc, .xls, .ppt de 97-2003). Achado real: o PNCP
+# permite o órgão publicar o edital nesse formato em vez de PDF, e o
+# sistema não tinha NENHUM suporte a isso — dava "sem_texto" (mensagem de
+# "parece imagem escaneada"), quando o problema de verdade era um formato
+# de arquivo que nunca foi lido, nem tentado.
+_MAGIC_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _e_docx(conteudo: bytes) -> bool:
+    """.docx é um .zip por dentro (padrão OOXML) — diferencia do caso já
+    tratado em _texto_de_zip (um .zip "burro" com PDFs soltos dentro)."""
+    import zipfile
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(conteudo))
+        return "word/document.xml" in zf.namelist()
+    except Exception:
+        return False
+
+
+def _texto_de_word_bytes(conteudo: bytes, extensao: str, max_chars: int) -> str:
+    """Converte .doc/.docx pra texto via LibreOffice headless (binário
+    'soffice', instalado no Dockerfile — pacote libreoffice-writer). Não dá
+    pra ler o .doc antigo com um parser caseiro: é um formato binário
+    complexo o bastante pra existirem ferramentas dedicadas só pra isso: é
+    por isso que se usa o LibreOffice em vez de tentar decodificar os bytes
+    na mão. Se o binário não estiver instalado (ex.: dev local sem o
+    Dockerfile), volta "" silenciosamente — mesmo espírito do OCR opcional
+    (ver settings.OCR_ATIVO)."""
+    if not shutil.which("soffice"):
+        return ""
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            entrada = os.path.join(tmp, f"documento{extensao}")
+            with open(entrada, "wb") as f:
+                f.write(conteudo)
+            # -env:UserInstallation isolado por chamada: sem isso, duas
+            # conversões concorrentes (2 usuários analisando editais em
+            # Word ao mesmo tempo) brigam pelo mesmo perfil padrão do
+            # LibreOffice e uma delas trava/falha.
+            subprocess.run(
+                ["soffice", "--headless", "--norestore",
+                 f"-env:UserInstallation=file://{tmp}/perfil",
+                 "--convert-to", "txt:Text", "--outdir", tmp, entrada],
+                timeout=60, capture_output=True, check=False,
+            )
+            saida = os.path.join(tmp, "documento.txt")
+            if not os.path.exists(saida):
+                return ""
+            with open(saida, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()[:max_chars]
+    except Exception as e:
+        log.warning("Falha ao converter Word (%s) via LibreOffice: %s", extensao, e)
+        return ""
+
+
 def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
     """Extrai texto de um PDF (bytes), com fallback de OCR se vier quase
     vazio (PDF escaneado)."""
@@ -166,7 +226,11 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
         return ""
     if r.status_code != 200 or not r.content:
         return ""
+    if r.content[:8] == _MAGIC_OLE2:
+        return _texto_de_word_bytes(r.content, ".doc", max_chars)
     if _e_zip(r.content):
+        if _e_docx(r.content):
+            return _texto_de_word_bytes(r.content, ".docx", max_chars)
         return _texto_de_zip(r.content, max_paginas, max_chars)
     return _texto_de_pdf_bytes(r.content, max_paginas, max_chars)
 
