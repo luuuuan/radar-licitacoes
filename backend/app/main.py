@@ -805,6 +805,7 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
              "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
+    linha = 1
     for p in produtos:
         ws.append([
             p.descricao, p.palavras_chave, p.ncm, p.ean, p.catmat, p.catser,
@@ -812,6 +813,10 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
             p.preco_custo, p.preco_venda, p.unidade_venda, p.itens_por_unidade,
             telefones.get(p.fornecedor_id, ""), p.fornecedor_nome, p.fornecedor_contato, p.fornecedor_site,
         ])
+        linha += 1
+        # mesmo achado do cotacao.xlsx: preço saía sem formatação de moeda.
+        for col in ("J", "K"):
+            ws[f"{col}{linha}"].number_format = 'R$ #,##0.00'
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
@@ -2610,6 +2615,12 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
             prod.fabricante, prod.marca, prod.modelo,
         ])
         ws.cell(row=linha, column=2).alignment = quebra
+        # achado real: valores saíam sem formatação nenhuma (número cru tipo
+        # "253.37" em vez de "R$ 253,37") — aplica formato de moeda nas 4
+        # colunas de valor (as duas com fórmula também: number_format afeta
+        # só a exibição do resultado calculado, não o cálculo em si).
+        for col in ("D", "E", "F", "G"):
+            ws[f"{col}{linha}"].number_format = 'R$ #,##0.00'
         linha += 1
 
     linha += 1  # linha em branco antes das notas
