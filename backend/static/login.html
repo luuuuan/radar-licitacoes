@@ -550,6 +550,17 @@ async function redefinirSenha(e){
 // Página de verificação de e-mail (/verificar?token=...)
 (async function(){
   const params = new URLSearchParams(location.search);
+  // já logado e acessando /login mesmo assim (aba antiga, link direto...)?
+  // manda pro app em vez de mostrar o formulário de entrar de novo — sem
+  // isso, uma sessão válida ficava "presa" na tela de login até o usuário
+  // notar e navegar manualmente. Só checa em /login mesmo (não em /cadastro,
+  // /verificar, /redefinir-senha — esses fazem sentido acessar mesmo logado).
+  if(location.pathname==='/login'){
+    try{
+      const r = await fetch('/api/auth/me');
+      if(r.ok){ location.href='/'; return; }
+    }catch(e){}
+  }
   if(location.pathname==='/verificar' && params.get('token')){
     const r=await fetch('/api/auth/verificar?token='+encodeURIComponent(params.get('token')));
     if(r.ok) msg('E-mail confirmado! Agora você já pode entrar.', 'ok');
