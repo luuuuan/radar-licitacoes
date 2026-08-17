@@ -51,3 +51,48 @@ def test_item_sem_quantidade_ou_valor_vira_zero_em_vez_de_none():
     assert payload["itens_edital"] == [
         {"numero": 1, "descricao": "Item sem preço definido", "quantidade": 0, "valor_unitario": 0},
     ]
+
+
+# ---- Achado real: proposta já salva exportava/mostrava a descrição
+# CONGELADA de quando o item foi adicionado — se completar_descricao_itens()
+# melhorasse o texto depois (PNCP vinha cortado, o documento oficial do
+# edital tem a versão completa), a proposta continuava com a versão velha,
+# cortada. A descrição atual do ItemEdital agora sempre prevalece. ----
+
+def test_descricao_da_proposta_e_atualizada_a_partir_do_item_edital_atual():
+    ed = _edital([
+        ItemEdital(numero=24, descricao="PAPEL A4, CAIXA COM 10 RESMAS DE 500 FOLHAS CADA",
+                  quantidade=10, valor_unitario=286.93),
+    ])
+    prop = Proposta(edital_id=1, itens=[
+        {"numero": 24, "descricao": "PAPEL A4 210 X 297 75G/M", "quantidade": 10,
+         "custo_unit": 250.0, "preco_unit": 286.93},
+    ])
+    payload = _proposta_payload(ed, prop)
+    assert payload["itens"][0]["descricao"] == "PAPEL A4, CAIXA COM 10 RESMAS DE 500 FOLHAS CADA"
+    # o resto do item (valores negociados pelo usuário) não muda
+    assert payload["itens"][0]["custo_unit"] == 250.0
+
+
+def test_item_sem_numero_mantem_descricao_salva_sem_alteracao():
+    """Proposta salva antes do campo "numero" existir nos itens, ou
+    descrição digitada à mão — sem "numero" não tem contra o que atualizar,
+    fica como estava."""
+    ed = _edital([ItemEdital(numero=1, descricao="Descrição atual do edital")])
+    prop = Proposta(edital_id=1, itens=[
+        {"descricao": "Descrição digitada pelo usuário", "quantidade": 1, "custo_unit": 0, "preco_unit": 0},
+    ])
+    payload = _proposta_payload(ed, prop)
+    assert payload["itens"][0]["descricao"] == "Descrição digitada pelo usuário"
+
+
+def test_numero_que_nao_bate_com_item_do_edital_mantem_descricao_salva():
+    """Item removido do edital depois de já estar na proposta (ou número
+    inválido) — sem correspondência real, não tem o que atualizar."""
+    ed = _edital([ItemEdital(numero=1, descricao="Outro item")])
+    prop = Proposta(edital_id=1, itens=[
+        {"numero": 99, "descricao": "Item que não existe mais no edital",
+         "quantidade": 1, "custo_unit": 0, "preco_unit": 0},
+    ])
+    payload = _proposta_payload(ed, prop)
+    assert payload["itens"][0]["descricao"] == "Item que não existe mais no edital"

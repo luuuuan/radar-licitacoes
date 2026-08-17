@@ -2837,6 +2837,20 @@ def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
             "custo_unit": 0,
             "preco_unit": it.valor_unitario or 0,
         } for it in ed.itens]
+    # Achado real: a descrição de um item ficava "congelada" com o que
+    # estava em ItemEdital.descricao no momento em que foi adicionado à
+    # proposta — se completar_descricao_itens() melhorasse o texto DEPOIS
+    # (a API do PNCP vinha cortada, o documento oficial do edital tem a
+    # versão completa), uma proposta já salva continuava mostrando/
+    # exportando a versão antiga, cortada. Sempre usa a descrição ATUAL de
+    # ItemEdital quando o item da proposta tem "numero" (aponta pra um item
+    # de verdade do edital) — o resultado é um dict NOVO por item (não
+    # mutar prop.itens direto, pra não arriscar persistir sem intenção
+    # numa próxima flush da sessão). Item sem "numero" (proposta salva
+    # antes dessa referência existir, ou descrição digitada à mão) mantém
+    # o texto salvo, sem como atualizar.
+    descricoes_atuais = {it.numero: it.descricao for it in ed.itens if it.numero is not None}
+    itens = [{**i, "descricao": descricoes_atuais.get(i.get("numero"), i.get("descricao"))} for i in itens]
     total_venda = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     margem = total_venda - total_custo

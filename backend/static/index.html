@@ -3485,6 +3485,15 @@ async function abaEdital(nome, forcar){
   try{
     if(nome==='itens'){
       cont.innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
+      // 1ª vez que abre Itens/margem deste edital: tenta completar sozinho
+      // as descrições que a API do PNCP trouxe cortadas, lendo o documento
+      // oficial (achado real: existia desde sempre no backend, mas nunca
+      // tinha sido ligado a nada no front — nenhum edital nunca chegou a
+      // ser completado). Silencioso (sem toast) pra não interromper quem já
+      // está lendo a lista; só re-renderiza se achar algo pra melhorar.
+      if(!_paginaEditalDetalhe.edital.itens_completados){
+        _completarDescricaoItens(id, ativo, false);
+      }
     } else if(nome==='documentos'){
       cont.innerHTML = _spinnerHTML('Buscando documentos no PNCP…');
       const html = await _corpoDocumentosEdital(id);
@@ -3502,6 +3511,44 @@ async function abaEdital(nome, forcar){
   }catch(e){
     if(ativo()) cont.innerHTML = '<p>Erro ao carregar esta aba. Tente de novo.</p>';
   }
+}
+
+// Lê o documento oficial do edital (PDF/Word) pra completar descrições de
+// item que a API do PNCP trouxe cortadas — achado real: um item pedia
+// "caixa com 10 resmas", mas o PNCP só trazia "papel A4 75g/m²" (cortado),
+// uma diferença de quantidade grande o suficiente pra bagunçar margem e
+// cotação. `avisar`=true (botão manual) sempre mostra um toast, sucesso ou
+// não; `avisar`=false (chamada automática ao abrir a aba) fica quieta a
+// menos que ache algo pra melhorar — pra não interromper à toa quem só
+// está lendo a lista.
+async function _completarDescricaoItens(id, ativo, avisar){
+  let r;
+  try{
+    r = await api(`/api/editais/${id}/itens/completar-descricao`, {method: 'POST'});
+  }catch(e){
+    if(avisar) toast('Não foi possível buscar a descrição completa agora. Tente de novo.', 'erro');
+    return;
+  }
+  if(!ativo() || _paginaEditalId !== id) return;   // usuário já saiu desta aba/edital
+  if(r.status === 'ok' && r.atualizados > 0){
+    _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
+    if(!ativo() || _paginaEditalId !== id) return;
+    if(_abaEditalAtual === 'itens') $('#edital-conteudo').innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
+    toast(`Descrição de ${r.atualizados} ${r.atualizados===1?'item completada':'itens completados'} a partir do documento do edital. Rode "Recalcular" pra atualizar a compatibilidade com o texto novo.`, 'ok', 7000);
+    return;
+  }
+  if(!avisar) return;
+  if(r.status === 'ok'){
+    toast('Nenhuma descrição precisou ser completada — já batem com o documento.', 'ok');
+    return;
+  }
+  const msgs = {sem_ia: 'Recurso indisponível no momento.',
+    sem_arquivo: 'Este edital não tem arquivo publicado no PNCP pra ler.',
+    sem_itens: 'Este edital não tem itens detalhados.',
+    sem_texto: 'Não consegui ler o texto do documento (pode estar escaneado/sem suporte).',
+    erro_ia: 'Não foi possível buscar agora. Tente de novo.',
+    resposta_invalida: 'Resposta inesperada. Tente de novo.'};
+  toast(msgs[r.status] || 'Não foi possível completar as descrições agora.', 'erro');
 }
 
 function _corpoAnaliseIntro(){
@@ -3682,7 +3729,18 @@ function _corpoItensEdital(d){
   if(!d.itens.length) return '<p class="muted">Este edital não trouxe itens detalhados.</p>';
   const compativeis = d.itens.filter(it=>it.compativel);
   const semMatch = d.itens.filter(it=>!it.compativel);
+  // A API do PNCP às vezes traz a descrição cortada — o botão relê o
+  // documento oficial do edital pra completar (mesma coisa que já roda
+  // sozinha na 1ª vez que a aba abre; aqui é só pra forçar de novo).
+  const statusDescricao = d.edital.itens_completados
+    ? `${ICN.check||'✓'} Descrições completadas a partir do documento oficial.`
+    : '';
+  const toolbarDescricao = `<div class="muted" style="font-size:11px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${statusDescricao}
+      <button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="_completarDescricaoItens(_paginaEditalId, ()=>true, true)">buscar descrição completa no documento</button>
+    </div>`;
   return `
+    ${toolbarDescricao}
     ${compativeis.length?`<h3 style="margin:0 0 4px;font-size:14px">Itens compatíveis com seu catálogo (${compativeis.length})</h3>${compativeis.map(_itemRowHtml).join('')}`:''}
     ${semMatch.length?`<h3 style="margin:16px 0 4px;font-size:14px">Itens sem produto compatível (${semMatch.length})</h3>${semMatch.map(_itemRowHtml).join('')}`:''}`;
 }
