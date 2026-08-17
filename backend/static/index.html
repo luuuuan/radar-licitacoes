@@ -4482,6 +4482,16 @@ async function sair(){
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
 
+  // login.html manda pra cá com "?aba=inicio" logo após autenticar — mostra
+  // o painel do dia nesse momento específico (recém-logado), sem mudar a
+  // aba padrão de quem só recarrega a página com sessão já aberta (essa
+  // continua sendo Editais encontrados). Limpa o parâmetro da URL depois,
+  // senão um F5 manual continuaria forçando a aba Início pra sempre.
+  if(new URLSearchParams(location.search).get('aba')==='inicio'){
+    history.replaceState({}, '', location.pathname);
+    tab('inicio');
+  }
+
   // carregado direto em /edital/{id} (link colado/compartilhado/recarregado)
   // — mesmo padrão do login.html: decide pela URL. Usa replaceState (não
   // pushState) pra não empilhar um estado de história duplicado da mesma URL.
