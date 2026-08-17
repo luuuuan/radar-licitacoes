@@ -3128,6 +3128,13 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
     ⚠ Seu catálogo mudou desde esta comparação — o resultado abaixo pode estar desatualizado.
     <button class="btn ghost" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Atualizar análise</button>
   </div>` : '';
+  // Edital grande: os itens são comparados em grupos (ver backend) — se
+  // algum grupo falhar, os outros continuam valendo em vez de perder a
+  // comparação inteira. Avisa que faltou parte, sem esconder o que já deu certo.
+  const avisoLotes = c.lotes_com_falha ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
+    ⚠ Não foi possível comparar ${c.lotes_com_falha>1?`${c.lotes_com_falha} grupos de itens`:'um grupo de itens'} deste edital agora — os itens abaixo foram comparados normalmente.
+    <button class="btn ghost" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Tentar novamente</button>
+  </div>` : '';
   // guarda os candidatos por item pro modal "escolher produto" ler depois,
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
@@ -3206,6 +3213,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   }).join('');
   return `<div style="margin-top:16px">
     ${aviso}
+    ${avisoLotes}
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
     <p class="muted" style="font-size:11px;margin:2px 0 10px">É uma segunda opinião: a IA olha o edital inteiro e compara com todo o seu catálogo, sem depender da comparação que já aparece na aba Itens/margem. O selo (ex.: "Atende parcialmente") é uma conferência automática das medidas do produto — não é a IA. O texto em "Segundo a IA" é a opinião dela, e às vezes pode não bater com o selo. Confira sempre antes de confirmar.</p>
     ${cards}

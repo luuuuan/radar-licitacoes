@@ -548,27 +548,18 @@ def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 400) -> str:
     return "\n".join(linhas) if linhas else "(catálogo vazio)"
 
 
-def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: list[dict],
-                              api_key: str | None = None) -> dict:
-    """Manda o CATÁLOGO COMPLETO do usuário (id + descrição) e os itens deste
-    edital pra IA comparar diretamente — segunda opinião independente do
-    motor de matching por texto. NÃO fica em cache: é específico do
-    catálogo do usuário no momento da chamada, não do edital em si."""
-    if not ia_texto_disponivel(api_key):
-        return {"status": "sem_ia"}
-    if not itens_edital:
-        return {"status": "sem_itens"}
-    if not catalogo:
-        return {"status": "sem_catalogo"}
+# Achado real: edital com 57 itens já cortava a resposta da IA (maxOutputTokens
+# ajudou, mas não escala — tem edital com mais de 150 itens). Em vez de mandar
+# TODOS os itens numa chamada só (uma resposta gigante, tudo ou nada), quebra
+# em lotes pequenos — cada chamada fica curta e previsível, e se UM lote
+# falhar (resposta_invalida/erro_ia), os outros continuam valendo em vez de
+# perder a comparação inteira.
+_TAMANHO_LOTE_COMPARACAO = 25
 
-    # Tetos generosos de propósito: o contexto de entrada do Gemini aguenta
-    # muito mais que isso (na casa do milhão de tokens) — o gargalo real
-    # de edital grande (achado: 57 itens) não é a IA não conseguir LER o
-    # prompt, é o JSON de RESPOSTA ficar grande (ver maxOutputTokens em
-    # _gerar). Ainda assim mantém um teto (não manda ilimitado) pra não
-    # deixar o prompt crescer sem controle com um catálogo gigante.
-    itens_txt = _formatar_itens_edital(itens_edital)[:30000]
-    catalogo_txt = _formatar_catalogo(catalogo)[:60000]
+
+def _comparar_lote_catalogo(objeto: str, itens_lote: list[dict], catalogo: list[dict],
+                            catalogo_txt: str, api_key: str | None) -> dict:
+    itens_txt = _formatar_itens_edital(itens_lote)[:30000]
     prompt = _PROMPT_COMPARAR_CATALOGO.format(
         objeto=(objeto or "")[:1000], itens=itens_txt, catalogo=catalogo_txt)
     txt, st = _gerar(prompt, api_key=api_key, timeout=90)
@@ -577,8 +568,8 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
     data = _parse_json(txt)
     if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
         log.warning("comparar_catalogo_usuario(): resposta da IA não é um JSON válido "
-                   "(%d itens do edital, %d produtos, %d chars de resposta). Início: %r Fim: %r",
-                   len(itens_edital), len(catalogo), len(txt), txt[:300], txt[-300:])
+                   "(lote com %d itens do edital, %d produtos, %d chars de resposta). Início: %r Fim: %r",
+                   len(itens_lote), len(catalogo), len(txt), txt[:300], txt[-300:])
         return {"status": "resposta_invalida"}
 
     ids_validos = {p.get("id") for p in catalogo}
@@ -613,6 +604,57 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
             continue
         itens.append({"numero": numero, "candidatos": candidatos})
     return {"status": "ok", "itens": itens}
+
+
+def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: list[dict],
+                              api_key: str | None = None, deve_cancelar=None) -> dict:
+    """Manda o CATÁLOGO COMPLETO do usuário (id + descrição) e os itens deste
+    edital pra IA comparar diretamente — segunda opinião independente do
+    motor de matching por texto. NÃO fica em cache: é específico do
+    catálogo do usuário no momento da chamada, não do edital em si.
+
+    Itens processados em lotes de _TAMANHO_LOTE_COMPARACAO (ver comentário
+    acima) — pra edital pequeno (≤ 1 lote) o comportamento é idêntico a uma
+    chamada só, igual antes. `deve_cancelar` (opcional) é checado ENTRE
+    lotes, nunca no meio de uma chamada já em voo — mesmo espírito do
+    cancelamento cooperativo já usado entre as etapas da análise."""
+    if not ia_texto_disponivel(api_key):
+        return {"status": "sem_ia"}
+    if not itens_edital:
+        return {"status": "sem_itens"}
+    if not catalogo:
+        return {"status": "sem_catalogo"}
+
+    # Teto generoso de propósito: o contexto de entrada do Gemini aguenta
+    # muito mais que isso (na casa do milhão de tokens) — calculado 1x fora
+    # do loop, o catálogo é o mesmo pra todos os lotes.
+    catalogo_txt = _formatar_catalogo(catalogo)[:60000]
+    lotes = [itens_edital[i:i + _TAMANHO_LOTE_COMPARACAO]
+             for i in range(0, len(itens_edital), _TAMANHO_LOTE_COMPARACAO)]
+
+    itens_ok: list[dict] = []
+    lotes_com_falha = 0
+    ultimo_erro: dict | None = None
+    for lote in lotes:
+        if deve_cancelar and deve_cancelar():
+            break
+        r = _comparar_lote_catalogo(objeto, lote, catalogo, catalogo_txt, api_key)
+        if r["status"] == "ok":
+            itens_ok.extend(r["itens"])
+        else:
+            lotes_com_falha += 1
+            ultimo_erro = r
+
+    # nenhum lote deu certo: propaga o erro do último (mesmo comportamento
+    # de hoje pra edital pequeno, que só tem 1 lote — tudo ou nada continua
+    # valendo só quando literalmente TUDO falhou).
+    if not itens_ok and lotes_com_falha:
+        return ultimo_erro
+
+    resultado = {"status": "ok", "itens": itens_ok}
+    if lotes_com_falha:
+        resultado["lotes_com_falha"] = lotes_com_falha
+    return resultado
 
 
 _PROMPT_RERANK = """Você está avaliando se produtos de um catálogo são o MESMO item físico pedido num edital de licitação.

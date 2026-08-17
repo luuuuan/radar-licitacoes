@@ -2224,7 +2224,7 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
 
 
 def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
-                                   api_key: str | None, forcar: bool = False) -> dict:
+                                   api_key: str | None, forcar: bool = False, deve_cancelar=None) -> dict:
     """Segunda opinião da IA: manda o CATÁLOGO COMPLETO do usuário e os itens
     deste edital pra comparação direta — independente do motor de matching
     por texto (matching/engine.py). Mesma regra de cache versionado do
@@ -2232,11 +2232,11 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
     if resultado.get("status") != "ok":
         return resultado
     with _lock_extras(user.id, ed.id):
-        return _comparar_catalogo_ia_com_cache(resultado, ed, user, db, api_key, forcar)
+        return _comparar_catalogo_ia_com_cache(resultado, ed, user, db, api_key, forcar, deve_cancelar)
 
 
 def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, db: Session,
-                                    api_key: str | None, forcar: bool = False) -> dict:
+                                    api_key: str | None, forcar: bool = False, deve_cancelar=None) -> dict:
     import json as _json
     cache = _obter_cache_extras(db, user, ed.id)
     tem_cache = cache is not None and cache.versao_catalogo_calc is not None
@@ -2260,7 +2260,7 @@ def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, 
         resultado.get("objeto") or ed.objeto or "",
         [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
         [{"id": p.id, "descricao": p.descricao} for p in catalogo],
-        api_key=api_key,
+        api_key=api_key, deve_cancelar=deve_cancelar,
     )
     if saida.get("status") == "ok":
         # anexa dado ao vivo do produto/item pra tabela do front não precisar
@@ -2355,7 +2355,7 @@ def _rodar_extras_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
     if deve_cancelar():
         resultado["cancelado"] = True
         return resultado
-    return _anexar_comparacao_catalogo_ia(resultado, ed, user, db, api_key, forcar)
+    return _anexar_comparacao_catalogo_ia(resultado, ed, user, db, api_key, forcar, deve_cancelar)
 
 
 @app.get("/api/editais/{edital_id}/analise")

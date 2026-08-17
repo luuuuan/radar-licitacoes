@@ -4,6 +4,7 @@ contra o que um edital exige (sem rede — a chamada à IA é mockada). Rode
 com:  cd backend && pytest
 """
 import json
+import re
 
 from app import analise_edital as ia
 
@@ -240,3 +241,98 @@ def test_gerar_manda_max_output_tokens_no_body(monkeypatch):
     ia._gerar("prompt qualquer", api_key="fake-key")
 
     assert capturado["body"]["generationConfig"]["maxOutputTokens"] > 8192
+
+
+# ---- Lotes: edital grande (achado real: mais de 150 itens em alguns) não
+# pode mais depender de UMA chamada de IA responder tudo de uma vez só. ----
+
+def _itens_edital(n):
+    return [{"numero": i, "descricao": f"item {i}"} for i in range(1, n + 1)]
+
+
+def test_comparar_catalogo_poucos_itens_continua_1_chamada_so(monkeypatch):
+    """Edital pequeno (≤ tamanho de 1 lote) não muda de comportamento."""
+    chamadas = []
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        chamadas.append(prompt)
+        return json.dumps({"itens": [{"numero_item": 1, "candidatos": [
+            {"produto_id": 1, "justificativa": "ok"}]}]}), "ok"
+
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+    r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(5), [{"id": 1, "descricao": "y"}], api_key="fake-key")
+
+    assert len(chamadas) == 1
+    assert r["status"] == "ok"
+    assert "lotes_com_falha" not in r
+
+
+def test_comparar_catalogo_divide_em_lotes_e_junta_o_resultado(monkeypatch):
+    """60 itens, lote de 25 -> 3 chamadas; cada uma devolve o item numero_item
+    igual ao número do 1º item do próprio lote, só pra confirmar que o
+    conteúdo de cada lote chega separado (não tudo numa prompt só)."""
+    chamadas = []
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        chamadas.append(prompt)
+        # extrai o número do primeiro item citado no prompt (tosco, mas
+        # suficiente pra provar que cada chamada recebeu um pedaço diferente)
+        primeiro_numero = int(re.search(r"- item (\d+):", prompt).group(1))
+        return json.dumps({"itens": [{"numero_item": primeiro_numero, "candidatos": [
+            {"produto_id": 1, "justificativa": "ok"}]}]}), "ok"
+
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+    r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(60), [{"id": 1, "descricao": "y"}], api_key="fake-key")
+
+    assert len(chamadas) == 3   # 25 + 25 + 10
+    assert r["status"] == "ok"
+    assert [it["numero"] for it in r["itens"]] == [1, 26, 51]
+    assert "lotes_com_falha" not in r
+
+
+def test_comparar_catalogo_um_lote_falha_outros_continuam_valendo(monkeypatch):
+    """Achado real, pedido explícito do usuário: se ALGUNS lotes falharem,
+    os itens dos lotes que deram certo continuam aparecendo — não é
+    tudo-ou-nada como antes."""
+    chamadas = {"n": 0}
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        chamadas["n"] += 1
+        if chamadas["n"] == 2:
+            return "isso não é um JSON", "ok"   # 2º lote falha
+        primeiro_numero = int(re.search(r"- item (\d+):", prompt).group(1))
+        return json.dumps({"itens": [{"numero_item": primeiro_numero, "candidatos": [
+            {"produto_id": 1, "justificativa": "ok"}]}]}), "ok"
+
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+    r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(60), [{"id": 1, "descricao": "y"}], api_key="fake-key")
+
+    assert chamadas["n"] == 3
+    assert r["status"] == "ok"
+    assert [it["numero"] for it in r["itens"]] == [1, 51]   # o do meio (lote 2) faltou
+    assert r["lotes_com_falha"] == 1
+
+
+def test_comparar_catalogo_todos_os_lotes_falham_propaga_erro(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
+    r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(60), [{"id": 1, "descricao": "y"}], api_key="fake-key")
+    assert r == {"status": "erro_ia", "detalhe": "http_500"}
+
+
+def test_comparar_catalogo_para_de_processar_lotes_se_cancelar(monkeypatch):
+    """Cancelamento cooperativo entre lotes — mesmo espírito do cancelamento
+    já usado entre as etapas da análise (nunca no meio de uma chamada em voo)."""
+    chamadas = []
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (
+        chamadas.append(1),
+        (json.dumps({"itens": []}), "ok"))[1])
+
+    cancelar_apos = {"n": 0}
+    def deve_cancelar():
+        return len(chamadas) >= 1   # cancela assim que o 1º lote termina
+
+    r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(60), [{"id": 1, "descricao": "y"}],
+                                     api_key="fake-key", deve_cancelar=deve_cancelar)
+
+    assert len(chamadas) == 1   # só o 1º lote rodou; os outros 2 foram pulados
+    assert r["status"] == "ok"
