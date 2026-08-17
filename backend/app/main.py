@@ -2150,6 +2150,23 @@ def _upsert_cache_extras(db: Session, user: Usuario, edital_id: int, cache: "Ana
     db.commit()
 
 
+# Mesmo problema do _analise_locks (Edital.analise_ia), só que na cache POR
+# USUÁRIO (AnaliseIAExtras, única por usuario_id+edital_id): duas requests
+# do MESMO usuário pro MESMO edital ao mesmo tempo (duplo clique, 2 abas)
+# liam a cache como inexistente as duas e tentavam INSERIR a mesma linha —
+# violava a constraint de unicidade (achado real, via teste de concorrência
+# da trava acima). Trava por (usuario_id, edital_id) fecha a janela entre
+# "ler se já existe" e "criar se não existe" — usada tanto pela verificação
+# de documentos quanto pela comparação de catálogo abaixo (são chamadas em
+# sequência, nunca em paralelo, dentro da MESMA request — só serializa
+# entre requests diferentes).
+_extras_locks: dict[tuple[int, int], threading.Lock] = {}
+
+
+def _lock_extras(usuario_id: int, edital_id: int) -> threading.Lock:
+    return _extras_locks.setdefault((usuario_id, edital_id), threading.Lock())
+
+
 def _anexar_verificacao_ia_documentos(resultado: dict, ed: Edital, user: Usuario, db: Session,
                                       api_key: str | None, forcar: bool = False) -> dict:
     """Verificação por CONTEÚDO (IA) dos documentos que o usuário já tem
@@ -2169,6 +2186,12 @@ def _anexar_verificacao_ia_documentos(resultado: dict, ed: Edital, user: Usuario
     cada abertura da aba, mesmo sem nada ter mudado no catálogo/documentos."""
     if resultado.get("status") != "ok":
         return resultado
+    with _lock_extras(user.id, ed.id):
+        return _verificar_ia_documentos_com_cache(resultado, ed, user, db, api_key, forcar)
+
+
+def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuario, db: Session,
+                                       api_key: str | None, forcar: bool = False) -> dict:
     import json as _json
     cache = _obter_cache_extras(db, user, ed.id)
     tem_cache = cache is not None and cache.versao_documentos_calc is not None
@@ -2208,6 +2231,12 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
     _anexar_verificacao_ia_documentos, só que por Usuario.versao_catalogo."""
     if resultado.get("status") != "ok":
         return resultado
+    with _lock_extras(user.id, ed.id):
+        return _comparar_catalogo_ia_com_cache(resultado, ed, user, db, api_key, forcar)
+
+
+def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, db: Session,
+                                    api_key: str | None, forcar: bool = False) -> dict:
     import json as _json
     cache = _obter_cache_extras(db, user, ed.id)
     tem_cache = cache is not None and cache.versao_catalogo_calc is not None
@@ -2284,6 +2313,19 @@ def _anexar_comparacao_catalogo_ia(resultado: dict, ed: Edital, user: Usuario, d
 # Nunca interrompe uma chamada já em voo — requests.post dentro de
 # analise_edital.py:_gerar() não tem nenhum hook de cancelamento.
 _analise_cancelar: dict[int, bool] = {}
+# Achado real: Edital.analise_ia é cache GLOBAL por edital (o resumo é o
+# mesmo pra todo mundo, não depende do usuário) — mas a rota não tinha
+# nenhuma trava. Dois usuários abrindo o MESMO edital ainda sem análise ao
+# mesmo tempo disparavam a chamada de IA em dobro (a 2ª sobrescrevia o
+# resultado da 1ª sem corromper nada, só pagava a chamada à toa). Trava por
+# edital_id (mesmo padrão de _recalculo_locks, por usuário) resolve: quem
+# chega depois espera aqui e, ao entrar, relê o cache — se o primeiro já
+# terminou, aproveita o resultado dele em vez de chamar a IA de novo.
+_analise_locks: dict[int, threading.Lock] = {}
+
+
+def _lock_analise(edital_id: int) -> threading.Lock:
+    return _analise_locks.setdefault(edital_id, threading.Lock())
 
 
 @app.post("/api/editais/{edital_id}/analise/cancelar")
@@ -2330,6 +2372,16 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     chave = _auth.decifrar(user.gemini_key_cifrada)
     _analise_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
     deve_cancelar = lambda: _analise_cancelar.get(user.id, False)  # noqa: E731
+
+    def _cache_valido():
+        if not ed.analise_ia:
+            return None
+        try:
+            cache = _json.loads(ed.analise_ia)
+        except ValueError:
+            return None
+        return cache if cache.get("versao") == ia.VERSAO_PROMPT else None
+
     # análise já feita: mostra do cache (é leitura, não consome IA pro texto
     # do edital em si), desde que tenha sido gerada com a versão atual do
     # prompt. Versão antiga -> refaz. Verificação de documentos/comparação de
@@ -2339,27 +2391,34 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     # o resultado anterior volta marcado como desatualizado em vez de ser
     # refeito sem o usuário pedir (ver _anexar_verificacao_ia_documentos e
     # _anexar_comparacao_catalogo_ia).
-    if ed.analise_ia and not forcar:
-        try:
-            cache = _json.loads(ed.analise_ia)
-            if cache.get("versao") == ia.VERSAO_PROMPT:
-                cache["cache"] = True
-                cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar, forcar)
-                return _anexar_checklist_documentos(cache, user, db)
-            # versão antiga: cai para baixo e refaz com o prompt novo
-        except ValueError:
-            pass
+    cache = None if forcar else _cache_valido()
+    if cache:
+        cache["cache"] = True
+        cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar, forcar)
+        return _anexar_checklist_documentos(cache, user, db)
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
     if not ia.ia_texto_disponivel(chave):
         return {"status": "sem_ia"}
     if deve_cancelar():
         return {"status": "cancelado"}
-    docs = _listar_arquivos_pncp(ed)
-    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
-    if resultado.get("status") == "ok":
-        ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
-        ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-        db.commit()
+    # trava por edital: o cache (ed.analise_ia) é global, não por usuário —
+    # sem isso, dois usuários abrindo o MESMO edital ainda sem análise ao
+    # mesmo tempo disparavam a chamada de IA em dobro. Quem chega enquanto
+    # outro já está gerando espera aqui; ao entrar, relê o cache (db.refresh
+    # — a outra request usa outra sessão) e aproveita o resultado dela se já
+    # tiver terminado, em vez de pagar a chamada de novo.
+    with _lock_analise(edital_id):
+        db.refresh(ed)
+        resultado = None if forcar else _cache_valido()
+        if resultado:
+            resultado["cache"] = True
+        else:
+            docs = _listar_arquivos_pncp(ed)
+            resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+            if resultado.get("status") == "ok":
+                ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
+                ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+                db.commit()
     resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar, forcar)
     return _anexar_checklist_documentos(resultado, user, db)
 
