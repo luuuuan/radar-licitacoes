@@ -2710,17 +2710,45 @@ def resumo(user: Usuario = Depends(_auth.get_current_user),
         .join(Edital, Match.edital_id == Edital.id)
         .where(ativo).where(meu).where(Match.lido == False)  # noqa: E712
     ) or 0
-    do_dia = db.scalar(
-        select(func.count(Match.id))
+    do_dia, valor_do_dia = db.execute(
+        select(func.count(Match.id), func.sum(Edital.valor_estimado))
         .join(Edital, Match.edital_id == Edital.id)
         .where(ativo).where(meu).where(Edital.data_abertura == hoje)
-    ) or 0
+    ).one()
     return {
         "produtos": total_prod, "editais": total_editais,
         "fortes": por_nivel.get("forte", 0), "medios": por_nivel.get("medio", 0),
         "fracos": por_nivel.get("fraco", 0), "nao_lidos": nao_lidos,
-        "do_dia": do_dia,
+        "do_dia": do_dia or 0, "valor_do_dia": valor_do_dia or 0,
     }
+
+
+@app.get("/api/agenda")
+def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
+          db: Session = Depends(get_session)):
+    """Sessões de disputa dos editais com match do usuário numa semana
+    (domingo a sábado). offset=0 é a semana atual, -1 a anterior, 1 a
+    seguinte. Sem o filtro "ativo" que /api/resumo usa: navegar pra uma
+    semana passada tem que continuar mostrando o que aconteceu, não some
+    só porque o edital já encerrou."""
+    hoje = date.today()
+    inicio = hoje - timedelta(days=(hoje.weekday() + 1) % 7) + timedelta(weeks=offset)
+    fim = inicio + timedelta(days=6)
+    linhas = db.execute(
+        select(Edital, Match).join(Match, Match.edital_id == Edital.id)
+        .where(Match.usuario_id == user.id)
+        .where(Edital.data_abertura.between(inicio, fim))
+        .order_by(Edital.data_abertura)
+    ).all()
+    datas_com_sessao = {ed.data_abertura for ed, _m in linhas}
+    dias = [{"data": (inicio + timedelta(days=i)).isoformat(),
+             "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao} for i in range(7)]
+    sessoes = [{
+        "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+        "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
+        "valor_estimado": ed.valor_estimado, "data_abertura": ed.data_abertura.isoformat(),
+    } for ed, _m in linhas]
+    return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
 
 
 class PropostaIn(BaseModel):
