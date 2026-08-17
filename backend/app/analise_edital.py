@@ -251,7 +251,14 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     url = f"{_BASE}/{settings.IA_MODELO_TEXTO}:generateContent"
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+        # maxOutputTokens explícito: achado real num edital com 57 itens —
+        # comparar_catalogo_usuario() pede um JSON com até 2 candidatos por
+        # item, e sem esse limite a resposta usa o padrão implícito do
+        # modelo, que pode não ser suficiente pra um JSON desse tamanho —
+        # a IA responde 200 (não é erro_ia), mas o texto vem cortado no
+        # meio e falha ao parsear (status "resposta_invalida").
+        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json",
+                             "maxOutputTokens": 16384},
     }
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
@@ -340,6 +347,8 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
     if not isinstance(data, dict):
+        log.warning("analisar(): resposta da IA não é um JSON válido (%d chars). Início: %r Fim: %r",
+                   len(txt), txt[:300], txt[-300:])
         return {"status": "resposta_invalida"}
 
     # normaliza saída
@@ -487,6 +496,8 @@ def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documen
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
     if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
+        log.warning("verificar_documentos_usuario(): resposta da IA não é um JSON válido "
+                   "(%d chars). Início: %r Fim: %r", len(txt), txt[:300], txt[-300:])
         return {"status": "resposta_invalida"}
 
     itens = []
@@ -550,8 +561,14 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
     if not catalogo:
         return {"status": "sem_catalogo"}
 
-    itens_txt = _formatar_itens_edital(itens_edital)[:12000]
-    catalogo_txt = _formatar_catalogo(catalogo)[:24000]
+    # Tetos generosos de propósito: o contexto de entrada do Gemini aguenta
+    # muito mais que isso (na casa do milhão de tokens) — o gargalo real
+    # de edital grande (achado: 57 itens) não é a IA não conseguir LER o
+    # prompt, é o JSON de RESPOSTA ficar grande (ver maxOutputTokens em
+    # _gerar). Ainda assim mantém um teto (não manda ilimitado) pra não
+    # deixar o prompt crescer sem controle com um catálogo gigante.
+    itens_txt = _formatar_itens_edital(itens_edital)[:30000]
+    catalogo_txt = _formatar_catalogo(catalogo)[:60000]
     prompt = _PROMPT_COMPARAR_CATALOGO.format(
         objeto=(objeto or "")[:1000], itens=itens_txt, catalogo=catalogo_txt)
     txt, st = _gerar(prompt, api_key=api_key, timeout=90)
@@ -559,6 +576,9 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
     if not isinstance(data, dict) or not isinstance(data.get("itens"), list):
+        log.warning("comparar_catalogo_usuario(): resposta da IA não é um JSON válido "
+                   "(%d itens do edital, %d produtos, %d chars de resposta). Início: %r Fim: %r",
+                   len(itens_edital), len(catalogo), len(txt), txt[:300], txt[-300:])
         return {"status": "resposta_invalida"}
 
     ids_validos = {p.get("id") for p in catalogo}

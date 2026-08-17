@@ -202,3 +202,41 @@ def test_comparar_catalogo_erro_ia_propaga_status(monkeypatch):
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
+
+
+def test_comparar_catalogo_resposta_truncada_vira_resposta_invalida_e_loga(monkeypatch, caplog):
+    """Achado real: edital com 57 itens — a IA respondia HTTP 200 (não é
+    erro_ia), mas o JSON vinha cortado no meio (provavelmente por estourar
+    o teto de tokens de saída) e não dava pra parsear. Antes disso não
+    ficava nenhum rastro nos logs pra diagnosticar depois."""
+    resposta_cortada = '{"itens": [{"numero_item": 1, "candidatos": [{"produto_id": 7, "just'
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_cortada, "ok"))
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="ia.edital"):
+        r = ia.comparar_catalogo_usuario(
+            "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 7, "descricao": "y"}], api_key="fake-key")
+
+    assert r == {"status": "resposta_invalida"}
+    assert any("resposta da IA não é um JSON válido" in msg for msg in caplog.messages)
+
+
+def test_gerar_manda_max_output_tokens_no_body(monkeypatch):
+    """maxOutputTokens explícito evita que o Gemini corte a resposta no
+    meio quando o JSON esperado é grande (muitos itens/candidatos)."""
+    capturado = {}
+
+    class _RespostaFake:
+        status_code = 200
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
+
+    def _post_fake(url, json=None, timeout=None, headers=None):
+        capturado["body"] = json
+        return _RespostaFake()
+
+    monkeypatch.setattr(ia.requests, "post", _post_fake)
+
+    ia._gerar("prompt qualquer", api_key="fake-key")
+
+    assert capturado["body"]["generationConfig"]["maxOutputTokens"] > 8192

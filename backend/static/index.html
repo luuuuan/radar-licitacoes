@@ -3110,6 +3110,15 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   if(c.status==='erro_ia'){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
   }
+  // achado real: edital com muitos itens (57) fazia a IA responder algo
+  // que não dava pra interpretar como JSON — a rota não travava (não vira
+  // erro_ia), só devolvia esse status. Sem tratar aqui, a comparação
+  // simplesmente sumia da tela sem nenhum aviso, e "realizar nova análise"
+  // parecia não fazer nada (o usuário reabria e via a mesma tela em branco).
+  if(c.status==='resposta_invalida'){
+    return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (a IA respondeu num formato inesperado).
+      <button class="btn ghost" style="margin-left:4px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Tentar novamente</button></div>`;
+  }
   if(c.status!=='ok' || !c.itens) return '';
   if(!c.itens.length){
     return `<div style="margin-top:10px;font-size:14px;font-weight:600;color:var(--medio)">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
