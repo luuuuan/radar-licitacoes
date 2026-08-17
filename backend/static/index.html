@@ -231,6 +231,7 @@
   .pill.forte{background:rgba(34,197,94,.15);color:var(--forte)}
   .pill.medio{background:rgba(234,179,8,.15);color:var(--medio)}
   .pill.fraco{background:rgba(100,116,139,.15);color:var(--fraco)}
+  .pill.ruim{background:rgba(239,68,68,.15);color:var(--destructive)}
   .ed-meta{color:var(--muted);font-size:12px;margin:8px 0;display:flex;gap:14px;flex-wrap:wrap}
   .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
   .prazo{font-weight:600}
@@ -3130,34 +3131,37 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   // guarda os candidatos por item pro modal "escolher produto" ler depois,
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
-  const linhas = c.itens.map(it=>{
+  // Cards em vez de tabela — achado real (print do usuário): a tabela de 5
+  // colunas com texto longo em cada célula (descrição técnica do item,
+  // nome do produto, parágrafo de justificativa) ficava densa demais pra
+  // escanear, e os 3 botões de ação espremidos numa coluna estreita. Reusa
+  // o MESMO padrão visual já usado nos itens da aba Itens/margem (.item-row
+  // + .precos/.preco-box), em vez de inventar um layout novo só pra isso.
+  const cards = c.itens.map(it=>{
     _comparacaoCatalogoItensAtual[it.numero] = it;
     const naCotacao = _cotacaoSelecionados.has(String(it.numero));
     const principal = it.candidatos[0];
     const p = principal.produto || {};
     const vt = principal.validacao_tecnica;
-    // badge compacta de specs: reaproveita a MESMA validação determinística
+    // Pill de status + lista de pendências: mesma validação determinística
     // (medidas/material/características) que já roda pros itens que o motor
     // de matching compatibilizou — pega exatamente o caso real que motivou
     // isso ("Fita ... largura 50mm" vs sugestão "... 48mm x 50m": categoria
     // certa, medida errada, e a IA sozinha não tinha percebido).
-    // Achado real: o motivo do "Atende parcialmente" ficava só no title
-    // (tooltip) — quase ninguém passa o mouse ali, então a classificação
-    // parecia contradizer a justificativa em texto livre da IA logo ao lado
-    // (ex.: badge "parcial" + texto da IA dizendo "atende perfeitamente").
-    // Mostrar a pendência embaixo do badge resolve a aparência de
-    // contradição sem mudar a classificação em si.
-    let specsBadge = '';
+    let statusPill = '', pendenciasHTML = '';
     if(vt){
-      const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
-      const icone = vt.classificacao==='Não atende' ? '✗' : (vt.classificacao==='Atende' ? '✓' : '⚠');
+      const classeMap = {'Atende':'forte', 'Atende parcialmente':'medio', 'Não atende':'ruim'};
+      statusPill = `<span class="pill ${classeMap[vt.classificacao]||'fraco'}">${esc(vt.classificacao)}</span>`;
       const pendencias = [...vt.criticas, ...vt.avisos];
-      specsBadge = `<div style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`
-        + (pendencias.length ? `<div class="muted" style="font-size:10px;margin-top:1px">${esc(pendencias.join(' · '))}</div>` : '');
+      if(pendencias.length){
+        pendenciasHTML = `<ul class="muted" style="margin:4px 0 0;padding-left:18px;font-size:12px">${pendencias.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+      }
     }
     let mg='—', mgCls='';
     if(principal.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
     else if(principal.margem!=null){ mg=fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:''); mgCls=principal.margem>=0?'margem-pos':'margem-neg'; }
+    const vo = it.valor_orgao!=null ? fmtMoeda(it.valor_orgao) : '—';
+    const cu = principal.custo_comparavel!=null ? fmtMoeda(principal.custo_comparavel) : (p.preco_custo!=null ? fmtMoeda(p.preco_custo) : '—');
     const siteForn = linkSeguro(p.fornecedor_site);
     // 3 estados: já na cotação (desabilitado) · só 1 candidato (adiciona
     // direto) · 2 candidatos (abre modal pra escolher, mostrando o custo
@@ -3173,27 +3177,38 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
           + Adicionar na cotação
         </button>`;
     }
-    return `<tr>
-      <td style="white-space:nowrap">${esc(it.numero??'')}</td>
-      <td style="font-size:13px">${esc(it.descricao_item||'')}</td>
-      <td style="font-size:13px">${esc(p.descricao||'')}${specsBadge}</td>
-      <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
-      <td class="muted" style="font-size:12px">${esc(principal.justificativa||'')}</td>
-      <td style="white-space:nowrap">
+    // descrição completa do item vai truncada aqui (igual à aba Itens/
+    // margem) — o texto inteiro continua disponível no modal "detalhes".
+    const descBruta = it.descricao_item||'';
+    const descTitulo = descBruta.length > 140 ? esc(descBruta.slice(0,140))+'…' : esc(descBruta);
+    return `<div class="item-row">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <strong>Item ${esc(it.numero??'')}</strong>
+        ${statusPill}
+      </div>
+      <div class="muted" style="font-size:13px;margin-top:4px">${descTitulo}</div>
+      <div style="margin-top:10px;font-size:13px">${esc(p.descricao||'')}</div>
+      ${pendenciasHTML}
+      <div class="precos">
+        <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)</div></div>
+        <div class="preco-box"><div class="v">${cu}</div><div class="l">meu custo</div></div>
+        <div class="preco-box"><div class="v ${mgCls}">${mg}</div><div class="l">margem potencial</div></div>
+      </div>
+      ${principal.justificativa?`<div class="muted" style="font-size:12px;margin-top:8px">
+        <strong style="color:var(--txt)">Segundo a IA:</strong> ${esc(principal.justificativa)}
+      </div>`:''}
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
         ${acaoBtn}
-        <button class="btn ghost" onclick="abrirDetalheItemIA(${it.numero})" style="margin-left:4px;padding:2px 8px;font-size:11px">${ICN.detalhe} detalhes</button>
-        ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:4px;padding:2px 8px;font-size:11px">fornecedor ↗</a>`:''}
-      </td>
-    </tr>`;
+        <button class="btn ghost" onclick="abrirDetalheItemIA(${it.numero})" style="padding:4px 10px;font-size:12px">${ICN.detalhe} detalhes</button>
+        ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="padding:4px 10px;font-size:12px">fornecedor ↗</a>`:''}
+      </div>
+    </div>`;
   }).join('');
   return `<div style="margin-top:16px">
     ${aviso}
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
-    <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem. A validação de medidas/características abaixo do produto é automática (não é a IA) — confira sempre antes de confirmar.</p>
-    <div style="overflow-x:auto"><table>
-      <thead><tr><th>Item</th><th>Descrição</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table></div>
+    <p class="muted" style="font-size:11px;margin:2px 0 10px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem. O selo e as pendências são de uma checagem automática das medidas/características (não é a IA); "Segundo a IA" é a opinião dela em texto livre — as duas podem discordar entre si, confira sempre antes de confirmar.</p>
+    ${cards}
   </div>`;
 }
 
