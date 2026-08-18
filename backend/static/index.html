@@ -128,7 +128,7 @@
 
   .kpis-prop{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
 
-  .painel-widgets{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start}
+  .painel-widgets{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
   .widget{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
   .widget h3{font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0}
   .widget h3 .contagem{font-size:11px;font-weight:700;color:var(--destructive);
@@ -884,7 +884,9 @@
           </div>
         </div>
         <div class="field">
-          <label>Prazo final</label>
+          <label>Prazo final
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data limite para envio de propostas — no pregão eletrônico, é quando a sessão de disputa acontece. É a mesma data do "faltam X dias" mostrado nos cards, não a data de publicação do edital.</span></span>
+          </label>
           <div style="display:flex;gap:6px">
             <input type="date" id="f-data-de" onchange="loadEditais()" style="width:50%">
             <input type="date" id="f-data-ate" onchange="loadEditais()" style="width:50%">
@@ -1487,9 +1489,16 @@ function toggleAjuda(el, ev){
     }
     const r = bolha.getBoundingClientRect();
     const margem = 8;
+    // limite horizontal certo pra medir o "estourou a borda": dentro de
+    // .filtros-lateral (que tem overflow-x:hidden) um balão largo perto da
+    // quina esquerda saía cortado mesmo já "dentro" da viewport inteira,
+    // porque o corte acontece na borda da lateral, não na borda da tela —
+    // achado real com o hint do filtro de "Prazo final". Fora dela, usa a
+    // viewport inteira, como sempre foi.
+    const limite = scrollAncestor ? scrollAncestor.getBoundingClientRect() : {left: 0, right: innerWidth};
     let shift = 0;
-    if(r.left < margem) shift = margem - r.left;
-    else if(r.right > innerWidth - margem) shift = (innerWidth - margem) - r.right;
+    if(r.left < limite.left + margem) shift = (limite.left + margem) - r.left;
+    else if(r.right > limite.right - margem) shift = (limite.right - margem) - r.right;
     if(shift) el.style.setProperty('--ajuda-shift', shift+'px');
   });
 }
