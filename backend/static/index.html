@@ -2497,7 +2497,7 @@ async function salvarProduto(){
     unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site'),
     fornecedor_id: ($('#p-forn-sel') && $('#p-forn-sel').value) ? parseInt($('#p-forn-sel').value,10) : null};
-  if(!body.descricao){alert('Informe a descrição');return;}
+  if(!body.descricao){toast('Informe a descrição', 'erro');return;}
   const url = editandoId ? '/api/produtos/'+editandoId : '/api/produtos';
   const metodo = editandoId ? 'PUT' : 'POST';
   await api(url,{method:metodo,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -2692,7 +2692,7 @@ async function loadRegras(){
 }
 async function salvarRegra(){
   const body={tipo:$('#r-tipo').value,valor:$('#r-valor').value};
-  if(!body.valor){alert('Informe o valor');return;}
+  if(!body.valor){toast('Informe o valor', 'erro');return;}
   await api('/api/regras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#r-valor').value=''; loadRegras();
 }
@@ -2733,7 +2733,10 @@ function fecharFormDocumento(){
 
 async function salvarDocumento(){
   const nome=$('#d-nome').value.trim(), data_validade=$('#d-validade').value;
-  if(!nome || !data_validade){ alert('Informe o nome e a validade'); return; }
+  if(!nome || !data_validade){
+    toast(!nome && !data_validade ? 'Informe o nome e a validade' : !nome ? 'Informe o nome' : 'Informe a validade', 'erro');
+    return;
+  }
   const fd = new FormData();
   fd.append('nome', nome);
   fd.append('orgao_emissor', $('#d-orgao').value.trim());
@@ -4309,7 +4312,7 @@ async function confirmarItemEdital(numero){
 
 function baixarCotacao(){
   const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
-  if(!selecionados.length){ alert('Selecione ao menos um item para cotar.'); return; }
+  if(!selecionados.length){ toast('Selecione ao menos um item para cotar.', 'erro'); return; }
   const fretes = {};
   document.querySelectorAll('.cot-frete-entrada-item, .cot-frete-saida-item').forEach(el=>{
     const numero = el.dataset.numero;
