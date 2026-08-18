@@ -1558,6 +1558,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             # (evitar acionar a IA sem o usuário pedir explicitamente).
             "analisado": bool(ed.analise_ia),
             "itens_completados": bool(ed.itens_completados_em),
+            "itens_completados_qtd": ed.itens_completados_qtd or 0,
         },
         "itens": itens,
     }
@@ -2520,6 +2521,11 @@ def _rodar_completar_descricao_bg(edital_id: int):
             # instabilidade passageira da IA) nunca mais tentava de novo
             # sozinho, mesmo que uma tentativa futura pudesse dar certo.
             ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+            # achado real: itens_completados_em setado não significa que
+            # algo foi melhorado, só que a tentativa terminou -- guarda
+            # quantos itens essa tentativa atualizou de verdade, pra tela
+            # não anunciar "descrições completadas" quando não completou nada.
+            ed.itens_completados_qtd = atualizados
         db.commit()
         _completar_descricao_status[edital_id] = {
             "rodando": False, "erro": None, "status": resultado.get("status"),

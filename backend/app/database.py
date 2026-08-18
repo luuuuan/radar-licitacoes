@@ -63,6 +63,7 @@ _COLUNAS_NOVAS = {
         ("analise_ia", "TEXT"),
         ("analise_em", "TIMESTAMP"),
         ("itens_completados_em", "TIMESTAMP"),
+        ("itens_completados_qtd", "INTEGER DEFAULT 0"),
     ],
     "produtos_user": [("usuario_id", "INTEGER")],
 }

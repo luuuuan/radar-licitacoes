@@ -156,9 +156,19 @@ class Edital(Base):
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # já tentou completar a descrição dos itens lendo o PDF (ver
-    # app/itens_pdf.py) — marca mesmo sem sucesso, só pra não deixar o botão
-    # "buscar de novo" disparando à toa a cada visita à página.
+    # app/itens_pdf.py) — só marca quando a tentativa TERMINA com um
+    # resultado (status "ok"), mesmo que não tenha achado nada pra
+    # completar; assim uma falha real (sem_texto/erro_ia/etc.) continua
+    # tentando de novo sozinha na próxima visita à página, mas um "ok"
+    # sem melhorias não fica retentando à toa a cada visita.
     itens_completados_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # quantos itens a ÚLTIMA tentativa (status "ok") efetivamente
+    # atualizou — achado real: "itens_completados_em" setado não significa
+    # que algo foi melhorado, só que uma tentativa terminou; sem isso, a
+    # tela mostrava "descrições completadas" mesmo quando 0 itens tinham
+    # mudado (ou quando a tentativa mais recente falhou, mas um "ok"
+    # antigo tinha deixado o timestamp setado).
+    itens_completados_qtd: Mapped[int] = mapped_column(Integer, default=0)
 
     itens: Mapped[list["ItemEdital"]] = relationship(
         back_populates="edital", cascade="all, delete-orphan",

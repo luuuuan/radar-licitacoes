@@ -3780,8 +3780,12 @@ function _corpoItensEdital(d){
   // A API do PNCP às vezes traz a descrição cortada — o botão relê o
   // documento oficial do edital pra completar (mesma coisa que já roda
   // sozinha na 1ª vez que a aba abre; aqui é só pra forçar de novo).
-  const statusDescricao = d.edital.itens_completados
-    ? `${ICN.check||'✓'} Descrições completadas a partir do documento oficial.`
+  // achado real: itens_completados só diz que uma tentativa TERMINOU (ok),
+  // não que ela achou algo pra completar -- mostrar a mensagem sempre que
+  // itens_completados=true fazia ela aparecer fixa mesmo com 0 atualizados.
+  const qtdCompletados = d.edital.itens_completados_qtd || 0;
+  const statusDescricao = qtdCompletados > 0
+    ? `${ICN.check||'✓'} ${qtdCompletados} ${qtdCompletados===1?'descrição completada':'descrições completadas'} a partir do documento oficial.`
     : '';
   const toolbarDescricao = `<div class="muted" style="font-size:11px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${statusDescricao}

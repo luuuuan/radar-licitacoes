@@ -118,8 +118,44 @@ def test_bg_completa_descricao_e_atualiza_status(monkeypatch):
     assert item.descricao == "PAPEL A4, CAIXA COM 10 RESMAS DE 500 FOLHAS CADA"
     ed_check = db_check.get(Edital, edital_id)
     assert ed_check.itens_completados_em is not None
+    assert ed_check.itens_completados_qtd == 1
     # a trava foi liberada no final -- outra chamada consegue rodar de novo
     assert not app_main._lock_completar_descricao(edital_id).locked()
+
+
+def test_bg_ok_sem_nenhuma_melhoria_nao_marca_qtd_maior_que_zero(monkeypatch):
+    """Achado real: a tela mostrava "Descrições completadas a partir do
+    documento oficial" sempre que itens_completados_em estava setado --
+    mas isso só significa que uma tentativa TERMINOU (status "ok"), não
+    que ela achou algo pra completar. Um "ok" com 0 itens atualizados não
+    pode deixar itens_completados_qtd > 0."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(app_main, "SessionLocal", Session)
+
+    db_setup = Session()
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="Aquisicao", uf="SP")
+    db_setup.add(ed)
+    db_setup.commit()
+    db_setup.add(ItemEdital(edital_id=ed.id, numero=1, descricao="já está completa"))
+    db_setup.commit()
+    edital_id = ed.id
+    db_setup.close()
+
+    monkeypatch.setattr(app_main.settings, "DEEPINFRA_API_KEY", "fake-key")
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed: {"status": "ok", "arquivos": [{"titulo": "edital", "url": "http://x"}]})
+
+    from app import itens_pdf
+    monkeypatch.setattr(itens_pdf, "extrair_itens_completos", lambda *a, **k: {"status": "ok", "itens": []})
+
+    app_main._rodar_completar_descricao_bg(edital_id)
+
+    db_check = Session()
+    ed_check = db_check.get(Edital, edital_id)
+    assert ed_check.itens_completados_em is not None   # tentativa terminou -- não retenta sozinha
+    assert ed_check.itens_completados_qtd == 0           # mas não completou nada
 
 
 def test_bg_falha_na_extracao_nao_marca_como_completado(monkeypatch):
