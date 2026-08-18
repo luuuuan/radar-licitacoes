@@ -211,6 +211,79 @@ def test_recalculo_preserva_match_engajado_mesmo_virando_fraco(monkeypatch):
     assert ainda_existe.nivel == "fraco"   # score/nivel atualiza pra refletir a realidade
 
 
+def test_recalculo_usa_confirmacao_manual_pra_tirar_edital_de_fraco(monkeypatch):
+    """Achado real (visto em produção): um edital com itens confirmados
+    manualmente continuava "Baixa Compatibilidade · 0" no card, porque o
+    score AGREGADO do edital usava só o palpite fresco do motor de texto
+    -- que não sabe nada sobre confirmações manuais. O usuário já tinha
+    confirmado que os itens realmente batem (via confirmar_item_edital),
+    mas isso nunca refletia no score/nível geral, só no detalhe por item."""
+    db = _sessao()
+    u, ed, certo, outro = _semear(db)
+    # confirma manualmente "outro" -- sem chave de IA configurada (padrão
+    # dos testes) o motor não acha nada sozinho (nem reranker, nem código
+    # exato), então o palpite fresco pra esse item é score 0.0/fraco.
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.0, nivel="fraco",
+                  status="vou_participar",
+                  detalhe={"itens": [{
+                      "item": 1, "descricao_item": "Marcador de texto amarelo",
+                      "produto_id": outro.id, "produto": outro.descricao,
+                      "score_item": 0.0, "motivo": "confirmado manualmente",
+                      "confianca": "alta", "candidatos": [], "confirmado_manualmente": True,
+                  }]})
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is not None
+    assert ainda_existe.nivel == "forte"    # confirmação manual "puxa" o agregado pra cima
+    assert ainda_existe.score == 1.0
+    assert ainda_existe.itens_compativeis == 1
+    assert ainda_existe.detalhe["itens"][0]["confirmado_manualmente"] is True
+    assert ainda_existe.detalhe["itens"][0]["produto_id"] == outro.id
+
+
+def test_recalculo_agregado_usa_score_de_item_fora_do_detalhe_filtrado(monkeypatch):
+    """resultado.scores_por_item (TODO item avaliado) precisa alimentar o
+    agregado, não só o `detalhe` (que já vem filtrado -- só lista item com
+    score >= LIMIAR_ITEM_SUGESTAO). Achado ao implementar: usar só o
+    `detalhe` filtrado fazia um 2º item de score baixo (não confirmado,
+    nem presente no detalhe) sumir da conta de "fração do edital" —
+    inflando o agregado como se o edital tivesse só o item confirmado."""
+    db = _sessao()
+    u, ed, certo, outro = _semear(db)
+    # 2º item, sem relação nenhuma com o catálogo (score fresco 0.0,
+    # abaixo de LIMIAR_ITEM_SUGESTAO=0.3 -> nem entra em resultado.detalhe)
+    db.add(ItemEdital(edital_id=ed.id, numero=2, descricao="Item sem relação nenhuma com o catálogo",
+                      quantidade=1, valor_unitario=1.0))
+    db.commit()
+    # só o item 1 é confirmado manualmente
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.0, nivel="fraco",
+                  status="vou_participar",
+                  detalhe={"itens": [{
+                      "item": 1, "descricao_item": "Marcador de texto amarelo",
+                      "produto_id": outro.id, "produto": outro.descricao,
+                      "score_item": 0.0, "motivo": "confirmado manualmente",
+                      "confianca": "alta", "candidatos": [], "confirmado_manualmente": True,
+                  }]})
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is not None
+    # scores ajustados = [1.0 (confirmado), 0.0 (item 2, sem match)]:
+    # melhor=1.0, media_compativeis=1.0, fracao=1/2=0.5
+    # score = 1.0*0.65 + 1.0*0.25 + 0.5*0.10 = 0.95 (NÃO 1.0 -- só daria
+    # 1.0 se o item 2 tivesse sumido da conta por não estar no detalhe)
+    assert ainda_existe.score == 0.95
+    assert ainda_existe.nivel == "forte"
+    assert ainda_existe.itens_compativeis == 1
+
+
 def test_recalculo_continua_apagando_match_fraco_nao_engajado(monkeypatch):
     """Comportamento de antes preservado: Match "fraco" que o usuário nunca
     tocou (status "novo", não lido, não interessante, nada confirmado)

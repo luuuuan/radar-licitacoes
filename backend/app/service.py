@@ -286,32 +286,56 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
 
         era_novo = existente is None
         resultado = engine.avaliar(ed.objeto or "", itens_edt)
+
+        # Confirmação manual (ver confirmar_item_edital em main.py) é um
+        # sinal MAIS forte que o palpite fresco do reranker — o usuário
+        # olhou e disse "é este produto". Achado real: um edital com 9
+        # itens confirmados manualmente continuava "Baixa Compatibilidade
+        # · 0", porque o score AGREGADO usava só o palpite do motor, cego
+        # às confirmações (que só apareciam no detalhe por item). Mescla
+        # ANTES de decidir "fraco", com score 1.0 pros itens confirmados,
+        # e recalcula o agregado a partir daí — assim uma confirmação
+        # pode tirar o edital de "fraco".
+        detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
+        detalhe_final = _mesclar_confirmacoes_manuais(resultado.detalhe, detalhe_antigo, produtos_validos_ids)
+        # parte de TODO item avaliado (resultado.scores_por_item), não só do
+        # `detalhe` filtrado (que já exclui item de score baixo) — senão um
+        # item de confiança baixa some da conta de "fração do edital" só por
+        # não ter entrado no detalhe, mudando o agregado de itens que NEM
+        # foram confirmados.
+        scores_por_numero = {it["item"]: it["score_item"] for it in resultado.scores_por_item}
+        for it in detalhe_final:
+            if it.get("confirmado_manualmente"):
+                scores_por_numero[it["item"]] = 1.0
+        score_final, nivel_final, compativeis_final = MatchingEngine.agregar_de_scores(
+            list(scores_por_numero.values()))
+
         # não guardamos matches "fracos" (baixa compatibilidade): entopem a base
         # e não representam oportunidade real. Se um match existente virou fraco
         # (ex.: no recálculo após mudar o catálogo), removemos — A MENOS que o
         # usuário já tenha se engajado com ele (ver _match_engajado): aí só
         # atualiza score/nivel pra refletir a realidade, mas preserva a linha.
-        if resultado.nivel == "fraco":
+        if nivel_final == "fraco":
             if existente:
                 if _match_engajado(existente):
-                    existente.score = resultado.score
-                    existente.nivel = resultado.nivel
+                    existente.score = score_final
+                    existente.nivel = nivel_final
+                    existente.itens_compativeis = compativeis_final
+                    existente.detalhe = {"itens": detalhe_final}
                 else:
                     db.delete(existente)
                     existentes_map.pop(ed.id, None)
             continue
-        detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
         m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
         if existente is None:
             db.add(m)
             existentes_map[ed.id] = m   # evita recriar na mesma rodada
-        m.score = resultado.score
-        m.nivel = resultado.nivel
-        m.itens_compativeis = resultado.itens_compativeis
-        m.detalhe = {"itens": _mesclar_confirmacoes_manuais(
-            resultado.detalhe, detalhe_antigo, produtos_validos_ids)}
+        m.score = score_final
+        m.nivel = nivel_final
+        m.itens_compativeis = compativeis_final
+        m.detalhe = {"itens": detalhe_final}
         resumo["atualizados"] += 1
-        if resultado.nivel == "forte":
+        if nivel_final == "forte":
             resumo["fortes"] += 1
             if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
                 novos_fortes.append(ed)

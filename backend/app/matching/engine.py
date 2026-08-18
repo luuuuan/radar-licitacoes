@@ -125,6 +125,12 @@ class ResultadoMatch:
     nivel: str
     itens_compativeis: int
     detalhe: list[dict] = field(default_factory=list)
+    # score de TODO item avaliado (numero -> score_item), sem o filtro de
+    # confiança mínima que `detalhe` tem (que só lista item com
+    # score >= LIMIAR_ITEM_SUGESTAO) — usado por service.py pra recalcular
+    # o agregado depois de aplicar confirmações manuais sem perder itens
+    # de score baixo que ainda entram na conta de "fração do edital".
+    scores_por_item: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +232,8 @@ class MatchingEngine:
         alvos = itens if itens else [ItemEdt(numero=None, descricao=objeto or "")]
 
         scores_itens: list[float] = []
+        scores_por_item: list[dict] = []
         detalhe: list[dict] = []
-        compativeis = 0
 
         for it in alvos:
             texto_item = it.texto() or (objeto or "")
@@ -235,12 +241,7 @@ class MatchingEngine:
             sc, prod, motivo = self._score_item(it, texto_item=texto_item, scores=scores)
 
             scores_itens.append(sc)
-            # nível/score do EDITAL (agregado) continua exatamente o mesmo
-            # cálculo de sempre — não passa a depender de confiança por item
-            # nem de confirmação manual (isso é escopo separado, ver
-            # "confianca"/"candidatos" logo abaixo).
-            if sc >= settings.LIMIAR_ITEM:
-                compativeis += 1
+            scores_por_item.append({"item": it.numero, "score_item": sc})
 
             # confiança POR ITEM + candidatas — cobre uma faixa mais ampla
             # que só "sc >= LIMIAR_ITEM": é a faixa (LIMIAR_ITEM_SUGESTAO até
@@ -314,12 +315,29 @@ class MatchingEngine:
             })
 
         if not scores_itens:
-            return ResultadoMatch(0.0, "fraco", 0, [])
+            return ResultadoMatch(0.0, "fraco", 0, [], [])
 
+        score, nivel, compativeis_calc = self.agregar_de_scores(scores_itens)
+        detalhe.sort(key=lambda d: d["score_item"], reverse=True)
+        return ResultadoMatch(score, nivel, compativeis_calc, detalhe, scores_por_item)
+
+    @staticmethod
+    def agregar_de_scores(scores_itens: list[float]) -> tuple[float, str, int]:
+        """Calcula (score, nível, itens_compatíveis) agregados do edital a
+        partir de uma lista de scores por item — extraído de avaliar() pra
+        poder ser chamado de novo depois que confirmações manuais (que este
+        motor não sabe que existem, ele só vê texto x catálogo) substituem
+        o score de alguns itens por 1.0 (ver service.py
+        _gerar_matches_usuario), sem duplicar a fórmula. Achado real: um
+        edital com 9 itens confirmados manualmente continuava "Baixa
+        Compatibilidade · 0" porque o score agregado usava só o palpite
+        fresco do motor, cego às confirmações."""
+        if not scores_itens:
+            return 0.0, "fraco", 0
         melhor_item = max(scores_itens)
         comp = [s for s in scores_itens if s >= settings.LIMIAR_ITEM]
         media_comp = sum(comp) / len(comp) if comp else 0.0
-        fracao = compativeis / len(scores_itens)
+        fracao = len(comp) / len(scores_itens)
         # O melhor item domina (é o lead mais forte), reforçado pela QUALIDADE
         # MÉDIA dos itens compatíveis; a fração entra com peso pequeno. Isso
         # evita que 1 item fraco num edital gigante infle o score, mas mantém
@@ -341,8 +359,7 @@ class MatchingEngine:
                 and fracao < settings.FRACAO_MINIMA_FORTE):
             nivel = "medio"
 
-        detalhe.sort(key=lambda d: d["score_item"], reverse=True)
-        return ResultadoMatch(score, nivel, compativeis, detalhe)
+        return score, nivel, len(comp)
 
 
 def aplicar_regras_exclusao(objeto: str, itens: list[ItemEdt],
