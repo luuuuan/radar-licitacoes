@@ -276,7 +276,10 @@ def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str |
 def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     """OCR de PDF escaneado com Tesseract (grátis, local, sem GPU).
     Pesado: limita o nº de páginas para não sobrecarregar o servidor
-    (settings.OCR_MAX_PAGINAS, salvo `max_paginas` explícito).
+    (settings.OCR_MAX_PAGINAS, salvo `max_paginas` explícito) E o tempo
+    total (settings.OCR_ORCAMENTO_SEGUNDOS) -- rasterizar/reconhecer texto
+    numa CPU fraca não tem limite natural nenhum, então isso evita ficar
+    rodando indefinidamente e prendendo a trava do chamador pra sempre.
     Requer os binários do sistema 'tesseract-ocr' e 'poppler-utils'."""
     try:
         import pytesseract
@@ -284,18 +287,26 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     except Exception:
         log.warning("OCR indisponível (pytesseract/pdf2image não instalados).")
         return ""
+    inicio = time.monotonic()
+    orcamento = settings.OCR_ORCAMENTO_SEGUNDOS
     try:
         # converte só as primeiras páginas em imagem (DPI moderado p/ velocidade)
         imagens = convert_from_bytes(
             conteudo, dpi=settings.OCR_DPI, first_page=1,
-            last_page=max_paginas or settings.OCR_MAX_PAGINAS)
+            last_page=max_paginas or settings.OCR_MAX_PAGINAS,
+            timeout=orcamento)
     except Exception as e:
         log.warning("Falha ao rasterizar PDF para OCR: %s", e)
         return ""
     partes = []
     for img in imagens:
+        restante = orcamento - (time.monotonic() - inicio)
+        if restante <= 0:
+            log.warning("OCR interrompido por orçamento de tempo (%ds) -- aproveitando o que já foi lido.",
+                       orcamento)
+            break
         try:
-            partes.append(pytesseract.image_to_string(img, lang=settings.OCR_IDIOMA))
+            partes.append(pytesseract.image_to_string(img, lang=settings.OCR_IDIOMA, timeout=restante))
         except Exception as e:
             log.warning("Falha no OCR de uma página: %s", e)
             break

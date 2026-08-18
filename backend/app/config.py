@@ -163,6 +163,15 @@ class Settings(BaseSettings):
     OCR_MAX_PAGINAS: int = 12    # só as primeiras N páginas (controla custo de CPU)
     OCR_DPI: int = 200           # resolução do raster (menor = mais rápido)
     OCR_IDIOMA: str = "por"      # português
+    # Orçamento de tempo (segundos) pro OCR inteiro (rasterizar + reconhecer
+    # texto). Achado real: nem rasterizar (poppler) nem reconhecer texto
+    # (tesseract) tinham QUALQUER limite de tempo -- um PDF grande/denso
+    # numa CPU fraca (comum em plano básico de hospedagem) podia rodar por
+    # tempo indefinido, prendendo a trava do edital pra sempre (nem o botão
+    # manual de tentar de novo funcionava até o servidor reiniciar). Estoura
+    # o orçamento -> aproveita o texto já reconhecido até ali, best-effort,
+    # mesmo espírito do resto do OCR (nunca é obrigatório dar certo).
+    OCR_ORCAMENTO_SEGUNDOS: int = 90
 
     # Limite maior de páginas de OCR só pra itens_pdf.py (completar descrição
     # de item lendo o documento escaneado) — achado real: a tabela de itens

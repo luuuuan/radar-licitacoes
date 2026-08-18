@@ -34,7 +34,7 @@ def test_ocr_pdf_usa_max_paginas_explicito_em_vez_do_padrao(monkeypatch):
     monkeypatch.setattr(ia.settings, "OCR_ATIVO", True)
     ultimo_last_page = {}
 
-    def _fake_convert(conteudo, dpi, first_page, last_page):
+    def _fake_convert(conteudo, dpi, first_page, last_page, timeout=None):
         ultimo_last_page["valor"] = last_page
         return []   # lista vazia -- não precisa OCRar nenhuma imagem de verdade
 
@@ -48,7 +48,7 @@ def test_ocr_pdf_sem_max_paginas_explicito_cai_no_padrao_da_config(monkeypatch):
     monkeypatch.setattr(ia.settings, "OCR_ATIVO", True)
     ultimo_last_page = {}
 
-    def _fake_convert(conteudo, dpi, first_page, last_page):
+    def _fake_convert(conteudo, dpi, first_page, last_page, timeout=None):
         ultimo_last_page["valor"] = last_page
         return []
 
@@ -56,6 +56,40 @@ def test_ocr_pdf_sem_max_paginas_explicito_cai_no_padrao_da_config(monkeypatch):
         ia._ocr_pdf(b"fake")
 
     assert ultimo_last_page["valor"] == ia.settings.OCR_MAX_PAGINAS
+
+
+def test_ocr_pdf_repassa_o_orcamento_pro_rasterizador(monkeypatch):
+    monkeypatch.setattr(ia.settings, "OCR_ATIVO", True)
+    monkeypatch.setattr(ia.settings, "OCR_ORCAMENTO_SEGUNDOS", 77)
+    chamadas = {}
+
+    def _fake_convert(conteudo, dpi, first_page, last_page, timeout=None):
+        chamadas["timeout"] = timeout
+        return []
+
+    with patch("pdf2image.convert_from_bytes", side_effect=_fake_convert):
+        ia._ocr_pdf(b"fake")
+
+    assert chamadas["timeout"] == 77
+
+
+def test_ocr_pdf_para_de_processar_paginas_quando_estoura_o_orcamento(monkeypatch):
+    """Achado real: nem rasterizar (poppler) nem reconhecer texto (tesseract)
+    tinham limite de tempo -- um documento grande numa CPU fraca podia
+    rodar por tempo indefinido, prendendo a trava do edital pra sempre.
+    Simula o relógio andando mais rápido que o orçamento entre uma página
+    e outra: processa a 1ª, mas para antes da 2ª (best-effort com o que já
+    tinha, em vez de continuar indefinidamente)."""
+    monkeypatch.setattr(ia.settings, "OCR_ATIVO", True)
+    monkeypatch.setattr(ia.settings, "OCR_ORCAMENTO_SEGUNDOS", 5)
+
+    with patch("pdf2image.convert_from_bytes", return_value=["pagina1", "pagina2", "pagina3"]), \
+         patch("app.analise_edital.time.monotonic", side_effect=[0, 0, 6]), \
+         patch("pytesseract.image_to_string", return_value="texto da pagina 1") as mock_ocr:
+        texto = ia._ocr_pdf(b"fake")
+
+    assert mock_ocr.call_count == 1   # só a 1ª página -- parou antes de processar a 2ª
+    assert texto == "texto da pagina 1"
 
 
 def test_texto_de_pdf_bytes_passa_max_paginas_ocr_pro_fallback(monkeypatch):
