@@ -1472,12 +1472,11 @@ function _fecharAjuda(a){
   a.classList.remove('aberto', 'abre-baixo');
   a.style.removeProperty('--ajuda-shift');
 }
-function toggleAjuda(el, ev){
-  ev.stopPropagation();
-  const jaAberto = el.classList.contains('aberto');
-  document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
-  if(jaAberto) return;
-  el.classList.add('aberto');
+// Mede e corrige a posição do balão (compartilhado entre clique e hover —
+// achado real: só o clique chamava isso; passando o mouse por cima (hover
+// puro, só CSS, sem passar por essa função) o balão nunca ganhava o
+// deslocamento, saindo cortado do mesmo jeito de antes da correção).
+function _posicionarAjuda(el){
   requestAnimationFrame(()=>{
     const bolha = el.querySelector('.bolha');
     if(!bolha) return;
@@ -1486,6 +1485,8 @@ function toggleAjuda(el, ev){
     const scrollAncestor = el.closest('.filtros-lateral');
     if(scrollAncestor && bolha.getBoundingClientRect().top < scrollAncestor.getBoundingClientRect().top + 8){
       el.classList.add('abre-baixo');
+    } else {
+      el.classList.remove('abre-baixo');
     }
     const r = bolha.getBoundingClientRect();
     const margem = 8;
@@ -1500,8 +1501,25 @@ function toggleAjuda(el, ev){
     if(r.left < limite.left + margem) shift = (limite.left + margem) - r.left;
     else if(r.right > limite.right - margem) shift = (limite.right - margem) - r.right;
     if(shift) el.style.setProperty('--ajuda-shift', shift+'px');
+    else el.style.removeProperty('--ajuda-shift');
   });
 }
+function toggleAjuda(el, ev){
+  ev.stopPropagation();
+  const jaAberto = el.classList.contains('aberto');
+  document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
+  if(jaAberto) return;
+  el.classList.add('aberto');
+  _posicionarAjuda(el);
+}
+// hover (mouse parado em cima, sem clicar) também precisa da correção de
+// posição — delegado no document (mouseover, que borbulha, ao contrário de
+// mouseenter) pra cobrir todo "?" já existente e qualquer um novo, sem
+// precisar registrar um listener por elemento.
+document.addEventListener('mouseover', e=>{
+  const el = e.target.closest('.ajuda');
+  if(el && !el.classList.contains('aberto')) _posicionarAjuda(el);
+});
 // fecha tooltips abertos ao tocar fora (mobile)
 document.addEventListener('click', e=>{
   if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
