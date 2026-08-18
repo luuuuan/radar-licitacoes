@@ -836,10 +836,6 @@
   <section id="t-inicio" class="kpis hidden">
     <div class="painel-head">
       <span class="atualizado" id="painel-atualizado"></span>
-      <button class="btn ghost" type="button" onclick="abrirCalendarioCompromissos()" style="padding:7px 14px;font-size:13px">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-        Calendário
-      </button>
       <button class="btn-atualizar" type="button" id="btn-atualizar-painel" onclick="atualizarPainel(this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
         Atualizar
@@ -888,7 +884,7 @@
           </div>
         </div>
         <div class="field">
-          <label>Data de abertura</label>
+          <label>Prazo final</label>
           <div style="display:flex;gap:6px">
             <input type="date" id="f-data-de" onchange="loadEditais()" style="width:50%">
             <input type="date" id="f-data-ate" onchange="loadEditais()" style="width:50%">
@@ -1739,7 +1735,7 @@ function _agendaHTML(r){
   }).join('');
   const visiveis = r.sessoes.slice(0,4);
   const sessoesHtml = visiveis.length ? visiveis.map(s=>{
-    const {dia,mes} = _diaMes(s.data_abertura);
+    const {dia,mes} = _diaMes(s.data_sessao);
     const local = [s.municipio, s.uf].filter(Boolean).join('/');
     const meta = [s.modalidade, local].filter(Boolean).join(' · ');
     return `<div class="sessao" onclick="abrirPaginaEdital(${s.edital_id})">
@@ -1755,7 +1751,12 @@ function _agendaHTML(r){
         <button type="button" aria-label="Próxima semana" onclick="loadAgenda(_agendaOffset+1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
       </span>
     </h3>
-    <div class="sub">Sessões de disputa dos editais com match</div>
+    <div class="sub">Sessões de disputa dos editais com match
+      <button type="button" class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="abrirCalendarioCompromissos()">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:2px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Calendário
+      </button>
+    </div>
     <div class="semana">
       ${diasLbl.map(d=>`<div class="d">${d}</div>`).join('')}
       ${semanaHtml}
@@ -1773,7 +1774,7 @@ function abrirAgendaCompleta(){
   const {dia:d1,mes:m1} = _diaMes(_agendaAtual.inicio);
   const {dia:d2,mes:m2} = _diaMes(_agendaAtual.fim);
   const linhas = _agendaAtual.sessoes.map(s=>{
-    const {dia,mes} = _diaMes(s.data_abertura);
+    const {dia,mes} = _diaMes(s.data_sessao);
     const local = [s.municipio, s.uf].filter(Boolean).join('/');
     return `<tr>
       <td style="white-space:nowrap">${dia} ${mes}</td>
@@ -3548,6 +3549,11 @@ async function _renderPaginaEdital(editalId, aba){
   ['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
+  // achado real: abrir um edital a partir de fora da aba "Editais
+  // encontrados" (ex.: pelo Calendário de compromissos, na aba Início)
+  // deixava o destaque de aba preso na aba de origem -- a página do
+  // edital não é nenhuma das abas do menu, então nenhuma fica destacada.
+  document.querySelectorAll('nav button[data-tab]').forEach(b=>b.classList.remove('active'));
   $('#edital-cabecalho').innerHTML = _radarCarregandoHTML('Carregando o edital…');
   $('#edital-conteudo').innerHTML = '';
   // barra de abas só aparece depois que /detalhe termina — clicar numa aba

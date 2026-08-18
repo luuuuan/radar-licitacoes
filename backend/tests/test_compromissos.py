@@ -1,8 +1,10 @@
 """
 GET /api/compromissos: calendário de compromissos num intervalo qualquer
 (semana ou mês -- quem decide o intervalo é o front) juntando documentos de
-habilitação vencendo + editais que o usuário marcou "vou participar"
-abrindo. Rode com:  cd backend && pytest
+habilitação vencendo + editais que o usuário marcou "vou participar" com
+prazo final (data_encerramento -- não data_abertura, que no PNCP é
+dataAberturaProposta e quase sempre já passou; mesmo achado real de
+test_agenda.py). Rode com:  cd backend && pytest
 """
 import datetime
 
@@ -29,9 +31,9 @@ def _usuario(db, email="t@t.com"):
     return u
 
 
-def _edital_vou_participar(db, usuario, id_externo, data_abertura):
+def _edital_vou_participar(db, usuario, id_externo, data_encerramento):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
-                objeto="Aquisicao", uf="SP", data_abertura=data_abertura)
+                objeto="Aquisicao", uf="SP", data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.8, nivel="forte",
@@ -79,7 +81,7 @@ def test_edital_com_status_diferente_de_vou_participar_fica_de_fora():
     db = _sessao()
     u = _usuario(db)
     ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="X", uf="SP",
-               data_abertura=datetime.date(2026, 8, 20))
+               data_encerramento=datetime.date(2026, 8, 20))
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.8, nivel="forte", status="novo"))

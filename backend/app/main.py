@@ -1097,7 +1097,7 @@ def listar_editais(
     tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     valor_min: float | None = Query(None, ge=0),
     valor_max: float | None = Query(None, ge=0),
-    data_de: date | None = Query(None),
+    data_de: date | None = Query(None),   # filtra por data_encerramento (prazo final) -- ver achado em /api/agenda
     data_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     pagina: int = Query(1, ge=1),
@@ -1132,9 +1132,9 @@ def listar_editais(
     if valor_max is not None:
         filtro.append(Edital.valor_estimado <= valor_max)
     if data_de is not None:
-        filtro.append(Edital.data_abertura >= data_de)
+        filtro.append(Edital.data_encerramento >= data_de)
     if data_ate is not None:
-        filtro.append(Edital.data_abertura <= data_ate)
+        filtro.append(Edital.data_encerramento <= data_ate)
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
     # que pedem isso, em vez de precisar abrir cada um pra conferir.
@@ -2904,23 +2904,32 @@ def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
     (domingo a sábado). offset=0 é a semana atual, -1 a anterior, 1 a
     seguinte. Sem o filtro "ativo" que /api/resumo usa: navegar pra uma
     semana passada tem que continuar mostrando o que aconteceu, não some
-    só porque o edital já encerrou."""
+    só porque o edital já encerrou.
+
+    Usa data_encerramento (prazo final de propostas), NÃO data_abertura
+    (que no PNCP é dataAberturaProposta — quando a janela de propostas
+    ABRE, normalmente logo após a publicação, quase sempre já passado
+    quando o usuário está vendo o edital). Achado real: um edital com
+    "faltam 15 dias" (badge calculado com data_encerramento, igual em
+    toda a tela) aparecia no calendário com uma data já vencida, porque
+    data_abertura era usada aqui sozinha — data_encerramento é o mesmo
+    campo que já vira "dias_restantes" em todo o resto do app."""
     hoje = date.today()
     inicio = hoje - timedelta(days=(hoje.weekday() + 1) % 7) + timedelta(weeks=offset)
     fim = inicio + timedelta(days=6)
     linhas = db.execute(
         select(Edital, Match).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
-        .where(Edital.data_abertura.between(inicio, fim))
-        .order_by(Edital.data_abertura)
+        .where(Edital.data_encerramento.between(inicio, fim))
+        .order_by(Edital.data_encerramento)
     ).all()
-    datas_com_sessao = {ed.data_abertura for ed, _m in linhas}
+    datas_com_sessao = {ed.data_encerramento for ed, _m in linhas}
     dias = [{"data": (inicio + timedelta(days=i)).isoformat(),
              "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao} for i in range(7)]
     sessoes = [{
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
-        "valor_estimado": ed.valor_estimado, "data_abertura": ed.data_abertura.isoformat(),
+        "valor_estimado": ed.valor_estimado, "data_sessao": ed.data_encerramento.isoformat(),
     } for ed, _m in linhas]
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
 
@@ -2936,7 +2945,12 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     documentos de habilitação vencendo + editais que o usuário marcou "vou
     participar" abrindo. Junta os dois tipos numa lista só, ordenada por
     data, pra caber num card de calendário sem precisar de duas consultas
-    separadas no front."""
+    separadas no front.
+
+    Usa data_encerramento (prazo final de propostas) pro edital, não
+    data_abertura (dataAberturaProposta no PNCP — quando a janela de
+    propostas ABRE, quase sempre já passado) -- ver mesmo achado real em
+    /api/agenda, alguns metros acima."""
     if fim < inicio or (fim - inicio).days > _MAX_DIAS_COMPROMISSOS:
         raise HTTPException(400, "Intervalo inválido.")
 
@@ -2947,14 +2961,14 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     editais = db.execute(
         select(Edital).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id, Match.status == "vou_participar")
-        .where(Edital.data_abertura.between(inicio, fim))
+        .where(Edital.data_encerramento.between(inicio, fim))
     ).scalars().all()
 
     compromissos_lista = [{
         "tipo": "documento", "data": d.data_validade.isoformat(),
         "documento_id": d.id, "nome": d.nome, "link": d.link,
     } for d in docs] + [{
-        "tipo": "edital", "data": ed.data_abertura.isoformat(),
+        "tipo": "edital", "data": ed.data_encerramento.isoformat(),
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
         "valor_estimado": ed.valor_estimado,
