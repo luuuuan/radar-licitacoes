@@ -111,7 +111,7 @@ def test_bg_completa_descricao_e_atualiza_status(monkeypatch):
     app_main._rodar_completar_descricao_bg(edital_id)
 
     st = _completar_descricao_status[edital_id]
-    assert st == {"rodando": False, "erro": None, "status": "ok", "atualizados": 1}
+    assert st == {"rodando": False, "erro": None, "status": "ok", "detalhe": None, "atualizados": 1}
 
     db_check = Session()
     item = db_check.query(ItemEdital).filter_by(edital_id=edital_id, numero=24).first()
@@ -154,11 +154,44 @@ def test_bg_falha_na_extracao_nao_marca_como_completado(monkeypatch):
     app_main._rodar_completar_descricao_bg(edital_id)
 
     st = _completar_descricao_status[edital_id]
-    assert st == {"rodando": False, "erro": None, "status": "sem_texto", "atualizados": 0}
+    assert st == {"rodando": False, "erro": None, "status": "sem_texto", "detalhe": None, "atualizados": 0}
 
     db_check = Session()
     ed_check = db_check.get(Edital, edital_id)
     assert ed_check.itens_completados_em is None   # continua elegível pro disparo automático tentar de novo
+
+
+def test_bg_erro_ia_expoe_o_detalhe_pra_diagnostico(monkeypatch):
+    """Achado real: um "erro_ia" em produção não dava pra saber SE ERA
+    http_500, rate limit, timeout de rede etc. sem olhar log do servidor --
+    resultado.get("detalhe") (já devolvido por itens_pdf.extrair_itens_completos)
+    precisa chegar até o status exposto pra quem for investigar."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(app_main, "SessionLocal", Session)
+
+    db_setup = Session()
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="Aquisicao", uf="SP")
+    db_setup.add(ed)
+    db_setup.commit()
+    db_setup.add(ItemEdital(edital_id=ed.id, numero=24, descricao="curta"))
+    db_setup.commit()
+    edital_id = ed.id
+    db_setup.close()
+
+    monkeypatch.setattr(app_main.settings, "DEEPINFRA_API_KEY", "fake-key")
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed: {"status": "ok", "arquivos": [{"titulo": "edital", "url": "http://x"}]})
+
+    from app import itens_pdf
+    monkeypatch.setattr(itens_pdf, "extrair_itens_completos",
+                        lambda *a, **k: {"status": "erro_ia", "detalhe": "http_500"})
+
+    app_main._rodar_completar_descricao_bg(edital_id)
+
+    assert _completar_descricao_status[edital_id] == {
+        "rodando": False, "erro": None, "status": "erro_ia", "detalhe": "http_500", "atualizados": 0}
 
 
 def test_bg_sem_chave_deepinfra_marca_status_sem_ia(monkeypatch):

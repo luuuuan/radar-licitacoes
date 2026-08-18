@@ -2496,7 +2496,8 @@ def _rodar_completar_descricao_bg(edital_id: int):
             ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
         _completar_descricao_status[edital_id] = {
-            "rodando": False, "erro": None, "status": resultado.get("status"), "atualizados": atualizados}
+            "rodando": False, "erro": None, "status": resultado.get("status"),
+            "detalhe": resultado.get("detalhe"), "atualizados": atualizados}
     except Exception as e:
         db.rollback()
         logging.getLogger("itens_pdf").exception("Erro ao completar descrição de itens (edital %s)", edital_id)
