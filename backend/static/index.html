@@ -177,6 +177,12 @@
   .doc .meta{font-size:11px;color:var(--muted);margin-top:1px}
   .doc .prazo{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;flex-shrink:0;white-space:nowrap}
 
+  .compr-tabs{display:flex;gap:6px;margin-bottom:10px}
+  .compr-tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+    padding:6px 14px;border-radius:999px;cursor:pointer;font-size:12.5px;font-weight:600}
+  .compr-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .semana .n.vazio{visibility:hidden}
+
   .ver-mais{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;
     background:none;border:none;border-top:1px solid var(--line);color:var(--muted);
     font:inherit;font-size:12px;font-weight:600;padding:12px 0 0;margin-top:12px;
@@ -830,6 +836,10 @@
   <section id="t-inicio" class="kpis hidden">
     <div class="painel-head">
       <span class="atualizado" id="painel-atualizado"></span>
+      <button class="btn ghost" type="button" onclick="abrirCalendarioCompromissos()" style="padding:7px 14px;font-size:13px">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Calendário
+      </button>
       <button class="btn-atualizar" type="button" id="btn-atualizar-painel" onclick="atualizarPainel(this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
         Atualizar
@@ -875,6 +885,13 @@
                   onchange="loadEditais()" style="width:50%">
             <input type="number" id="f-valor-max" class="campo-valor" placeholder="máximo" min="0" step="any"
                   onchange="loadEditais()" style="width:50%">
+          </div>
+        </div>
+        <div class="field">
+          <label>Data de abertura</label>
+          <div style="display:flex;gap:6px">
+            <input type="date" id="f-data-de" onchange="loadEditais()" style="width:50%">
+            <input type="date" id="f-data-ate" onchange="loadEditais()" style="width:50%">
           </div>
         </div>
         <div class="field">
@@ -1780,6 +1797,130 @@ function abrirAgendaCompleta(){
   </div>`;
 }
 
+// ---- Calendário de compromissos: modal com abas Semana/Mês, juntando
+// documentos a vencer + editais marcados "vou participar" numa lista só
+// (GET /api/compromissos, intervalo calculado aqui conforme a aba ativa).
+let _comprModo='semana', _comprOffset=0, _comprAtual=null;
+
+function abrirCalendarioCompromissos(){
+  _comprModo='semana'; _comprOffset=0;
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:640px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Calendário de compromissos</h2>
+      <p class="muted" style="font-size:12px;margin-top:4px">Documentos a vencer e editais que você marcou "vou participar"</p>
+      <div class="compr-tabs" style="margin-top:12px">
+        <button type="button" id="compr-tab-semana" onclick="_trocarModoCompromissos('semana')">Semana</button>
+        <button type="button" id="compr-tab-mes" onclick="_trocarModoCompromissos('mes')">Mês</button>
+      </div>
+      <div id="compr-corpo">${_radarCarregandoHTML('Carregando...')}</div>
+    </div>
+  </div>`;
+  _carregarCompromissos();
+}
+
+function _trocarModoCompromissos(modo){
+  if(_comprModo===modo) return;
+  _comprModo=modo; _comprOffset=0;
+  _carregarCompromissos();
+}
+
+function _navCompromissos(delta, irParaHoje){
+  _comprOffset = irParaHoje ? 0 : _comprOffset+delta;
+  _carregarCompromissos();
+}
+
+function _isoLocalDate(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function _rangeCompromissos(){
+  const hoje = new Date();
+  if(_comprModo==='semana'){
+    const inicio = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()-hoje.getDay()+_comprOffset*7);
+    const fim = new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate()+6);
+    return {inicio, fim};
+  }
+  const primeiro = new Date(hoje.getFullYear(), hoje.getMonth()+_comprOffset, 1);
+  const ultimo = new Date(hoje.getFullYear(), hoje.getMonth()+_comprOffset+1, 0);
+  return {inicio: primeiro, fim: ultimo};
+}
+
+async function _carregarCompromissos(){
+  const corpo = $('#compr-corpo');
+  if(!corpo) return;
+  const tabS=$('#compr-tab-semana'), tabM=$('#compr-tab-mes');
+  if(tabS) tabS.classList.toggle('active', _comprModo==='semana');
+  if(tabM) tabM.classList.toggle('active', _comprModo==='mes');
+  corpo.innerHTML = _radarCarregandoHTML('Carregando...');
+  const {inicio, fim} = _rangeCompromissos();
+  try{
+    const r = await api(`/api/compromissos?inicio=${_isoLocalDate(inicio)}&fim=${_isoLocalDate(fim)}`);
+    _comprAtual = r;
+    if($('#compr-corpo')) $('#compr-corpo').innerHTML = _compromissosHTML(r);
+  }catch(e){
+    if($('#compr-corpo')) $('#compr-corpo').innerHTML = '<p class="muted" style="margin-top:10px">Não foi possível carregar o calendário agora.</p>';
+  }
+}
+
+function _compromissosHTML(r){
+  const hojeIso = _hojeIsoLocal();
+  const diasComCompromisso = new Set(r.dias_com_compromisso||[]);
+  const {inicio, fim} = _rangeCompromissos();
+  const {dia:d1,mes:m1} = _diaMes(_isoLocalDate(inicio));
+  const {dia:d2,mes:m2} = _diaMes(_isoLocalDate(fim));
+  const navHtml = `<span class="nav-semana">
+      <button type="button" aria-label="Anterior" onclick="_navCompromissos(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+      <button type="button" class="hoje-lbl" onclick="_navCompromissos(0,true)">Hoje</button>
+      <button type="button" aria-label="Próximo" onclick="_navCompromissos(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+    </span>`;
+  const diasLbl = ['D','S','T','Q','Q','S','S'];
+  const rotuloDias = diasLbl.map(d=>`<div class="d">${d}</div>`).join('');
+  let celulasHtml;
+  if(_comprModo==='semana'){
+    celulasHtml = Array.from({length:7}, (_,i)=>{
+      const d = new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate()+i);
+      const iso = _isoLocalDate(d);
+      const cls=['n']; if(iso===hojeIso) cls.push('hoje'); if(diasComCompromisso.has(iso)) cls.push('tem');
+      return `<div class="${cls.join(' ')}">${d.getDate()}</div>`;
+    }).join('');
+  } else {
+    const vazias = Array.from({length:inicio.getDay()}, ()=>'<div class="n vazio"></div>').join('');
+    const dias = Array.from({length:fim.getDate()}, (_,i)=>{
+      const d = new Date(inicio.getFullYear(), inicio.getMonth(), i+1);
+      const iso = _isoLocalDate(d);
+      const cls=['n']; if(iso===hojeIso) cls.push('hoje'); if(diasComCompromisso.has(iso)) cls.push('tem');
+      return `<div class="${cls.join(' ')}">${i+1}</div>`;
+    }).join('');
+    celulasHtml = vazias + dias;
+  }
+  const lista = (r.compromissos||[]).map(c=>{
+    const {dia,mes} = _diaMes(c.data);
+    if(c.tipo==='documento'){
+      const link = linkSeguro(c.link);
+      return `<div class="sessao" style="cursor:default">
+        <div class="quando"><div class="dia">${dia}</div><div class="mes">${mes}</div></div>
+        <div class="info"><div class="org">📄 ${esc(c.nome)}</div>
+          <div class="meta">Documento a vencer${link?` · <a href="${esc(link)}" target="_blank" onclick="event.stopPropagation()">abrir ↗</a>`:''}</div></div>
+      </div>`;
+    }
+    const local = [c.municipio, c.uf].filter(Boolean).join('/');
+    const meta = [c.modalidade, local].filter(Boolean).join(' · ');
+    return `<div class="sessao" onclick="fecharModal();abrirPaginaEdital(${c.edital_id})">
+      <div class="quando"><div class="dia">${dia}</div><div class="mes">${mes}</div></div>
+      <div class="info"><div class="org">📢 ${esc(c.orgao||'Órgão não informado')}</div>
+        <div class="meta">${esc(meta)}</div></div>
+    </div>`;
+  }).join('');
+  return `<p class="muted" style="font-size:12px;display:flex;justify-content:space-between;align-items:center;margin:2px 0 0">
+      <span>${d1} ${m1} – ${d2} ${m2}</span>${navHtml}
+    </p>
+    <div class="semana" style="margin-top:10px">${rotuloDias}${celulasHtml}</div>
+    <div class="sessoes" style="margin-top:14px;max-height:320px;overflow-y:auto">
+      ${lista || '<p class="muted" style="font-size:12px">Nenhum compromisso neste período.</p>'}
+    </div>`;
+}
+
 function _statusDocumento(d){
   const dias = d.dias_para_vencer;
   if(dias<0) return {cor:'var(--destructive)', bg:'rgba(239,68,68,.14)', rotulo:'vencido'};
@@ -2047,6 +2188,8 @@ function limparFiltros(){
   $('#f-busca-item').value = '';
   $('#f-valor-min').value = '';
   $('#f-valor-max').value = '';
+  $('#f-data-de').value = '';
+  $('#f-data-ate').value = '';
   _atualizarBuscaPorScroll();
   loadEditais();
   fecharFiltrosMobile();
@@ -2061,11 +2204,13 @@ async function loadEditais(resetPagina=true){
         tipo=$('#f-tipo') ? $('#f-tipo').value : 'todos',
         busca=$('#f-busca-item') ? $('#f-busca-item').value.trim() : '',
         vmin=$('#f-valor-min') ? $('#f-valor-min').value : '',
-        vmax=$('#f-valor-max') ? $('#f-valor-max').value : '';
+        vmax=$('#f-valor-max') ? $('#f-valor-max').value : '',
+        dde=$('#f-data-de') ? $('#f-data-de').value : '',
+        date_=$('#f-data-ate') ? $('#f-data-ate').value : '';
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
   const temFiltroAtivo = !!(nivel || ufs.length || st || nl || hoje ||
-    tipo!=='todos' || busca || vmin!=='' || vmax!=='');
+    tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
   const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
@@ -2078,6 +2223,8 @@ async function loadEditais(resetPagina=true){
   if(busca) qs.set('busca_item',busca);
   if(vmin!=='') qs.set('valor_min',vmin);
   if(vmax!=='') qs.set('valor_max',vmax);
+  if(dde!=='') qs.set('data_de',dde);
+  if(date_!=='') qs.set('data_ate',date_);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   const semMatch = r.sem_match||[];

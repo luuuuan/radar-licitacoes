@@ -1097,6 +1097,8 @@ def listar_editais(
     tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     valor_min: float | None = Query(None, ge=0),
     valor_max: float | None = Query(None, ge=0),
+    data_de: date | None = Query(None),
+    data_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
@@ -1129,6 +1131,10 @@ def listar_editais(
         filtro.append(Edital.valor_estimado >= valor_min)
     if valor_max is not None:
         filtro.append(Edital.valor_estimado <= valor_max)
+    if data_de is not None:
+        filtro.append(Edital.data_abertura >= data_de)
+    if data_ate is not None:
+        filtro.append(Edital.data_abertura <= data_ate)
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
     # que pedem isso, em vez de precisar abrir cada um pra conferir.
@@ -2917,6 +2923,46 @@ def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
         "valor_estimado": ed.valor_estimado, "data_abertura": ed.data_abertura.isoformat(),
     } for ed, _m in linhas]
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
+
+
+_MAX_DIAS_COMPROMISSOS = 62  # ~2 meses -- trava de custo, evita varredura de intervalo absurdo
+
+
+@app.get("/api/compromissos")
+def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_current_user),
+                 db: Session = Depends(get_session)):
+    """Calendário de compromissos num intervalo qualquer (semana OU mês —
+    quem decide o intervalo é o front, ver abrirCalendarioCompromissos()):
+    documentos de habilitação vencendo + editais que o usuário marcou "vou
+    participar" abrindo. Junta os dois tipos numa lista só, ordenada por
+    data, pra caber num card de calendário sem precisar de duas consultas
+    separadas no front."""
+    if fim < inicio or (fim - inicio).days > _MAX_DIAS_COMPROMISSOS:
+        raise HTTPException(400, "Intervalo inválido.")
+
+    docs = db.execute(
+        select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True,  # noqa: E712
+                                Documento.data_validade.between(inicio, fim))
+    ).scalars().all()
+    editais = db.execute(
+        select(Edital).join(Match, Match.edital_id == Edital.id)
+        .where(Match.usuario_id == user.id, Match.status == "vou_participar")
+        .where(Edital.data_abertura.between(inicio, fim))
+    ).scalars().all()
+
+    compromissos_lista = [{
+        "tipo": "documento", "data": d.data_validade.isoformat(),
+        "documento_id": d.id, "nome": d.nome, "link": d.link,
+    } for d in docs] + [{
+        "tipo": "edital", "data": ed.data_abertura.isoformat(),
+        "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+        "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
+        "valor_estimado": ed.valor_estimado,
+    } for ed in editais]
+    compromissos_lista.sort(key=lambda c: c["data"])
+    dias_com_compromisso = sorted({c["data"] for c in compromissos_lista})
+    return {"inicio": inicio.isoformat(), "fim": fim.isoformat(),
+            "dias_com_compromisso": dias_com_compromisso, "compromissos": compromissos_lista}
 
 
 class PropostaIn(BaseModel):

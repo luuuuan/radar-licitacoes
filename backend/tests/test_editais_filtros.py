@@ -26,9 +26,10 @@ def _usuario(db):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None):
+def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, data_abertura=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
-                objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado)
+                objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
+                data_abertura=data_abertura)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -53,7 +54,8 @@ def _edital_sem_match(db, id_externo, itens=None, data_encerramento=None, uf="SP
 def _listar(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
-                  tipo="todos", valor_min=None, valor_max=None, busca_item=None,
+                  tipo="todos", valor_min=None, valor_max=None,
+                  data_de=None, data_ate=None, busca_item=None,
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
     return listar_editais(user=user, db=db, **padrao)
@@ -101,6 +103,55 @@ def test_edital_sem_valor_estimado_fica_de_fora_quando_ha_filtro_de_valor():
     _edital_com_match(db, u, "ed1", valor_estimado=None)
 
     r = _listar(db, u, valor_min=100)
+    assert r["total"] == 0
+
+
+# --------- filtro de data de abertura (data_de/data_ate) --------- #
+
+def test_data_de_exclui_editais_que_abrem_antes():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=datetime.date(2026, 8, 1))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=datetime.date(2026, 8, 20))
+
+    r = _listar(db, u, data_de=datetime.date(2026, 8, 10))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed2.id
+
+
+def test_data_ate_exclui_editais_que_abrem_depois():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    ed1 = _edital_com_match(db, u, "ed1", data_abertura=datetime.date(2026, 8, 1))
+    _edital_com_match(db, u, "ed2", data_abertura=datetime.date(2026, 8, 20))
+
+    r = _listar(db, u, data_ate=datetime.date(2026, 8, 10))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed1.id
+
+
+def test_faixa_de_data_combinada_de_e_ate():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=datetime.date(2026, 8, 1))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=datetime.date(2026, 8, 15))
+    _edital_com_match(db, u, "ed3", data_abertura=datetime.date(2026, 8, 28))
+
+    r = _listar(db, u, data_de=datetime.date(2026, 8, 10), data_ate=datetime.date(2026, 8, 20))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed2.id
+
+
+def test_edital_sem_data_abertura_fica_de_fora_quando_ha_filtro_de_data():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=None)
+
+    r = _listar(db, u, data_de=datetime.date(2026, 1, 1))
     assert r["total"] == 0
 
 
