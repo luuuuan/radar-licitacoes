@@ -1331,6 +1331,13 @@
         <div id="tg-status" class="muted" style="font-size:13px">—</div>
         <div id="tg-acoes" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
+      <div id="tg-box-2" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="muted" style="font-size:12px">2º contato <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Um segundo Telegram (ex.: sócio, outro responsável) que recebe os mesmos avisos, de forma independente.</span></span></span>
+        </div>
+        <div id="tg-status-2" class="muted" style="font-size:13px;margin-top:4px">—</div>
+        <div id="tg-acoes-2" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
 
       <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
       <h3 style="margin:0 0 2px">Aviso de abertura
@@ -2529,10 +2536,11 @@ async function loadDocumentos(){
     else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
     const link = linkSeguro(d.link);
     return `<tr>
-      <td>${esc(d.nome)}${link?` <a href="${esc(link)}" target="_blank" title="Abrir documento" style="text-decoration:none">🔗</a>`:''}${d.tem_arquivo?' <span title="Arquivo anexado — usado na verificação por IA" style="font-size:11px">📎</span>':''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
+      <td>${esc(d.nome)}${d.tem_arquivo?' <span title="Arquivo anexado — usado na verificação por IA" style="font-size:11px">📎</span>':''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
       <td>${d.data_validade.split('-').reverse().join('/')}</td>
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
+        ${link?`<a class="btn ghost" href="${esc(link)}" target="_blank">abrir ↗</a>`:''}
         <button class="btn ghost" onclick="editarDocumento(${d.id})">editar</button>
         <button class="btn ghost discreto" onclick="delDocumento(${d.id})">excluir</button>
       </td></tr>`;
@@ -4441,7 +4449,8 @@ async function loadPerfil(){
   // máscaras (idempotente: só liga uma vez)
   if(!$('#pf-doc').dataset.mask){ aplicarMascara($('#pf-doc'), mascaraDoc); $('#pf-doc').dataset.mask='1'; }
   if(!$('#pf-cep').dataset.mask){ aplicarMascara($('#pf-cep'), mascaraCep); $('#pf-cep').dataset.mask='1'; }
-  carregarVinculoTelegram();
+  carregarVinculoTelegram(1);
+  carregarVinculoTelegram(2);
 }
 // undefined = nenhuma alteração pendente (salvarPerfil não envia logo_base64,
 // mantém a atual); '' = removida; string = nova logo escolhida
@@ -4476,38 +4485,41 @@ function removerLogoPerfil(){
   $('#pf-logo-status').textContent = 'Logo será removida ao salvar.';
 }
 
-async function carregarVinculoTelegram(){
-  const st=$('#tg-status'), ac=$('#tg-acoes');
+async function carregarVinculoTelegram(slot){
+  slot = slot || 1;
+  const st=$(slot===2?'#tg-status-2':'#tg-status'), ac=$(slot===2?'#tg-acoes-2':'#tg-acoes');
   try{
-    const v = await api('/api/telegram/vinculo');
+    const v = await api('/api/telegram/vinculo?slot='+slot);
     if(!v.disponivel){
       st.textContent = 'Conexão com o Telegram indisponível no momento.';
       ac.innerHTML=''; return;
     }
     if(v.conectado){
       st.innerHTML = '✓ <b style="color:var(--forte)">Telegram conectado</b> — você receberá os avisos por aqui.';
-      ac.innerHTML = `<button class="btn ghost" onclick="desconectarTelegram()">Desconectar</button>`;
+      ac.innerHTML = `<button class="btn ghost" onclick="desconectarTelegram(${slot})">Desconectar</button>`;
     } else {
       st.innerHTML = 'Telegram <b>não conectado</b>.';
-      ac.innerHTML = `<a class="btn" href="${v.link}" target="_blank" onclick="aguardarConexaoTelegram()">Conectar meu Telegram ↗︎</a>`;
+      ac.innerHTML = `<a class="btn" href="${v.link}" target="_blank" onclick="aguardarConexaoTelegram(${slot})">Conectar ${slot===2?'este':'meu'} Telegram ↗︎</a>`;
     }
   }catch(e){ st.textContent='Não foi possível carregar o status do Telegram.'; }
 }
 
-function aguardarConexaoTelegram(){
+function aguardarConexaoTelegram(slot){
+  slot = slot || 1;
   // após abrir o bot, fica checando alguns segundos se a conexão chegou
   toast('Abra o bot e toque em Iniciar. Estou aguardando a conexão...', 'aviso', 6000);
   let n=0;
   const t=setInterval(async()=>{
-    const v=await api('/api/telegram/vinculo');
-    if(v.conectado){ clearInterval(t); carregarVinculoTelegram(); toast('Telegram conectado!', 'ok', 4000); }
+    const v=await api('/api/telegram/vinculo?slot='+slot);
+    if(v.conectado){ clearInterval(t); carregarVinculoTelegram(slot); toast('Telegram conectado!', 'ok', 4000); }
     if(++n>20) clearInterval(t);  // ~60s
   }, 3000);
 }
 
-async function desconectarTelegram(){
-  await api('/api/telegram/desvincular',{method:'POST'});
-  carregarVinculoTelegram();
+async function desconectarTelegram(slot){
+  slot = slot || 1;
+  await api('/api/telegram/desvincular?slot='+slot,{method:'POST'});
+  carregarVinculoTelegram(slot);
   toast('Telegram desconectado.', 'aviso', 3000);
 }
 

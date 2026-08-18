@@ -85,6 +85,8 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("logo_base64", "TEXT"),
     ("versao_catalogo", "INTEGER DEFAULT 0"),
     ("versao_documentos", "INTEGER DEFAULT 0"),
+    ("telegram_chat_id_2", "VARCHAR(64)"),
+    ("telegram_codigo_2", "VARCHAR(32)"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
 for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),

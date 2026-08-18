@@ -55,6 +55,12 @@ class Usuario(Base):
     gemini_key_cifrada: Mapped[str | None] = mapped_column(Text, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     telegram_codigo: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # 2º contato do Telegram (ex.: sócio, outro responsável) -- recebe os
+    # MESMOS avisos do 1º, com sua própria vinculação/código (mesmo padrão),
+    # mas compartilha a preferência notif_telegram (é "este usuário quer
+    # Telegram", não um canal à parte por contato).
+    telegram_chat_id_2: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_codigo_2: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     notif_email: Mapped[bool] = mapped_column(Boolean, default=True)
     notif_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
     # aviso de editais fortes que vão ABRIR em breve (X dias antes da abertura)

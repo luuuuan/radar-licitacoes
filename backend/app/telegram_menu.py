@@ -105,11 +105,19 @@ def contar_pendentes(db: Session, usuario: Usuario) -> dict[str, int]:
     return {chave: len(buscar(db, usuario)) for chave, (_, _, buscar, _) in CATEGORIAS.items()}
 
 
+def _chats_telegram(usuario: Usuario) -> list[str]:
+    """Contatos de Telegram vinculados a este usuário (1 ou 2 -- ver
+    Usuario.telegram_chat_id_2, um 2º contato que recebe os mesmos avisos)."""
+    return [c for c in (usuario.telegram_chat_id, usuario.telegram_chat_id_2) if c]
+
+
 def enviar_resumo(db: Session, usuario: Usuario) -> bool:
-    """Manda o menu com botões (uma linha por categoria com pendência).
-    Não manda nada se o usuário não tem Telegram conectado ou não há
-    absolutamente nada pendente em nenhuma categoria."""
-    if not (usuario.notif_telegram and usuario.telegram_chat_id):
+    """Manda o menu com botões (uma linha por categoria com pendência) pra
+    TODOS os contatos de Telegram vinculados a este usuário. Não manda nada
+    se o usuário não tem nenhum Telegram conectado ou não há absolutamente
+    nada pendente em nenhuma categoria."""
+    chats = _chats_telegram(usuario)
+    if not (usuario.notif_telegram and chats):
         return False
     contagens = contar_pendentes(db, usuario)
     pendentes = {k: v for k, v in contagens.items() if v > 0}
@@ -120,13 +128,19 @@ def enviar_resumo(db: Session, usuario: Usuario) -> bool:
     total = sum(pendentes.values())
     titulo = f"📋 Você tem {total} aviso(s) novo(s)"
     corpo = "Escolha o que quer ver agora:"
-    return _tg.enviar_menu(usuario.telegram_chat_id, titulo, corpo, botoes)
+    enviou = False
+    for chat_id in chats:
+        enviou = _tg.enviar_menu(chat_id, titulo, corpo, botoes) or enviou
+    return enviou
 
 
-def mostrar_categoria(db: Session, usuario: Usuario, categoria: str) -> int:
+def mostrar_categoria(db: Session, usuario: Usuario, categoria: str, chat_id: str) -> int:
     """Envia os editais/documentos pendentes daquela categoria (uma mensagem
     por item, como já era) e marca todos como vistos. Retorna quantos
-    enviou. Chamado a partir do toque no botão (callback_query)."""
+    enviou. Chamado a partir do toque no botão (callback_query) -- `chat_id`
+    é o chat que TOCOU (pode ser o 1º ou o 2º contato do usuário); manda a
+    resposta pra ele especificamente, não pra um contato fixo, senão o 2º
+    contato tocando no botão faria a resposta ir pro 1º."""
     cfg = CATEGORIAS.get(categoria)
     if not cfg:
         return 0
@@ -141,7 +155,7 @@ def mostrar_categoria(db: Session, usuario: Usuario, categoria: str) -> int:
             nivel = "forte" if categoria == "forte" else m.nivel
             it = formato.item_edital(ed, nivel=nivel)
             tit, corpo, link = formato.telegram_item(titulo_msg, it)
-            _tg.enviar_para_chat(usuario.telegram_chat_id, tit, corpo, botao_url=link)
+            _tg.enviar_para_chat(chat_id, tit, corpo, botao_url=link)
             _marcar_visto(categoria, m)
     else:  # documento
         hoje = date.today()
@@ -150,7 +164,7 @@ def mostrar_categoria(db: Session, usuario: Usuario, categoria: str) -> int:
             situacao = f"VENCIDO há {abs(dias)} dia(s)" if dias < 0 else f"vence em {dias} dia(s)"
             corpo = (f"Emissor: {d.orgao_emissor or '-'}\nValidade: {d.data_validade} ({situacao})"
                     + (f"\nObs.: {d.observacao}" if d.observacao else ""))
-            _tg.enviar_para_chat(usuario.telegram_chat_id, f"{emoji} {d.nome}", corpo,
+            _tg.enviar_para_chat(chat_id, f"{emoji} {d.nome}", corpo,
                                  botao_url=d.link or None, botao_texto="Abrir documento")
             _marcar_visto(categoria, d)
 

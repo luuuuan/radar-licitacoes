@@ -366,11 +366,12 @@ def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict],
             html = formato.email_html(titulo, intro, itens)
             texto = formato.email_texto(intro, itens)
             enviou = email_mod.enviar_para(usuario.email, titulo, texto, html=html) or enviou
-        if "telegram" in canais and usuario.notif_telegram and usuario.telegram_chat_id:
+        chats = [c for c in (usuario.telegram_chat_id, usuario.telegram_chat_id_2) if c]
+        if "telegram" in canais and usuario.notif_telegram and chats:
             for it in itens:
                 tit, corpo, link = formato.telegram_item(titulo, it)
-                telegram_mod.enviar_para_chat(usuario.telegram_chat_id, tit, corpo,
-                                              botao_url=link)
+                for chat_id in chats:
+                    telegram_mod.enviar_para_chat(chat_id, tit, corpo, botao_url=link)
             enviou = True
     except Exception:
         log.exception("Falha ao notificar (lote) usuário %s", usuario.id)

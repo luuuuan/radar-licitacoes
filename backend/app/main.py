@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -508,30 +508,47 @@ def consultar_cep(cep: str, user: Usuario = Depends(_auth.get_current_user)):
 
 
 # ===================== VÍNCULO DO TELEGRAM (multiusuário) ===================== #
+def _campos_telegram(slot: int) -> tuple[str, str]:
+    """slot 1 = contato principal, slot 2 = contato adicional (ex.: sócio,
+    outro responsável) -- mesmo par código/chat_id, duplicado em Usuario
+    pra receber os mesmos avisos de forma independente."""
+    if slot == 2:
+        return "telegram_codigo_2", "telegram_chat_id_2"
+    return "telegram_codigo", "telegram_chat_id"
+
+
 @app.get("/api/telegram/vinculo")
-def telegram_vinculo(user: Usuario = Depends(_auth.get_current_user),
+def telegram_vinculo(slot: int = Query(1), user: Usuario = Depends(_auth.get_current_user),
                      db: Session = Depends(get_session)):
-    """Devolve o link para o usuário conectar o Telegram dele ao bot do Radar.
-    Gera um código único na primeira vez."""
-    if not user.telegram_codigo:
-        user.telegram_codigo = _secrets_auth.token_urlsafe(8)
+    """Devolve o link para o usuário conectar um Telegram (slot 1 = contato
+    principal, slot 2 = um contato adicional) ao bot do Radar. Gera um
+    código único na primeira vez."""
+    if slot not in (1, 2):
+        raise HTTPException(400, "slot inválido")
+    campo_codigo, campo_chat = _campos_telegram(slot)
+    if not getattr(user, campo_codigo):
+        setattr(user, campo_codigo, _secrets_auth.token_urlsafe(8))
         db.commit()
     bot = settings.TELEGRAM_BOT_USERNAME
     disponivel = bool(settings.TELEGRAM_BOT_TOKEN and bot)
-    link = f"https://t.me/{bot}?start={user.telegram_codigo}" if disponivel else ""
+    codigo = getattr(user, campo_codigo)
+    link = f"https://t.me/{bot}?start={codigo}" if disponivel else ""
     return {
         "disponivel": disponivel,
         "bot": bot,
-        "codigo": user.telegram_codigo,
+        "codigo": codigo,
         "link": link,
-        "conectado": bool(user.telegram_chat_id),
+        "conectado": bool(getattr(user, campo_chat)),
     }
 
 
 @app.post("/api/telegram/desvincular")
-def telegram_desvincular(user: Usuario = Depends(_auth.get_current_user),
+def telegram_desvincular(slot: int = Query(1), user: Usuario = Depends(_auth.get_current_user),
                          db: Session = Depends(get_session)):
-    user.telegram_chat_id = None
+    if slot not in (1, 2):
+        raise HTTPException(400, "slot inválido")
+    _, campo_chat = _campos_telegram(slot)
+    setattr(user, campo_chat, None)
     db.commit()
     return {"ok": True}
 
@@ -562,10 +579,14 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
         if dado.startswith("radar:") and chat_id_cb:
             categoria = dado.split(":", 1)[1]
             u = db.execute(
-                select(Usuario).where(Usuario.telegram_chat_id == chat_id_cb)
+                select(Usuario).where(or_(Usuario.telegram_chat_id == chat_id_cb,
+                                          Usuario.telegram_chat_id_2 == chat_id_cb))
             ).scalars().first()
             if u and categoria in telegram_menu.CATEGORIAS:
-                telegram_menu.mostrar_categoria(db, u, categoria)
+                # manda pro chat que TOCOU no botão (pode ser o 2º contato) --
+                # não pro chat_id "principal" fixo, senão a resposta vai pro
+                # contato errado quando quem clicou foi o 2º.
+                telegram_menu.mostrar_categoria(db, u, categoria, chat_id_cb)
                 telegram_menu.enviar_resumo(db, u)  # menu de novo com o que restou
         return {"ok": True}
 
@@ -578,8 +599,12 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
         codigo = partes[1].strip() if len(partes) > 1 else ""
         if codigo:
             u = db.execute(select(Usuario).where(Usuario.telegram_codigo == codigo)).scalars().first()
+            campo_chat = "telegram_chat_id"
+            if not u:
+                u = db.execute(select(Usuario).where(Usuario.telegram_codigo_2 == codigo)).scalars().first()
+                campo_chat = "telegram_chat_id_2"
             if u:
-                u.telegram_chat_id = chat_id
+                setattr(u, campo_chat, chat_id)
                 u.notif_telegram = True
                 db.commit()
                 from .notifications import telegram as _tg
@@ -1733,7 +1758,8 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
             alvos = db.execute(
                 select(Usuario).where(Usuario.ativo == True,             # noqa: E712
                                       Usuario.notif_telegram == True,     # noqa: E712
-                                      Usuario.telegram_chat_id.is_not(None))
+                                      or_(Usuario.telegram_chat_id.is_not(None),
+                                          Usuario.telegram_chat_id_2.is_not(None)))
             ).scalars().all()
         for u in alvos:
             try:
