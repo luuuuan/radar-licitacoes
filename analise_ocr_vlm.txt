@@ -1,0 +1,199 @@
+ANÁLISE — MELHORAR OCR DE EDITAL ESCANEADO (TESSERACT -> MODELO DE VISÃO)
+================================================================================
+
+Contexto: o sistema completa a descrição de itens do edital lendo o
+documento oficial publicado no PNCP (backend/app/itens_pdf.py). Quando o
+documento é uma imagem escaneada, o texto é extraído por OCR com Tesseract
+(backend/app/analise_edital.py, função _ocr_pdf). O Tesseract lê mal
+tabela: embaralha colunas e associa a descrição de um item à linha
+errada. Caso real que motivou esta análise: edital do DAAE Rio Claro
+(https://app.minhalicitacao.com/edital/56106), item 24 — a API do PNCP
+traz só "Papel A4 210 x 297 mm 75 g/m²", mas o documento diz "...
+acondicionado em caixa com 10 resmas de 500 folhas cada..." — informação
+que muda a cotação. Nenhuma correção de infraestrutura feita até aqui
+(timeout, orçamento de tempo de OCR, limite de páginas) resolve isso: é
+um problema de QUALIDADE de leitura, não de tempo/custo de execução.
+
+Proposta avaliada: trocar (ou complementar) o Tesseract por um modelo de
+visão (VLM) rodando na DeepInfra, mesmo padrão de custo/chave já usado em
+itens_pdf.py (DEEPINFRA_API_KEY, chave global paga pelo operador).
+
+Nada de código foi alterado durante esta análise — só pesquisa e um teste
+real (chamada de API), documentados abaixo.
+
+
+PARTE 1 — ESCOLHA DO MODELO
+================================================================================
+
+Os dois modelos originalmente cogitados (olmOCR e Qwen2.5-VL) não existem
+mais com esse nome no catálogo atual da DeepInfra:
+
+- allenai/olmOCR-2-7B-1025 foi DESCONTINUADO em 07/05/2026. A DeepInfra
+  redireciona silenciosamente as chamadas pra google/gemma-4-31B-it —
+  ou seja, usar esse ID hoje rodaria um modelo diferente do esperado,
+  sem erro nenhum avisando.
+
+- Qwen2.5-VL não aparece mais no catálogo — foi sucedido pela linha
+  Qwen3-VL.
+
+Candidatos reais disponíveis hoje:
+
+  Modelo                          | Preço (entrada/saída por 1M tokens)
+  ---------------------------------|-------------------------------------
+  google/gemma-4-31B-it            | $0.13 / $0.38
+  Qwen/Qwen3-VL-30B-A3B-Instruct   | $0.15 / $0.60
+
+  - google/gemma-4-31B-it: documentação explicita "OCR (including
+    multilingual), document/PDF parsing, handwriting recognition". É
+    literalmente o modelo pra onde a DeepInfra redireciona o olmOCR
+    descontinuado — sinal de que eles mesmos o tratam como sucessor pra
+    esse caso de uso. Mais barato dos dois.
+  - Qwen/Qwen3-VL-30B-A3B-Instruct: linhagem Qwen-VL é historicamente
+    forte em OCR/tabela, mas sem confirmação direta de capacidade de
+    OCR documentada na página do modelo (ao contrário do Gemma).
+
+DECISÃO: google/gemma-4-31B-it, testado abaixo com resultado positivo.
+Qwen3-VL fica como alternativa se a qualidade do Gemma cair em algum caso
+futuro.
+
+
+PARTE 2 — BLOQUEIO INICIAL: SALDO ZERADO
+================================================================================
+
+Primeira tentativa de validar (antes de qualquer crédito ter sido
+adicionado): testei a chave (backend/.env, DEEPINFRA_API_KEY) direto
+contra a API de chat da DeepInfra — HTTP 402 "You need positive balance
+to do inference". Mesma falta de saldo que já tinha causado o "erro_ia"
+visto em produção na completar-descricao de itens (achado que motivou
+esta investigação de OCR em primeiro lugar). Sem saldo, nenhuma chamada
+real era possível — nem VLM, nem confirmar consumo real de tokens de
+imagem.
+
+Também não foi possível reproduzir o lado do Tesseract localmente: o
+binário tesseract/poppler só está instalado no ambiente Docker (Render),
+não na máquina de desenvolvimento local.
+
+Usuário adicionou crédito na conta DeepInfra -> teste real liberado (ver
+Parte 3).
+
+
+PARTE 3 — TESTE REAL (com crédito já adicionado)
+================================================================================
+
+Documento usado: o mesmo edital 56106 (DAAE Rio Claro) citado no caso
+real. Peguei a URL do arquivo publicado no PNCP
+(https://pncp.gov.br/pncp-api/v1/orgaos/56401177000154/compras/2026/120/arquivos/1)
+e baixei.
+
+Descoberta no caminho: o "arquivo" do PNCP é na verdade um .zip com 11
+documentos (edital.pdf + vários anexos). Dois relevantes:
+
+  - edital.pdf (17 páginas): TEM texto digital (62.047 caracteres via
+    pypdf) — não é o problema. Confirmei que a palavra "resma" NÃO
+    aparece nele nenhuma vez — a tabela de item detalhada não está aqui.
+  - Anexo1a - TR.pdf ("Termo de Referência", 11 páginas): ZERO texto
+    digital extraível via pypdf — confirmado que é 100% imagem escaneada.
+    É aqui que está a tabela com a especificação técnica completa de
+    cada item.
+
+Extraí as 11 páginas do Anexo1a como imagem diretamente do PDF (via
+pypdf, sem precisar instalar poppler) e mandei cada uma pro
+google/gemma-4-31B-it com um prompt pedindo transcrição em Markdown,
+preservando estrutura de tabela (linha = linha, colunas separadas por
+"|", célula de especificação inteira na linha do item correto).
+
+RESULTADO — página 7 (índice 0) do Anexo1a, tabela de especificação
+técnica, item 24 encontrado CORRETAMENTE, sem misturar com os itens
+vizinhos (23 e 25):
+
+  | 23 | Caixa de arquivo morto papelão ondulado oficio | Caixa para
+    arquivo morto em papelão ondulado, tamanho oficio, resistente,
+    adequada para arquivamento de documentos. | caixa | 150 |
+  | 24 | Papel A4 210 x 297 mm 75 g/m² – caixa com 10 resmas | Papel
+    sulfite branco, tamanho A4 (210 x 297 mm), gramatura 75 g/m²,
+    apropriado para impressoras jato de tinta, laser e copiadoras,
+    acondicionado em caixa com 10 resmas de 500 folhas cada, com boa
+    alvura, opacidade e desempenho de impressão. | caixa | 100 |
+  | 25 | Rolete de tinta para calculadora Elgin MR 6125 | Rolete de
+    tinta compatível com calculadora Elgin... | unidade | 8 |
+
+Exatamente a informação que faltava ("caixa com 10 resmas de 500 folhas
+cada"), na linha certa, sem embaralhar com os itens vizinhos — que era
+justamente a falha característica do Tesseract nesse tipo de documento.
+Uma segunda tabela, "resumida", na página 1 do mesmo Anexo, também trouxe
+o item 24 associado corretamente ("Papel A4 210 x 297 mm 75 g/m² – caixa
+com 10 resmas").
+
+Comparação direta Tesseract vs VLM NÃO foi possível rodar aqui (binário
+do Tesseract só existe no Docker/Render), mas a falha do Tesseract nesse
+caso concreto já está evidenciada na prática: mesmo depois das correções
+de infraestrutura já aplicadas em produção (timeout, orçamento de tempo
+de OCR, limite de páginas), a descrição do item 24 continua truncada
+("PAPEL A4 210 X 297 75G/M", vinda direto da API do PNCP) até hoje — o
+pipeline atual (Tesseract + IA de texto) nunca conseguiu extrair essa
+informação desse documento.
+
+ACHADO DURANTE O TESTE (caveat): alguns caracteres especiais (² e –)
+saíram corrompidos como "�" (replacement character, U+FFFD) no retorno
+do modelo. Confirmado que NÃO é bug de decodificação do lado cliente —
+testei r.encoding e apparent_encoding explicitamente como UTF-8, o
+caractere já vem corrompido no payload JSON da própria API. Mitigável no
+prompt (instruir o modelo a evitar esses símbolos: escrever "m2" em vez
+de "m²", hífen simples em vez de travessão).
+
+
+PARTE 4 — CUSTO (medido de verdade, não estimado)
+================================================================================
+
+Custo real das 11 páginas do teste: $0.00399 (medido via campo
+"estimated_cost" da resposta da própria API, não calculado por mim).
+Isso dá ~$0.00036 por página.
+
+Extrapolando pro limite proposto de OCR_VLM_MAX_PAGINAS=15:
+
+  15 páginas x $0.00036/página ≈ $0.0054 por edital escaneado
+
+Ainda mais barato que a estimativa inicial (que era baseada só em preço
+público, sem chamada real, e tinha dado ~$0.008-0.02/edital). Custo
+irrelevante financeiramente mesmo em escala (100 editais escaneados por
+mês ≈ $0.54).
+
+
+CONCLUSÃO E PRÓXIMO PASSO
+================================================================================
+
+Validação concluída com sucesso: google/gemma-4-31B-it lê a tabela
+escaneada do edital 56106 corretamente, associa a especificação técnica
+completa ao item certo (24), sem embaralhar com itens vizinhos, a um
+custo desprezível (~$0.005/edital escaneado).
+
+Implementação ainda NÃO foi feita — segue o plano original, pendente de
+aprovação:
+
+1. Nova função _ocr_pdf_vlm(conteudo: bytes) -> str em analise_edital.py
+   (reaproveita convert_from_bytes já usado por _ocr_pdf, chama
+   google/gemma-4-31B-it via chat completions com image_url, mesmo
+   padrão de retentativa de itens_pdf.py._gerar).
+2. Fallback em camadas em _texto_de_pdf_bytes: pypdf (grátis) -> se
+   quase vazio e DEEPINFRA_API_KEY configurada e OCR_VLM_ATIVO: VLM ->
+   se VLM falhar/vier vazio (ou indisponível): Tesseract, como hoje.
+   Sem VLM disponível, comportamento idêntico ao atual.
+3. Novas settings em config.py: OCR_VLM_ATIVO (bool, default True),
+   DEEPINFRA_MODELO_OCR = "google/gemma-4-31B-it", OCR_VLM_MAX_PAGINAS
+   (int, sugestão 15 — próprio limite do VLM, separado do
+   OCR_MAX_PAGINAS do Tesseract que continua valendo pro fallback).
+4. Prompt do VLM instruído a evitar símbolos especiais (² , –) pra
+   mitigar o achado de corrupção de caractere.
+5. Testes automatizados + pytest backend/tests/ completo ao final.
+
+
+Resultado: 
+
+Aprovado, pode implementar os 5 passos. A validação ficou ótima — o teste real no edital 56106 provou que resolve, e o custo é desprezível.
+
+Só reforçando dois pontos que o seu próprio teste levantou, pra garantir que entrem na implementação:
+
+Fallback de verdade, não só na teoria. Quando o VLM falhar por saldo zerado na DeepInfra (o HTTP 402 que você já encontrou), o sistema tem que cair no Tesseract silenciosamente e seguir funcionando — não pode quebrar a coleta nem deixar o edital sem análise. Trate o 402 (e timeout/erro de rede) como "VLM indisponível" e siga pro fallback, exatamente como se OCR_VLM_ATIVO estivesse desligado. Vale um teste automatizado simulando o 402 pra provar que a coleta não quebra.
+A instrução anti-corrupção de caractere (m2 em vez de m², hífen simples em vez de travessão) precisa estar no _PROMPT_OCR, e vale um teste que confirme que não sobra � (U+FFFD) no texto final — já que a corrupção vem da própria API, não adianta só confiar no prompt, tem que verificar a saída.
+
+Fora isso, segue o plano como está: Gemma-4-31B-it, OCR_VLM_MAX_PAGINAS=15, Tesseract como rede de segurança, e pytest completo no fim. Quando terminar, me mostra os arquivos alterados e o resultado dos testes.

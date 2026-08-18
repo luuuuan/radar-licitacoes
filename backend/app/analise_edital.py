@@ -15,6 +15,7 @@ Nada disso quebra o resto do sistema. A análise é informativa; decisões de
 habilitação continuam sendo do usuário (a IA pode errar/omitir).
 """
 from __future__ import annotations
+import base64
 import io
 import json
 import logging
@@ -187,10 +188,19 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
     # edital tem bem mais que isso; um PDF com só a capa "de texto" e o
     # resto escaneado ficava abaixo do limiar final (300 chars combinados
     # em analisar()) sem nunca acionar o OCR.
-    if len(texto.strip()) < 500 and settings.OCR_ATIVO:
-        ocr = _ocr_pdf(conteudo, max_paginas=max_paginas_ocr)
-        if ocr:
-            return ocr[:max_chars]
+    #
+    # Camadas: 1º tenta o modelo de visão (lê tabela de verdade, sem
+    # embaralhar colunas -- ver _ocr_pdf_vlm); se ele não estiver
+    # disponível ou falhar por qualquer motivo (sem saldo, erro de rede),
+    # cai pro Tesseract, exatamente como antes de o VLM existir.
+    if len(texto.strip()) < 500:
+        vlm = _ocr_pdf_vlm(conteudo)
+        if vlm:
+            return vlm[:max_chars]
+        if settings.OCR_ATIVO:
+            ocr = _ocr_pdf(conteudo, max_paginas=max_paginas_ocr)
+            if ocr:
+                return ocr[:max_chars]
     return texto
 
 
@@ -271,6 +281,120 @@ def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str |
     if not settings.OCR_ATIVO:
         return ""
     return _ocr_imagem(conteudo)[:max_chars]
+
+
+_DEEPINFRA_CHAT_URL_VLM = "https://api.deepinfra.com/v1/openai/chat/completions"
+
+_PROMPT_OCR = """Transcreva TODO o texto desta página de um edital de licitação pública brasileiro, em Markdown, em português, sem resumir, reescrever ou traduzir.
+
+Se houver uma ou mais TABELAS na página: preserve a estrutura. Cada linha da tabela vira uma linha do Markdown, colunas separadas por "|". Não junte colunas nem mescle linhas. Célula com texto longo (especificação técnica) fica inteira na célula da SUA linha, associada ao número do item correto dessa MESMA linha -- nunca misture a especificação de um item com a de outro. Se houver mais de uma tabela, transcreva todas, na ordem em que aparecem.
+
+Evite símbolos que costumam sair corrompidos na resposta: escreva "m2" em vez de "m²", "graus" por extenso em vez de "°", hífen simples "-" em vez de travessão "–" ou "—". Use só caracteres ASCII comuns e letras acentuadas do português (á é í ó ú ã õ â ê ô ç)."""
+
+
+def _chamar_vlm_pagina(imagem_b64: str, api_key: str, timeout: int = 60, tentativas: int = 2) -> str | None:
+    """Manda uma página (imagem em base64) pro modelo de visão da DeepInfra
+    e devolve o texto transcrito, ou None se a chamada falhar (sem saldo,
+    erro de rede, timeout, resposta inesperada etc.) -- quem chama trata
+    None como "essa página não deu" e para (best-effort, mesmo espírito do
+    resto do OCR). Mesmo padrão de retentativa de itens_pdf.py._gerar:
+    só reage a instabilidade passageira (5xx/rede); HTTP 402 (sem saldo)
+    ou 429 (limite) não são passageiros -- falha na hora, sem retentar."""
+    body = {
+        "model": settings.DEEPINFRA_MODELO_OCR,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagem_b64}"}},
+            {"type": "text", "text": _PROMPT_OCR},
+        ]}],
+        "temperature": 0.1,
+    }
+    for tentativa in range(1, max(1, tentativas) + 1):
+        try:
+            r = requests.post(_DEEPINFRA_CHAT_URL_VLM, json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {api_key}",
+                                       "Content-Type": "application/json"})
+        except requests.RequestException as e:
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            log.warning("VLM de OCR falha de rede: %s", e)
+            return None
+        if r.status_code in (500, 502, 503, 504):
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            log.warning("VLM de OCR HTTP %s (esgotou tentativas)", r.status_code)
+            return None
+        if r.status_code != 200:
+            # inclui 402 (sem saldo na DeepInfra) e 429 (limite de taxa) --
+            # falha "estrutural" da chamada, não passageira, não adianta retentar.
+            log.warning("VLM de OCR HTTP %s: %s", r.status_code, r.text[:200])
+            return None
+        try:
+            return r.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError):
+            return None
+    return None
+
+
+def _ocr_pdf_vlm(conteudo: bytes) -> str:
+    """OCR de PDF escaneado via modelo de visão (VLM) na DeepInfra, em vez
+    do Tesseract -- lê tabela de verdade (preserva estrutura de colunas/
+    linhas), enquanto o Tesseract embaralha e mistura a descrição de um
+    item com a do vizinho (achado real: edital 56106, item 24 -- validado
+    contra a API real, o VLM leu a linha certa sem misturar com os itens
+    vizinhos). Pago por página (chave global do operador,
+    DEEPINFRA_API_KEY) -- por isso um limite de páginas PRÓPRIO e menor
+    que o do Tesseract (settings.OCR_VLM_MAX_PAGINAS, não
+    OCR_MAX_PAGINAS). Best-effort: QUALQUER falha (sem VLM ativo/sem
+    chave, sem saldo, erro de rede, indisponível) devolve "" -- quem
+    chama (_texto_de_pdf_bytes) cai pro Tesseract normalmente, exatamente
+    como se o VLM não existisse."""
+    api_key = settings.DEEPINFRA_API_KEY
+    if not (settings.OCR_VLM_ATIVO and api_key):
+        return ""
+    try:
+        from pdf2image import convert_from_bytes
+    except Exception:
+        log.warning("VLM de OCR indisponível (pdf2image não instalado).")
+        return ""
+    try:
+        imagens = convert_from_bytes(
+            conteudo, dpi=settings.OCR_DPI, first_page=1,
+            last_page=settings.OCR_VLM_MAX_PAGINAS,
+            timeout=settings.OCR_ORCAMENTO_SEGUNDOS)
+    except Exception as e:
+        log.warning("Falha ao rasterizar PDF pro VLM de OCR: %s", e)
+        return ""
+
+    partes = []
+    for img in imagens:
+        buf = io.BytesIO()
+        # JPEG, não PNG: achado real (validado contra a API de verdade) --
+        # reencodar a página como PNG (sem perdas) saiu ~3.5x maior que o
+        # JPEG equivalente pra uma imagem de scan/foto, e isso já bastou
+        # pra causar timeout de rede na chamada. JPEG com qualidade alta é
+        # prática padrão pra OCR via VLM (a imagem já é fundamentalmente
+        # fotográfica, não teve perda relevante de legibilidade no teste).
+        img.convert("RGB").save(buf, format="JPEG", quality=85)
+        imagem_b64 = base64.b64encode(buf.getvalue()).decode()
+        texto = _chamar_vlm_pagina(imagem_b64, api_key)
+        if texto is None:
+            log.warning("VLM de OCR interrompido -- uma página falhou, aproveitando o que já foi lido.")
+            break
+        partes.append(texto)
+
+    texto_final = "\n\n".join(partes).strip()
+    # achado real: caracteres especiais (², –) às vezes saem corrompidos
+    # como replacement character (U+FFFD) DIRETO no payload da própria
+    # API -- confirmado que não é bug de decodificação do lado cliente.
+    # A instrução no prompt reduz, mas não garante 100%; limpa na saída
+    # também, pra nunca deixar "�" literal ir parar em ItemEdital.descricao.
+    texto_final = texto_final.replace("�", "")
+    if texto_final:
+        log.info("VLM de OCR extraiu %d caracteres de PDF escaneado (%d página(s)).",
+                 len(texto_final), len(partes))
+    return texto_final
 
 
 def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:

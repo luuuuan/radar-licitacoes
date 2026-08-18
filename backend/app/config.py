@@ -183,6 +183,21 @@ class Settings(BaseSettings):
     # porque ainda roda dentro da request HTTP, sensível a timeout.
     OCR_MAX_PAGINAS_ITENS: int = 40
 
+    # OCR de PDF escaneado via modelo de visão (VLM) na DeepInfra, em vez do
+    # Tesseract -- lê tabela de verdade (preserva colunas/linhas), enquanto
+    # o Tesseract embaralha e mistura a descrição de um item com a do
+    # vizinho (achado real: edital 56106, item 24). Tentado ANTES do
+    # Tesseract quando o PDF parece escaneado; se falhar (sem saldo na
+    # DeepInfra, erro de rede, indisponível), cai pro Tesseract normalmente
+    # -- nunca é obrigatório dar certo. Pago por página (chave global do
+    # operador, DEEPINFRA_API_KEY), por isso um limite de páginas PRÓPRIO e
+    # bem menor que o do Tesseract (que é grátis) -- NÃO reaproveita
+    # OCR_MAX_PAGINAS/OCR_MAX_PAGINAS_ITENS, que continuam valendo só pro
+    # fallback do Tesseract.
+    OCR_VLM_ATIVO: bool = True
+    DEEPINFRA_MODELO_OCR: str = "google/gemma-4-31B-it"
+    OCR_VLM_MAX_PAGINAS: int = 15
+
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.
     CRON_SECRET: str = ""
