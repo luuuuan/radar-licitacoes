@@ -72,3 +72,23 @@ def test_gemini_ignorado_pra_usuario_fora_da_lista():
     recalcular(bt, com_ia=True, modelo_reranker="gemini", user=_usuario(outro_id))
     args = bt.tasks[0].args
     assert args == (outro_id, None, None)
+
+
+def test_erro_inesperado_no_recalculo_nao_quebra_com_nameerror(monkeypatch):
+    """Achado real: o bloco `except` de _rodar_recalculo_bg chamava um `log`
+    que nunca existiu nesse módulo (main.py sempre usou
+    logging.getLogger(nome) local) — uma exceção inesperada durante o
+    recálculo derrubava o PRÓPRIO except com NameError, mascarando o erro
+    original e (mais grave) pulando o finally que libera a trava."""
+    from app.main import _rodar_recalculo_bg, _lock_recalculo
+    import app.service as service_module
+
+    def _explode(*a, **k):
+        raise RuntimeError("falha simulada no recálculo")
+    monkeypatch.setattr(service_module, "recalcular_matches", _explode)
+
+    usuario_id = 987654
+    _rodar_recalculo_bg(usuario_id)   # não pode levantar NameError
+
+    assert "falha simulada no recálculo" in _recalculo_status[usuario_id]["erro"]
+    assert not _lock_recalculo(usuario_id).locked()   # trava foi liberada mesmo com erro

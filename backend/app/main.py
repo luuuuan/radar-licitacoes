@@ -1819,6 +1819,7 @@ _MODELOS_RERANKER_PERMITIDOS = {
 
 def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None,
                         modelo_reranker: str | None = None):
+    import logging
     lock = _lock_recalculo(usuario_id)
     if not lock.acquire(blocking=False):
         return
@@ -1838,7 +1839,11 @@ def _rodar_recalculo_bg(usuario_id: int, usar_ia: bool | None = None,
         _recalculo_status[usuario_id] = {"rodando": False, "erro": None, **resultado}
     except Exception as e:
         db.rollback()
-        log.exception("Erro ao recalcular matches (usuário %s)", usuario_id)
+        # achado real: "log" nunca existiu nesse módulo (main.py sempre usou
+        # logging.getLogger(nome) local, nunca um "log" de módulo) — se o
+        # recálculo batesse numa exceção inesperada, o PRÓPRIO except quebrava
+        # com NameError, mascarando o erro original.
+        logging.getLogger("recalculo").exception("Erro ao recalcular matches (usuário %s)", usuario_id)
         _recalculo_status[usuario_id] = {"rodando": False, "erro": str(e)}
     finally:
         db.close()
@@ -2428,45 +2433,98 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     return _anexar_checklist_documentos(resultado, user, db)
 
 
-@app.post("/api/editais/{edital_id}/itens/completar-descricao")
-def completar_descricao_itens(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
-                              db: Session = Depends(get_session)):
-    """Lê o(s) PDF(s) do edital publicados no PNCP pra tentar completar a
-    descrição de itens que a API estruturada do PNCP trouxe cortada — usa
-    uma IA paga pelo OPERADOR (DeepInfra/DeepSeek, ver app/itens_pdf.py),
-    não a chave Gemini pessoal do usuário. Sobrescreve ItemEdital.descricao
-    quando encontra o texto completo com confiança; precisa de recálculo
-    depois pra refletir no motor de matching."""
+# Achado real: essa leitura (baixar o documento + calcular embeddings +
+# chamar a IA, com retentativa se a DeepInfra estiver lenta) pode passar de
+# 100-160s em editais grandes — rodando direto na request HTTP, o proxy do
+# Render derruba a conexão com 502 antes de terminar (mesmo motivo do
+# recálculo, ver comentário lá em cima de _recalculo_locks). O trabalho
+# continuava rodando no servidor e salvando no final, mas o navegador nunca
+# via o resultado a tempo — parecia que "não tinha feito nada". Mesmo
+# padrão de segundo plano + polling do recálculo, só que por EDITAL (não
+# por usuário): ItemEdital.descricao é compartilhada entre todo mundo que
+# vê este edital, então a trava também é.
+_completar_descricao_locks: dict[int, threading.Lock] = {}
+_completar_descricao_status: dict[int, dict] = {}
+
+
+def _lock_completar_descricao(edital_id: int) -> threading.Lock:
+    return _completar_descricao_locks.setdefault(edital_id, threading.Lock())
+
+
+def _rodar_completar_descricao_bg(edital_id: int):
     import logging
     from . import itens_pdf
+    lock = _lock_completar_descricao(edital_id)
+    if not lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        ed = db.get(Edital, edital_id)
+        if not ed:
+            _completar_descricao_status[edital_id] = {"rodando": False, "erro": "Edital não encontrado"}
+            return
+        if not itens_pdf.ia_disponivel(settings.DEEPINFRA_API_KEY):
+            _completar_descricao_status[edital_id] = {
+                "rodando": False, "erro": None, "status": "sem_ia", "atualizados": 0}
+            return
+
+        itens_edital = db.execute(
+            select(ItemEdital).where(ItemEdital.edital_id == edital_id)).scalars().all()
+        docs = _listar_arquivos_pncp(ed)
+        resultado = itens_pdf.extrair_itens_completos(
+            ed.objeto or "", docs.get("arquivos") or [],
+            [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
+        )
+        atualizados = 0
+        if resultado.get("status") == "ok":
+            mapa = {it.numero: it for it in itens_edital}
+            for r in resultado["itens"]:
+                alvo = mapa.get(r["numero"])
+                if alvo and r["descricao_completa"] and r["descricao_completa"] != alvo.descricao:
+                    logging.getLogger("itens_pdf").info(
+                        "Item %s do edital %s completado via PDF (%d -> %d chars)",
+                        r["numero"], edital_id, len(alvo.descricao or ""), len(r["descricao_completa"]))
+                    alvo.descricao = r["descricao_completa"]
+                    atualizados += 1
+        ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+        db.commit()
+        _completar_descricao_status[edital_id] = {
+            "rodando": False, "erro": None, "status": resultado.get("status"), "atualizados": atualizados}
+    except Exception as e:
+        db.rollback()
+        logging.getLogger("itens_pdf").exception("Erro ao completar descrição de itens (edital %s)", edital_id)
+        _completar_descricao_status[edital_id] = {"rodando": False, "erro": str(e)}
+    finally:
+        db.close()
+        lock.release()
+
+
+@app.post("/api/editais/{edital_id}/itens/completar-descricao")
+def completar_descricao_itens(edital_id: int, bg: BackgroundTasks,
+                              user: Usuario = Depends(_auth.get_current_user),
+                              db: Session = Depends(get_session)):
+    """Dispara em segundo plano a leitura do(s) documento(s) do edital
+    publicados no PNCP pra tentar completar a descrição de itens que a API
+    estruturada trouxe cortada — usa uma IA paga pelo OPERADOR (DeepInfra,
+    ver app/itens_pdf.py), não a chave Gemini pessoal do usuário. Sobrescreve
+    ItemEdital.descricao quando encontra o texto completo com confiança;
+    precisa de recálculo depois pra refletir no motor de matching. Retorna
+    na hora; o resultado é consultado em .../completar-descricao/status."""
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    if not itens_pdf.ia_disponivel(settings.DEEPINFRA_API_KEY):
-        return {"status": "sem_ia"}
+    lock = _lock_completar_descricao(edital_id)
+    if lock.locked():
+        return {"ok": False, "em_andamento": True,
+                "mensagem": "Já tem uma busca de descrição em andamento pra este edital."}
+    _completar_descricao_status[edital_id] = {"rodando": True, "erro": None}
+    bg.add_task(_rodar_completar_descricao_bg, edital_id)
+    return {"ok": True, "em_andamento": True}
 
-    itens_edital = db.execute(
-        select(ItemEdital).where(ItemEdital.edital_id == edital_id)).scalars().all()
-    docs = _listar_arquivos_pncp(ed)
-    resultado = itens_pdf.extrair_itens_completos(
-        ed.objeto or "", docs.get("arquivos") or [],
-        [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
-    )
-    if resultado.get("status") == "ok":
-        mapa = {it.numero: it for it in itens_edital}
-        atualizados = 0
-        for r in resultado["itens"]:
-            alvo = mapa.get(r["numero"])
-            if alvo and r["descricao_completa"] and r["descricao_completa"] != alvo.descricao:
-                logging.getLogger("itens_pdf").info(
-                    "Item %s do edital %s completado via PDF (%d -> %d chars)",
-                    r["numero"], edital_id, len(alvo.descricao or ""), len(r["descricao_completa"]))
-                alvo.descricao = r["descricao_completa"]
-                atualizados += 1
-        resultado["atualizados"] = atualizados
-    ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
-    db.commit()
-    return resultado
+
+@app.get("/api/editais/{edital_id}/itens/completar-descricao/status")
+def completar_descricao_status(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
+    return _completar_descricao_status.get(edital_id, {"rodando": False, "erro": None})
 
 
 # --------------------------- Cotação (planilha) ------------------------ #
