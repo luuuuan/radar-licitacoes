@@ -194,7 +194,8 @@ def extrair_itens_completos(objeto: str, arquivos: list[dict], itens_atuais: lis
             break
         if not a.get("url"):
             continue
-        t = _baixar_texto_pdf(a["url"], max_paginas=200, max_chars=MAX_BRUTO)
+        t = _baixar_texto_pdf(a["url"], max_paginas=200, max_chars=MAX_BRUTO,
+                              max_paginas_ocr=settings.OCR_MAX_PAGINAS_ITENS)
         if len(t) > 300:
             partes.append(t)
     texto_bruto = "\n\n---\n\n".join(partes)[:MAX_BRUTO]

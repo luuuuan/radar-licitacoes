@@ -122,6 +122,45 @@ def test_bg_completa_descricao_e_atualiza_status(monkeypatch):
     assert not app_main._lock_completar_descricao(edital_id).locked()
 
 
+def test_bg_falha_na_extracao_nao_marca_como_completado(monkeypatch):
+    """Achado real: ed.itens_completados_em era gravado SEMPRE, mesmo quando
+    extrair_itens_completos() não conseguia ler nada (ex.: documento
+    escaneado sem texto suficiente) -- isso bloqueava pra sempre o disparo
+    automático (que só roda quando itens_completados==False), mesmo que uma
+    tentativa futura pudesse dar certo (documento reprocessado, OCR
+    melhorado etc.). Só marca como completado quando a extração realmente
+    terminou com um resultado ("ok")."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(app_main, "SessionLocal", Session)
+
+    db_setup = Session()
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="Aquisicao", uf="SP")
+    db_setup.add(ed)
+    db_setup.commit()
+    db_setup.add(ItemEdital(edital_id=ed.id, numero=24, descricao="PAPEL A4 210 X 297 75G/M"))
+    db_setup.commit()
+    edital_id = ed.id
+    db_setup.close()
+
+    monkeypatch.setattr(app_main.settings, "DEEPINFRA_API_KEY", "fake-key")
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed: {"status": "ok", "arquivos": [{"titulo": "edital", "url": "http://x"}]})
+
+    from app import itens_pdf
+    monkeypatch.setattr(itens_pdf, "extrair_itens_completos", lambda *a, **k: {"status": "sem_texto"})
+
+    app_main._rodar_completar_descricao_bg(edital_id)
+
+    st = _completar_descricao_status[edital_id]
+    assert st == {"rodando": False, "erro": None, "status": "sem_texto", "atualizados": 0}
+
+    db_check = Session()
+    ed_check = db_check.get(Edital, edital_id)
+    assert ed_check.itens_completados_em is None   # continua elegível pro disparo automático tentar de novo
+
+
 def test_bg_sem_chave_deepinfra_marca_status_sem_ia(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

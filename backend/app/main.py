@@ -2486,7 +2486,14 @@ def _rodar_completar_descricao_bg(edital_id: int):
                         r["numero"], edital_id, len(alvo.descricao or ""), len(r["descricao_completa"]))
                     alvo.descricao = r["descricao_completa"]
                     atualizados += 1
-        ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+            # só marca "completado" (o que impede o disparo automático de
+            # tentar de novo ao abrir a aba) quando a tentativa realmente
+            # terminou com um resultado -- achado real: antes disso era
+            # gravado sempre, mesmo em "sem_texto"/"erro_ia"/etc., e um
+            # edital que falhasse por qualquer motivo (documento escaneado,
+            # instabilidade passageira da IA) nunca mais tentava de novo
+            # sozinho, mesmo que uma tentativa futura pudesse dar certo.
+            ed.itens_completados_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
         db.commit()
         _completar_descricao_status[edital_id] = {
             "rodando": False, "erro": None, "status": resultado.get("status"), "atualizados": atualizados}

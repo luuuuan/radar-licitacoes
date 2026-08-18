@@ -30,7 +30,7 @@ def test_extrair_sem_itens_retorna_sem_itens():
 
 
 def test_extrair_pdf_sem_texto_suficiente_retorna_sem_texto(monkeypatch):
-    monkeypatch.setattr(ip, "_baixar_texto_pdf", lambda url, max_paginas, max_chars: "")
+    monkeypatch.setattr(ip, "_baixar_texto_pdf", lambda url, max_paginas, max_chars, max_paginas_ocr=None: "")
     r = ip.extrair_itens_completos(
         "Objeto", [{"titulo": "Edital", "url": "http://x"}],
         [{"numero": 1, "descricao": "curta"}], api_key="fake-key")
@@ -39,7 +39,7 @@ def test_extrair_pdf_sem_texto_suficiente_retorna_sem_texto(monkeypatch):
 
 def test_extrair_feliz_normaliza_e_filtra_numeros_invalidos(monkeypatch):
     monkeypatch.setattr(ip, "_baixar_texto_pdf",
-                        lambda url, max_paginas, max_chars: "texto do edital " * 50)
+                        lambda url, max_paginas, max_chars, max_paginas_ocr=None: "texto do edital " * 50)
     resposta_ia = json.dumps({"itens": [
         {"numero_item": 15, "descricao_completa": "Caneta esferográfica com tinta azul, fluxo uniforme..."},
         {"numero_item": 999, "descricao_completa": "não deveria aparecer — número não existe nos itens de referência"},
@@ -60,7 +60,7 @@ def test_extrair_feliz_normaliza_e_filtra_numeros_invalidos(monkeypatch):
 
 def test_extrair_erro_ia_propaga_status(monkeypatch):
     monkeypatch.setattr(ip, "_baixar_texto_pdf",
-                        lambda url, max_paginas, max_chars: "texto do edital " * 50)
+                        lambda url, max_paginas, max_chars, max_paginas_ocr=None: "texto do edital " * 50)
     with patch("app.itens_pdf._gerar", return_value=(None, "http_500")):
         r = ip.extrair_itens_completos(
             "Objeto", [{"titulo": "Edital", "url": "http://x"}],
@@ -70,9 +70,29 @@ def test_extrair_erro_ia_propaga_status(monkeypatch):
 
 def test_extrair_resposta_sem_json_valido_retorna_resposta_invalida(monkeypatch):
     monkeypatch.setattr(ip, "_baixar_texto_pdf",
-                        lambda url, max_paginas, max_chars: "texto do edital " * 50)
+                        lambda url, max_paginas, max_chars, max_paginas_ocr=None: "texto do edital " * 50)
     with patch("app.itens_pdf._gerar", return_value=("isso não é json", "ok")):
         r = ip.extrair_itens_completos(
             "Objeto", [{"titulo": "Edital", "url": "http://x"}],
             [{"numero": 1, "descricao": "curta"}], api_key="fake-key")
     assert r == {"status": "resposta_invalida"}
+
+
+def test_extrair_usa_limite_de_ocr_maior_que_o_da_analise_sincrona(monkeypatch):
+    """Achado real: um edital escaneado com a tabela de itens além da
+    página 12 nunca completava nada — o OCR usado aqui reaproveitava
+    settings.OCR_MAX_PAGINAS (12), pensado pra Análise por IA, que roda
+    dentro da request HTTP e não pode demorar. extrair_itens_completos()
+    roda em segundo plano (ver _rodar_completar_descricao_bg em main.py),
+    então pode pagar um OCR mais largo — settings.OCR_MAX_PAGINAS_ITENS."""
+    chamadas = []
+    def _fake_baixar(url, max_paginas, max_chars, max_paginas_ocr=None):
+        chamadas.append(max_paginas_ocr)
+        return "texto do edital " * 50
+    monkeypatch.setattr(ip, "_baixar_texto_pdf", _fake_baixar)
+    with patch("app.itens_pdf._gerar", return_value=('{"itens": []}', "ok")):
+        ip.extrair_itens_completos(
+            "Objeto", [{"titulo": "Edital", "url": "http://x"}],
+            [{"numero": 1, "descricao": "curta"}], api_key="fake-key")
+    assert chamadas == [ip.settings.OCR_MAX_PAGINAS_ITENS]
+    assert ip.settings.OCR_MAX_PAGINAS_ITENS > ip.settings.OCR_MAX_PAGINAS

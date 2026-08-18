@@ -157,9 +157,12 @@ def _texto_de_word_bytes(conteudo: bytes, extensao: str, max_chars: int) -> str:
         return ""
 
 
-def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
+def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
+                        max_paginas_ocr: int | None = None) -> str:
     """Extrai texto de um PDF (bytes), com fallback de OCR se vier quase
-    vazio (PDF escaneado)."""
+    vazio (PDF escaneado). `max_paginas_ocr` (opcional) sobrescreve
+    settings.OCR_MAX_PAGINAS só pra esta chamada — usado por itens_pdf.py,
+    que roda em segundo plano e pode pagar um OCR mais largo."""
     try:
         import pypdf
         leitor = pypdf.PdfReader(io.BytesIO(conteudo))
@@ -185,13 +188,14 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int) -> st
     # resto escaneado ficava abaixo do limiar final (300 chars combinados
     # em analisar()) sem nunca acionar o OCR.
     if len(texto.strip()) < 500 and settings.OCR_ATIVO:
-        ocr = _ocr_pdf(conteudo)
+        ocr = _ocr_pdf(conteudo, max_paginas=max_paginas_ocr)
         if ocr:
             return ocr[:max_chars]
     return texto
 
 
-def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
+def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int,
+                  max_paginas_ocr: int | None = None) -> str:
     """O PNCP às vezes publica um único 'documento' como um .zip contendo
     vários PDFs (edital + anexos) em vez de um PDF direto. Sem isso, esses
     editais caíam sempre em "sem_texto" (pypdf/pdf2image não leem .zip)."""
@@ -210,15 +214,15 @@ def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int) -> str:
             dados = zf.read(nome)
         except Exception:
             continue
-        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total)
+        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total, max_paginas_ocr=max_paginas_ocr)
         if t:
             partes.append(t)
             total += len(t)
     return "\n\n---\n\n".join(partes)[:max_chars]
 
 
-def _baixar_texto_pdf(url: str, timeout: int = 45,
-                      max_paginas: int = 40, max_chars: int = 24000) -> str:
+def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_chars: int = 24000,
+                      max_paginas_ocr: int | None = None) -> str:
     try:
         r = requests.get(url, timeout=timeout,
                         headers={"User-Agent": "RadarLicitacoes/1.0"})
@@ -231,8 +235,8 @@ def _baixar_texto_pdf(url: str, timeout: int = 45,
     if _e_zip(r.content):
         if _e_docx(r.content):
             return _texto_de_word_bytes(r.content, ".docx", max_chars)
-        return _texto_de_zip(r.content, max_paginas, max_chars)
-    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars)
+        return _texto_de_zip(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr)
+    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr)
 
 
 def _ocr_imagem(conteudo: bytes) -> str:
@@ -269,9 +273,10 @@ def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str |
     return _ocr_imagem(conteudo)[:max_chars]
 
 
-def _ocr_pdf(conteudo: bytes) -> str:
+def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     """OCR de PDF escaneado com Tesseract (grátis, local, sem GPU).
-    Pesado: limita o nº de páginas para não sobrecarregar o servidor.
+    Pesado: limita o nº de páginas para não sobrecarregar o servidor
+    (settings.OCR_MAX_PAGINAS, salvo `max_paginas` explícito).
     Requer os binários do sistema 'tesseract-ocr' e 'poppler-utils'."""
     try:
         import pytesseract
@@ -283,7 +288,7 @@ def _ocr_pdf(conteudo: bytes) -> str:
         # converte só as primeiras páginas em imagem (DPI moderado p/ velocidade)
         imagens = convert_from_bytes(
             conteudo, dpi=settings.OCR_DPI, first_page=1,
-            last_page=settings.OCR_MAX_PAGINAS)
+            last_page=max_paginas or settings.OCR_MAX_PAGINAS)
     except Exception as e:
         log.warning("Falha ao rasterizar PDF para OCR: %s", e)
         return ""

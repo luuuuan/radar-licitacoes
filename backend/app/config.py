@@ -164,6 +164,16 @@ class Settings(BaseSettings):
     OCR_DPI: int = 200           # resolução do raster (menor = mais rápido)
     OCR_IDIOMA: str = "por"      # português
 
+    # Limite maior de páginas de OCR só pra itens_pdf.py (completar descrição
+    # de item lendo o documento escaneado) — achado real: a tabela de itens
+    # costuma estar bem mais pra frente no documento do que as primeiras 12
+    # páginas alcançam, então um edital escaneado nunca conseguia completar
+    # nada. Só é seguro usar um limite maior aqui porque itens_pdf roda em
+    # segundo plano (ver _rodar_completar_descricao_bg em main.py) — a
+    # "Análise por IA" (analise_edital.py) continua com OCR_MAX_PAGINAS (12)
+    # porque ainda roda dentro da request HTTP, sensível a timeout.
+    OCR_MAX_PAGINAS_ITENS: int = 40
+
     # Chave para disparar a coleta via HTTP (endpoint /api/coletar-cron).
     # Se vazia, o endpoint fica desativado.
     CRON_SECRET: str = ""
