@@ -122,6 +122,15 @@ def _migrar_colunas_novas() -> None:
     para Alembic é o próximo passo natural."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     with engine.connect() as conn:
+        if not eh_sqlite:
+            # ALTER TABLE pede lock exclusivo, mesmo com IF NOT EXISTS -- sem
+            # limite de espera, um job longo (coleta, completar-descrição)
+            # com transação aberta na tabela travava o startup inteiro
+            # (visto em produção: deploy nunca saía de "Waiting for
+            # application startup" enquanto a coleta rodava). Com timeout,
+            # aquela coluna/índice específico só fica pra tentar de novo no
+            # próximo start -- não derruba o deploy.
+            conn.execute(text("SET lock_timeout = '5s'"))
         for tabela, colunas in _COLUNAS_NOVAS.items():
             for nome, tipo in colunas:
                 try:
@@ -175,6 +184,8 @@ def _migrar_indices_novos() -> None:
         "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
     ]
     with engine.connect() as conn:
+        if not eh_sqlite:
+            conn.execute(text("SET lock_timeout = '5s'"))
         for sql in indices:
             try:
                 conn.execute(text(sql))
