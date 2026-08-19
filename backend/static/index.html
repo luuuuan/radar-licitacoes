@@ -1193,7 +1193,8 @@
       <div class="grid2">
         <div class="field"><label>Órgão emissor</label>
           <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
-        <div class="field"><label>Validade</label>
+        <div class="field"><label id="d-validade-label">Validade
+          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Deixe em branco pra IA tentar identificar a validade automaticamente a partir do arquivo enviado. Se não conseguir, você digita manualmente.</span></span></label>
           <input id="d-validade" type="date" style="width:100%"></div>
       </div>
       <div class="field"><label>Link do documento (opcional)
@@ -1201,8 +1202,8 @@
         <input id="d-link" style="width:100%" placeholder="ex: https://drive.google.com/..."></div>
       <div class="field"><label>Observação (opcional)</label>
         <input id="d-obs" style="width:100%" placeholder="ex: renovar pelo site gov.br"></div>
-      <div class="field"><label>Arquivo do documento (opcional)
-        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">PDF ou imagem (foto/scan) deste documento. A IA lê o conteúdo e usa pra conferir automaticamente se ele atende o que cada edital está pedindo, quando você roda a "Análise por IA".</span></span></label>
+      <div class="field"><label id="d-arquivo-label">Arquivo do documento
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">PDF ou imagem (foto/scan) deste documento. Fica guardado com segurança (cifrado) e pode ser baixado depois. A IA usa o conteúdo pra identificar a validade automaticamente e pra conferir se ele atende o que cada edital pede, quando você roda a "Análise por IA".</span></span></label>
         <input type="file" id="d-arquivo" accept=".pdf,image/*" style="width:100%">
         <div class="muted" id="d-arquivo-atual" style="font-size:11px;margin-top:2px"></div></div>
       <div class="toolbar" style="margin-top:8px">
@@ -2716,6 +2717,7 @@ async function loadDocumentos(){
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
         ${link?`<a class="btn ghost" href="${esc(link)}" target="_blank">abrir ↗</a>`:''}
+        ${d.tem_arquivo?`<a class="btn ghost" href="/api/documentos/${d.id}/arquivo" target="_blank">baixar</a>`:''}
         <button class="btn ghost" onclick="editarDocumento(${d.id})">editar</button>
         <button class="btn ghost discreto" onclick="delDocumento(${d.id})">excluir</button>
       </td></tr>`;
@@ -2733,17 +2735,23 @@ function fecharFormDocumento(){
 
 async function salvarDocumento(){
   const nome=$('#d-nome').value.trim(), data_validade=$('#d-validade').value;
-  if(!nome || !data_validade){
-    toast(!nome && !data_validade ? 'Informe o nome e a validade' : !nome ? 'Informe o nome' : 'Informe a validade', 'erro');
+  const arquivo = $('#d-arquivo').files[0];
+  // Validade é obrigatória ao editar (não há re-extração por IA nessa hora);
+  // ao cadastrar, pode ficar em branco -- o servidor tenta extrair da IA e,
+  // se não conseguir, devolve erro pedindo pra digitar (tratado abaixo).
+  if(!nome || (editandoDocId && !data_validade) || (!editandoDocId && !arquivo)){
+    const msg = !nome ? 'Informe o nome'
+      : (editandoDocId && !data_validade) ? 'Informe a validade'
+      : 'Envie o arquivo do documento';
+    toast(msg, 'erro');
     return;
   }
   const fd = new FormData();
   fd.append('nome', nome);
   fd.append('orgao_emissor', $('#d-orgao').value.trim());
-  fd.append('data_validade', data_validade);
+  if(data_validade) fd.append('data_validade', data_validade);
   fd.append('link', $('#d-link').value.trim());
   fd.append('observacao', $('#d-obs').value.trim());
-  const arquivo = $('#d-arquivo').files[0];
   if(arquivo) fd.append('arquivo', arquivo);
   const url = editandoDocId ? '/api/documentos/'+editandoDocId : '/api/documentos';
   const resp = await fetch(url, {method: editandoDocId?'PUT':'POST', body: fd});
@@ -2751,6 +2759,10 @@ async function salvarDocumento(){
     const err = await resp.json().catch(()=>({}));
     toast(err.detail || 'Não foi possível salvar o documento.', 'erro');
     return;
+  }
+  if(!editandoDocId && !data_validade){
+    const salvo = await resp.json().catch(()=>({}));
+    if(salvo.data_validade) toast(`Documento salvo — validade identificada automaticamente: ${salvo.data_validade.split('-').reverse().join('/')}`);
   }
   fecharFormDocumento(); loadDocumentos();
 }

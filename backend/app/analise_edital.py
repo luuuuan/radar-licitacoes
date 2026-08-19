@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from datetime import date
 
 import requests
 
@@ -272,8 +273,8 @@ def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str |
     """Extrai texto de um arquivo que o usuário enviou (PDF ou imagem) —
     mesmo pipeline de PDF/OCR usado pra ler o edital do PNCP, só que a
     origem é um upload em vez de uma URL. Não persiste nada em disco: o
-    conteúdo já vem em memória (bytes) e o texto extraído é descartado
-    depois da chamada à IA (não tem storage de arquivo neste sistema)."""
+    conteúdo já vem em memória (bytes), e este texto é só o que vai pra IA
+    (o arquivo original, esse sim, é guardado -- ver Documento.arquivo_cifrado)."""
     nome = (nome_arquivo or "").lower()
     eh_pdf = nome.endswith(".pdf") or (content_type or "") == "application/pdf"
     if eh_pdf:
@@ -281,6 +282,41 @@ def extrair_texto_upload(nome_arquivo: str, conteudo: bytes, content_type: str |
     if not settings.OCR_ATIVO:
         return ""
     return _ocr_imagem(conteudo)[:max_chars]
+
+
+_PROMPT_EXTRAIR_VALIDADE = """Abaixo está o texto de um documento de habilitação (certidão, CND, FGTS, alvará, etc.) de uma empresa brasileira que participa de licitações públicas.
+
+Encontre a DATA DE VALIDADE do documento -- até quando ele vale, não a data de emissão. Se o texto só tiver "data de emissão" e o tipo de certidão tiver um prazo de validade padrão conhecido e óbvio (ex.: certidões federais costumam valer 180 dias / 6 meses da emissão), pode calcular a partir da emissão. Se não conseguir determinar com segurança, responda null -- não chute.
+
+Responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
+{{"data_validade": "AAAA-MM-DD" ou null}}
+
+TEXTO DO DOCUMENTO:
+{texto}"""
+
+
+def extrair_validade_documento(texto: str, api_key: str | None = None) -> date | None:
+    """Lê o texto de um documento de habilitação já extraído (upload do
+    usuário) e pede à IA só a data de validade -- nada de julgar se o
+    documento atende alguma exigência de edital ou emitir veredito de
+    apto/inapto, isso é outra funcionalidade (verificar_documentos_usuario,
+    mais abaixo) e não deve ser tocado por esta. Retorna None sempre que não
+    tiver certeza (sem chave, sem data no texto, resposta malformada) -- o
+    chamador cai pra pedir a data manualmente, nunca inventa um valor."""
+    texto = (texto or "").strip()
+    if not texto or not ia_texto_disponivel(api_key):
+        return None
+    prompt = _PROMPT_EXTRAIR_VALIDADE.format(texto=texto[:8000])
+    txt, status = _gerar(prompt, api_key=api_key, timeout=30)
+    if status != "ok" or not txt:
+        return None
+    dados = _parse_json(txt)
+    if not isinstance(dados, dict) or not dados.get("data_validade"):
+        return None
+    try:
+        return date.fromisoformat(str(dados["data_validade"]))
+    except (ValueError, TypeError):
+        return None
 
 
 _DEEPINFRA_CHAT_URL_VLM = "https://api.deepinfra.com/v1/openai/chat/completions"

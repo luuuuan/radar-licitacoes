@@ -307,6 +307,16 @@ class Documento(Base):
     # Usado pela análise por IA do edital para comparar o CONTEÚDO real do
     # documento contra o que está sendo exigido, não só o nome cadastrado.
     texto_extraido: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Arquivo original (o "cofre" propriamente dito), cifrado com Fernet
+    # (auth.cifrar) igual ao resto dos dados sensíveis do usuário -- v1
+    # guarda os bytes (base64) direto no banco por simplicidade, já que o
+    # volume por usuário é pequeno (poucas certidões). Se o volume crescer
+    # bastante (muitos usuários/arquivos), o caminho de evolução é migrar
+    # pra um storage dedicado (S3-like) com URL assinada temporária, em vez
+    # de continuar empurrando o banco.
+    arquivo_cifrado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    arquivo_nome: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    arquivo_tipo: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
     avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)             # e-mail
     avisado_para_telegram: Mapped[date | None] = mapped_column(Date, nullable=True)    # menu do Telegram

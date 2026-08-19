@@ -5,6 +5,7 @@ com:  cd backend && pytest
 """
 import json
 import re
+from datetime import date
 
 from app import analise_edital as ia
 
@@ -92,6 +93,47 @@ def test_extrair_texto_upload_imagem_sem_ocr_ativo_retorna_vazio(monkeypatch):
     monkeypatch.setattr(ia.settings, "OCR_ATIVO", False)
     texto = ia.extrair_texto_upload("foto.jpg", b"bytes-fake", "image/jpeg")
     assert texto == ""
+
+
+# --------- extrair_validade_documento (cofre de documentos, v1) --------- #
+# Único trabalho da IA aqui: achar a data de validade no texto. Nenhum
+# destes testes cobre (nem deveria) julgamento de apto/inapto -- isso
+# continua sendo só verificar_documentos_usuario, acima, intocada.
+
+def test_extrair_validade_sem_texto_nao_chama_ia():
+    assert ia.extrair_validade_documento("", api_key="fake-key") is None
+
+
+def test_extrair_validade_sem_chave_retorna_none():
+    assert ia.extrair_validade_documento("CND válida até 10/03/2026", api_key=None) is None
+
+
+def test_extrair_validade_feliz(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar",
+                        lambda prompt, api_key=None, timeout=30: (json.dumps({"data_validade": "2026-03-10"}), "ok"))
+    assert ia.extrair_validade_documento("CND válida até 10/03/2026", api_key="fake-key") == date(2026, 3, 10)
+
+
+def test_extrair_validade_ia_nao_encontra_retorna_none(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar",
+                        lambda prompt, api_key=None, timeout=30: (json.dumps({"data_validade": None}), "ok"))
+    assert ia.extrair_validade_documento("texto sem nenhuma data", api_key="fake-key") is None
+
+
+def test_extrair_validade_resposta_invalida_retorna_none(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=30: ("isto não é um JSON", "ok"))
+    assert ia.extrair_validade_documento("texto qualquer", api_key="fake-key") is None
+
+
+def test_extrair_validade_data_mal_formada_retorna_none(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar",
+                        lambda prompt, api_key=None, timeout=30: (json.dumps({"data_validade": "não é uma data"}), "ok"))
+    assert ia.extrair_validade_documento("texto qualquer", api_key="fake-key") is None
+
+
+def test_extrair_validade_erro_ia_retorna_none(monkeypatch):
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=30: (None, "http_500"))
+    assert ia.extrair_validade_documento("texto qualquer", api_key="fake-key") is None
 
 
 # --------- comparar_catalogo_usuario (segunda opinião da IA sobre itens) --------- #

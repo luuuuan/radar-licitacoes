@@ -3158,7 +3158,7 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
         "data_validade": d.data_validade.isoformat(),
         "dias_para_vencer": (d.data_validade - hoje).days,
         "observacao": d.observacao, "link": d.link, "ativo": d.ativo,
-        "tem_arquivo": bool(d.texto_extraido),
+        "tem_arquivo": bool(d.arquivo_cifrado),
     } for d in docs]
 
 
@@ -3166,38 +3166,59 @@ _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS = {"application/pdf", "image/jpeg", "image/pn
 _TAMANHO_MAX_UPLOAD_DOCUMENTO = 15 * 1024 * 1024  # 15 MB
 
 
-async def _extrair_texto_documento_upload(arquivo: UploadFile | None) -> str | None:
-    """Extrai texto do PDF/imagem anexado ao cadastrar um documento de
-    habilitação (Documento.texto_extraido) — usado depois pela análise por
-    IA do edital pra comparar o CONTEÚDO real do documento contra o que está
-    sendo exigido, não só o nome cadastrado. None = nenhum arquivo enviado
-    (cadastro sem upload continua funcionando, como sempre)."""
+async def _ler_upload_documento(arquivo: UploadFile | None) -> bytes:
+    """Valida e lê os bytes de um upload de documento de habilitação. O
+    arquivo é obrigatório -- é o "cofre" propriamente dito (o que fica
+    guardado e pode ser baixado depois), não só uma fonte de texto pra IA."""
     if arquivo is None or not arquivo.filename:
-        return None
+        raise HTTPException(400, "Envie o arquivo do documento (PDF ou imagem).")
     if arquivo.content_type not in _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS:
         raise HTTPException(400, "Envie um PDF ou imagem (jpg/png/webp).")
     conteudo = await arquivo.read()
     if len(conteudo) > _TAMANHO_MAX_UPLOAD_DOCUMENTO:
         raise HTTPException(400, "Arquivo muito grande (máximo 15 MB).")
-    from . import analise_edital as ia
-    return ia.extrair_texto_upload(arquivo.filename, conteudo, arquivo.content_type) or None
+    return conteudo
+
+
+def _nome_arquivo_seguro(nome: str) -> str:
+    """Mesmo saneamento já usado em /api/documentos/baixar (linha ~2138):
+    tira caracteres que quebrariam o header Content-Disposition."""
+    seguro = re.sub(r'[\\/:*?"<>|\r\n]', "_", nome or "documento").strip()[:150] or "documento"
+    return seguro.encode("latin-1", errors="ignore").decode("latin-1") or "documento"
 
 
 @app.post("/api/documentos")
 async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = Form(None),
-                          data_validade: date = Form(...), link: str | None = Form(None),
+                          data_validade: date | None = Form(None), link: str | None = Form(None),
                           observacao: str | None = Form(None),
-                          arquivo: UploadFile | None = File(None),
+                          arquivo: UploadFile = File(...),
                           user: Usuario = Depends(_auth.get_current_user),
                           db: Session = Depends(get_session)):
-    texto = await _extrair_texto_documento_upload(arquivo)
+    conteudo = await _ler_upload_documento(arquivo)
+    from . import analise_edital as ia
+    texto = ia.extrair_texto_upload(arquivo.filename, conteudo, arquivo.content_type) or None
+
+    # v1 do cofre: a IA só extrai a data de validade quando o usuário não
+    # digitou uma -- nenhum julgamento de "atende exigência X" ou apto/
+    # inapto acontece aqui (isso é outra funcionalidade, verificar_documentos
+    # _usuario, que fica intocada). Sem data segura, não inventa: 422 pede
+    # pro usuário confirmar manualmente.
+    if data_validade is None:
+        chave = _auth.decifrar(user.gemini_key_cifrada)
+        data_validade = ia.extrair_validade_documento(texto or "", api_key=chave)
+        if data_validade is None:
+            raise HTTPException(
+                422, "Não foi possível identificar a validade automaticamente. Informe a data manualmente.")
+
     d = Documento(nome=nome, orgao_emissor=orgao_emissor or None, data_validade=data_validade,
                  link=link or None, observacao=observacao or None, texto_extraido=texto,
+                 arquivo_cifrado=_auth.cifrar(base64.b64encode(conteudo).decode("ascii")),
+                 arquivo_nome=arquivo.filename, arquivo_tipo=arquivo.content_type,
                  usuario_id=user.id)
     db.add(d)
     user.versao_documentos += 1
     db.commit()
-    return {"id": d.id}
+    return {"id": d.id, "data_validade": d.data_validade.isoformat()}
 
 
 def _documento_do_usuario(db, doc_id, user) -> Documento:
@@ -3205,6 +3226,18 @@ def _documento_do_usuario(db, doc_id, user) -> Documento:
     if not d or d.usuario_id != user.id:
         raise HTTPException(404, "Documento não encontrado")
     return d
+
+
+@app.get("/api/documentos/{doc_id}/arquivo")
+def baixar_arquivo_documento(doc_id: int, user: Usuario = Depends(_auth.get_current_user),
+                             db: Session = Depends(get_session)):
+    d = _documento_do_usuario(db, doc_id, user)   # 404 se não for do usuário logado
+    if not d.arquivo_cifrado:
+        raise HTTPException(404, "Este documento não tem arquivo salvo.")
+    conteudo = base64.b64decode(_auth.decifrar(d.arquivo_cifrado))
+    return Response(content=conteudo, media_type=d.arquivo_tipo or "application/octet-stream",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{_nome_arquivo_seguro(d.arquivo_nome)}"'})
 
 
 @app.put("/api/documentos/{doc_id}")
@@ -3217,12 +3250,15 @@ async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor:
     d = _documento_do_usuario(db, doc_id, user)
     d.nome, d.orgao_emissor = nome, orgao_emissor or None
     d.data_validade, d.link, d.observacao = data_validade, link or None, observacao or None
-    # arquivo é OPCIONAL na edição: só re-extrai e substitui o texto salvo
-    # se o usuário mandar um novo; sem arquivo, mantém o texto já extraído
-    # de antes (editar validade/observação não pode apagar o upload anterior).
-    texto = await _extrair_texto_documento_upload(arquivo)
-    if texto is not None:
-        d.texto_extraido = texto
+    # arquivo é OPCIONAL na edição: só substitui o arquivo/texto salvos se o
+    # usuário mandar um novo; sem arquivo, mantém o que já estava guardado
+    # (editar validade/observação não pode apagar o upload anterior).
+    if arquivo is not None and arquivo.filename:
+        conteudo = await _ler_upload_documento(arquivo)
+        from . import analise_edital as ia
+        d.texto_extraido = ia.extrair_texto_upload(arquivo.filename, conteudo, arquivo.content_type) or None
+        d.arquivo_cifrado = _auth.cifrar(base64.b64encode(conteudo).decode("ascii"))
+        d.arquivo_nome, d.arquivo_tipo = arquivo.filename, arquivo.content_type
     d.avisado_para = None  # validade mudou -> permite avisar de novo
     user.versao_documentos += 1
     db.commit()
