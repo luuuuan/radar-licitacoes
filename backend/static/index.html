@@ -3741,13 +3741,18 @@ async function _completarDescricaoItens(id, ativo, avisar, btn){
 }
 
 // Consulta /completar-descricao/status a cada poucos segundos até o
-// trabalho em segundo plano terminar. Até 5 minutos de espera (a DeepInfra
-// já mostrou latência bem inconsistente em prompts grandes — ver
-// itens_pdf.py) — se estourar isso, desiste de esperar (o servidor
+// trabalho em segundo plano terminar. Até 10 minutos de espera -- achado
+// real: uma reprodução local do pipeline completo (ler o zip com vários
+// documentos, OCR/VLM de página escaneada, IA pra estruturar) levou quase
+// 5 minutos INTEIROS num caso real (edital 56106), já bem perto do limite
+// antigo de 5 min -- o servidor de produção (CPU mais fraca que a máquina
+// de dev) podia facilmente estourar esse limite e o usuário nunca via o
+// resultado a tempo, mesmo o trabalho tendo terminado com sucesso pouco
+// depois. Se mesmo assim estourar 10 min, desiste de esperar (o servidor
 // continua e termina sozinho; reabrir a aba ou clicar de novo mais tarde
 // mostra o resultado já pronto).
 async function _acompanharCompletarDescricao(id, ativo, avisar){
-  for(let tentativa=0; tentativa<100; tentativa++){
+  for(let tentativa=0; tentativa<200; tentativa++){
     await new Promise(res=>setTimeout(res, 3000));
     if(!ativo() || _paginaEditalId !== id) return;
     let st;
