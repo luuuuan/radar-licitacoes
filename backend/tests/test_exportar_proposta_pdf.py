@@ -68,3 +68,58 @@ def test_exportar_proposta_pdf_retorna_pdf_valido():
     assert resp.media_type == "application/pdf"
     corpo = asyncio.run(_drenar(resp.body_iterator))
     assert corpo[:4] == b"%PDF"
+
+
+def _texto_do_pdf(corpo: bytes) -> str:
+    import io
+    import pypdf
+    leitor = pypdf.PdfReader(io.BytesIO(corpo))
+    return "\n".join(p.extract_text() or "" for p in leitor.pages)
+
+
+def test_pdf_mostra_numero_do_item_na_tabela():
+    """Pedido do usuário: número do item (conforme o edital) visível na
+    proposta, tanto na aba quanto no PDF exportado."""
+    db = _sessao()
+    u = Usuario(nome="Empresa Teste", email="e2@t.com", senha_hash="x")
+    db.add(u)
+    db.commit()
+    ed = Edital(fonte="PNCP", id_externo="ed2", orgao="Orgao Teste",
+               objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=24, descricao="Papel A4",
+                      quantidade=10, valor_unitario=25.0))
+    db.commit()
+
+    resp = exportar_proposta_pdf(ed.id, user=u, db=db)
+    corpo = asyncio.run(_drenar(resp.body_iterator))
+    texto = _texto_do_pdf(corpo)
+    assert "24" in texto
+
+
+def test_pdf_nao_quebra_com_item_sem_numero():
+    """Achado real: o placeholder pra item sem número usava um travessão
+    ("—"), fora do conjunto de caracteres da fonte padrão do PDF (helvetica,
+    latin-1) -- quebrava a exportação inteira com FPDFUnicodeEncodingException
+    pra qualquer proposta com item sem número (ex.: adicionado manualmente
+    antes do campo "numero" existir)."""
+    from app.models import Proposta
+    db = _sessao()
+    u = Usuario(nome="Empresa Teste", email="e3@t.com", senha_hash="x")
+    db.add(u)
+    db.commit()
+    ed = Edital(fonte="PNCP", id_externo="ed3", orgao="Orgao Teste",
+               objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"descricao": "Item digitado à mão, sem número", "quantidade": 1,
+         "custo_unit": 0, "preco_unit": 10.0},
+    ]))
+    db.commit()
+
+    resp = exportar_proposta_pdf(ed.id, user=u, db=db)   # não pode lançar exceção
+
+    corpo = asyncio.run(_drenar(resp.body_iterator))
+    assert corpo[:4] == b"%PDF"

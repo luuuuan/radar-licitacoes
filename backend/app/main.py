@@ -2990,6 +2990,7 @@ def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
     else:
         # esqueleto a partir dos itens do edital
         itens = [{
+            "numero": it.numero,
             "descricao": it.descricao,
             "quantidade": it.quantidade or 0,
             "custo_unit": 0,

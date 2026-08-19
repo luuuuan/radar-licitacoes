@@ -86,6 +86,15 @@ def test_item_sem_numero_mantem_descricao_salva_sem_alteracao():
     assert payload["itens"][0]["descricao"] == "Descrição digitada pelo usuário"
 
 
+def test_esqueleto_sem_proposta_salva_inclui_numero_do_item():
+    """Achado real: o esqueleto (proposta nunca salva, prop=None) não trazia
+    "numero" nenhum -- a coluna "Nº" da proposta/PDF ficava sempre vazia
+    pra quem exportasse sem antes ter salvo a proposta explicitamente."""
+    ed = _edital([ItemEdital(numero=24, descricao="Papel A4", quantidade=10, valor_unitario=25.0)])
+    payload = _proposta_payload(ed, prop=None)
+    assert payload["itens"][0]["numero"] == 24
+
+
 def test_numero_que_nao_bate_com_item_do_edital_mantem_descricao_salva():
     """Item removido do edital depois de já estar na proposta (ou número
     inválido) — sem correspondência real, não tem o que atualizar."""

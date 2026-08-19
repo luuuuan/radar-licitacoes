@@ -3596,6 +3596,18 @@ async function _renderPaginaEdital(editalId, aba){
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===aba));
   try{
     _paginaEditalDetalhe = await api(`/api/editais/${editalId}/detalhe`);
+    // achado real: item adicionado à cotação (aba Itens/margem) só vivia em
+    // memória (_cotacaoSelecionados) -- um F5 na página perdia a seleção
+    // inteira, mesmo já estando salva no servidor (toda adição à cotação já
+    // salva na proposta, ver _sincronizarItemNaProposta). Recarrega a
+    // seleção a partir da proposta salva, se existir -- falha aqui é
+    // silenciosa de propósito: sem proposta salva ainda, é normal vir vazio.
+    try{
+      const p = await api(`/api/editais/${editalId}/proposta`);
+      if(p.existe){
+        _cotacaoSelecionados = new Set((p.itens||[]).filter(i=>i.numero!=null).map(i=>String(i.numero)));
+      }
+    }catch(e){}
     _renderCabecalhoEdital();
     document.querySelector('.edital-abas').classList.remove('hidden');
     abaEdital(aba);
@@ -4416,6 +4428,7 @@ function renderProposta(){
     const margItem=((it.preco_unit||0)-(it.custo_unit||0))*(it.quantidade||0);
     tv+=totItem; tc+=(it.custo_unit||0)*(it.quantidade||0);
     return `<tr>
+      <td class="muted" style="white-space:nowrap;text-align:center">${esc(it.numero??'—')}</td>
       <td><input value="${esc(it.descricao||'')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
       <td><input type="number" step="any" value="${it.quantidade}" disabled title="Quantidade fixada pelo edital — não pode ser alterada aqui" style="width:80px"></td>
       <td><input type="number" step="any" class="campo-valor" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
@@ -4427,8 +4440,8 @@ function renderProposta(){
   }).join('');
   const margem=tv-tc, pct=tv?(margem/tv*100):0;
   $('#prop-tabela').innerHTML=`<div style="overflow-x:auto"><table>
-    <thead><tr><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
-    <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
+    <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
+    <tbody>${linhas||'<tr><td colspan="8" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
   </table></div>
   <button class="btn ghost" style="margin-top:8px" onclick="propAbrirModalAdd()">+ adicionar item</button>
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">

@@ -188,15 +188,17 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
 
     # ---- tabela de itens ----
     itens = payload.get("itens") or []
-    linhas = [["Descrição", "Qtd.", "Valor unit.", "Valor total"]]
+    linhas = [["Nº", "Descrição", "Qtd.", "Valor unit.", "Valor total"]]
     for it in itens:
         qtd = it.get("quantidade") or 0
         preco = it.get("preco_unit") or 0
+        numero = it.get("numero")
         linhas.append([
+            str(numero) if numero is not None else "-",
             str(it.get("descricao") or ""), f"{qtd:g}",
             _fmt_moeda(preco), _fmt_moeda(preco * qtd),
         ])
-    with pdf.table(linhas, col_widths=(46, 12, 21, 21), text_align=("LEFT", "CENTER", "RIGHT", "RIGHT"),
+    with pdf.table(linhas, col_widths=(9, 40, 12, 19, 20), text_align=("CENTER", "LEFT", "CENTER", "RIGHT", "RIGHT"),
                    headings_style=FontFace(emphasis="BOLD", fill_color=(240, 242, 245)),
                    line_height=6, padding=1.5):
         pass
