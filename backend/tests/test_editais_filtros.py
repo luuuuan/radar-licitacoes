@@ -26,10 +26,10 @@ def _usuario(db):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, data_encerramento=None):
+def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, data_abertura=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
-                data_encerramento=data_encerramento)
+                data_abertura=data_abertura)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -39,9 +39,9 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, 
     return ed
 
 
-def _edital_sem_match(db, id_externo, itens=None, data_encerramento=None, uf="SP", valor_estimado=None):
+def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP", valor_estimado=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
-               objeto="Aquisicao", uf=uf, data_encerramento=data_encerramento,
+               objeto="Aquisicao", uf=uf, data_abertura=data_abertura,
                valor_estimado=valor_estimado)
     db.add(ed)
     db.commit()
@@ -107,14 +107,13 @@ def test_edital_sem_valor_estimado_fica_de_fora_quando_ha_filtro_de_valor():
 
 
 # --------- filtro de prazo final (data_de/data_ate) --------- #
-# Achado real: filtrava por data_abertura (dataAberturaProposta no PNCP --
-# quando a janela de propostas ABRE, normalmente logo após a publicação,
-# quase sempre já passada) em vez de data_encerramento (o mesmo campo que
-# já vira "dias_restantes"/"faltam X dias" em toda a tela) -- mesmo achado
-# real de test_agenda.py/test_compromissos.py.
+# Por pedido explícito do usuário, filtra por data_abertura
+# (dataAberturaProposta no PNCP -- início do recebimento de propostas), não
+# por data_encerramento (prazo final) -- mesma escolha de
+# test_agenda.py/test_compromissos.py.
 #
 # Datas relativas a hoje (não absolutas): a vista padrão ("ativos") já
-# exclui edital com data_encerramento no passado -- um teste com data fixa
+# exclui edital com data_abertura no passado -- um teste com data fixa
 # no passado quebraria sozinho conforme o tempo passa, sem ter nada a ver
 # com o filtro sendo testado aqui.
 
@@ -123,8 +122,8 @@ def test_data_de_exclui_editais_com_prazo_antes():
     hoje = datetime.date.today()
     db = _sessao()
     u = _usuario(db)
-    _edital_com_match(db, u, "ed1", data_encerramento=hoje + datetime.timedelta(days=1))
-    ed2 = _edital_com_match(db, u, "ed2", data_encerramento=hoje + datetime.timedelta(days=20))
+    _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=20))
 
     r = _listar(db, u, data_de=hoje + datetime.timedelta(days=10))
     assert r["total"] == 1
@@ -136,8 +135,8 @@ def test_data_ate_exclui_editais_com_prazo_depois():
     hoje = datetime.date.today()
     db = _sessao()
     u = _usuario(db)
-    ed1 = _edital_com_match(db, u, "ed1", data_encerramento=hoje + datetime.timedelta(days=1))
-    _edital_com_match(db, u, "ed2", data_encerramento=hoje + datetime.timedelta(days=20))
+    ed1 = _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1))
+    _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=20))
 
     r = _listar(db, u, data_ate=hoje + datetime.timedelta(days=10))
     assert r["total"] == 1
@@ -149,20 +148,20 @@ def test_faixa_de_data_combinada_de_e_ate():
     hoje = datetime.date.today()
     db = _sessao()
     u = _usuario(db)
-    _edital_com_match(db, u, "ed1", data_encerramento=hoje + datetime.timedelta(days=1))
-    ed2 = _edital_com_match(db, u, "ed2", data_encerramento=hoje + datetime.timedelta(days=20))
-    _edital_com_match(db, u, "ed3", data_encerramento=hoje + datetime.timedelta(days=35))
+    _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=20))
+    _edital_com_match(db, u, "ed3", data_abertura=hoje + datetime.timedelta(days=35))
 
     r = _listar(db, u, data_de=hoje + datetime.timedelta(days=10), data_ate=hoje + datetime.timedelta(days=25))
     assert r["total"] == 1
     assert r["resultados"][0]["edital_id"] == ed2.id
 
 
-def test_edital_sem_data_encerramento_fica_de_fora_quando_ha_filtro_de_data():
+def test_edital_sem_data_abertura_fica_de_fora_quando_ha_filtro_de_data():
     import datetime
     db = _sessao()
     u = _usuario(db)
-    _edital_com_match(db, u, "ed1", data_encerramento=None)
+    _edital_com_match(db, u, "ed1", data_abertura=None)
 
     r = _listar(db, u, data_de=datetime.date.today())
     assert r["total"] == 0
@@ -251,7 +250,7 @@ def test_sem_match_respeita_vista_ativos_por_padrao():
     db = _sessao()
     u = _usuario(db)
     ontem = datetime.date.today() - datetime.timedelta(days=1)
-    _edital_sem_match(db, "ed-encerrado", itens=["Grampeador de mesa"], data_encerramento=ontem)
+    _edital_sem_match(db, "ed-abertura-passada", itens=["Grampeador de mesa"], data_abertura=ontem)
 
     r = _listar(db, u, busca_item="grampeador")
 

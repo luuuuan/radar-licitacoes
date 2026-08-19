@@ -1097,7 +1097,7 @@ def listar_editais(
     tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
     valor_min: float | None = Query(None, ge=0),
     valor_max: float | None = Query(None, ge=0),
-    data_de: date | None = Query(None),   # filtra por data_encerramento (prazo final) -- ver achado em /api/agenda
+    data_de: date | None = Query(None),   # filtra por data_abertura (início de recebimento de propostas)
     data_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     pagina: int = Query(1, ge=1),
@@ -1132,9 +1132,9 @@ def listar_editais(
     if valor_max is not None:
         filtro.append(Edital.valor_estimado <= valor_max)
     if data_de is not None:
-        filtro.append(Edital.data_encerramento >= data_de)
+        filtro.append(Edital.data_abertura >= data_de)
     if data_ate is not None:
-        filtro.append(Edital.data_encerramento <= data_ate)
+        filtro.append(Edital.data_abertura <= data_ate)
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
     # que pedem isso, em vez de precisar abrir cada um pra conferir.
@@ -1146,12 +1146,14 @@ def listar_editais(
         filtro.append(sub_busca.exists())
 
     if vista == "ativos":
-        # ainda dentro do prazo (sem data ou data >= hoje)
-        filtro.append((Edital.data_encerramento.is_(None)) |
-                      (Edital.data_encerramento >= hoje_data))
+        # por pedido do usuário, "prazo" aqui é a abertura do recebimento de
+        # propostas (data_abertura/dataAberturaProposta no PNCP), não o
+        # encerramento -- sem data ou data >= hoje conta como ativo
+        filtro.append((Edital.data_abertura.is_(None)) |
+                      (Edital.data_abertura >= hoje_data))
     elif vista == "encerrados":
         # prazo passou E eu participei (proposta enviada / ganho / perdido)
-        filtro.append(Edital.data_encerramento < hoje_data)
+        filtro.append(Edital.data_abertura < hoje_data)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
@@ -1160,8 +1162,8 @@ def listar_editais(
         select(func.count()).select_from(base.subquery())
     ) or 0
 
-    ordem = (Match.score.desc(), Edital.data_encerramento.asc()) if vista == "ativos" \
-        else (Edital.data_encerramento.desc(),)
+    ordem = (Match.score.desc(), Edital.data_abertura.asc()) if vista == "ativos" \
+        else (Edital.data_abertura.desc(),)
     q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
@@ -1200,7 +1202,7 @@ def listar_editais(
 
     out = []
     for match, ed in linhas:
-        dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+        dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
         detalhe = match.detalhe
         itens_compativeis = match.itens_compativeis
         if detalhe and detalhe.get("itens"):
@@ -1229,7 +1231,7 @@ def listar_editais(
             "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
             "municipio": ed.municipio, "modalidade": ed.modalidade,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
-            "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+            "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "dias_restantes": dias, "link": ed.link,
             "score": match.score, "nivel": match.nivel,
             "itens_compativeis": itens_compativeis,
@@ -1259,7 +1261,7 @@ def listar_editais(
         )
         if vista == "ativos":
             q_sem_match = q_sem_match.where(
-                (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje_data))
+                (Edital.data_abertura.is_(None)) | (Edital.data_abertura >= hoje_data))
         # mesmos filtros de edital aplicados na busca principal (uf, valor,
         # tipo, hoje) — achado real: esta consulta só levava em conta o termo
         # buscado e a "vista", ignorando os demais filtros da tela; resultado
@@ -1283,14 +1285,14 @@ def listar_editais(
             q_sem_match = q_sem_match.where(Edital.data_abertura == date.today())
         q_sem_match = q_sem_match.order_by(Edital.coletado_em.desc()).limit(20)
         for ed in db.execute(q_sem_match).scalars().all():
-            dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+            dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
             itens_batem = [it.descricao for it in ed.itens
                           if busca_item.strip().lower() in (it.descricao or "").lower()][:3]
             sem_match.append({
                 "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
                 "municipio": ed.municipio, "modalidade": ed.modalidade,
                 "valor_estimado": ed.valor_estimado,
-                "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+                "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
                 "dias_restantes": dias, "link": ed.link, "itens_batem": itens_batem,
             })
 
@@ -1546,13 +1548,13 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
 
-    dias = (ed.data_encerramento - date.today()).days if ed.data_encerramento else None
+    dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
     return {
         "edital": {
             "id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
             "modalidade": ed.modalidade, "uf": ed.uf, "municipio": ed.municipio,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte, "link": ed.link,
-            "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+            "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "dias_restantes": dias,
             "nivel": match.nivel if match else None,
             "score": match.score if match else None,
@@ -2053,8 +2055,8 @@ def _rodar_backfill_unidade_bg():
             select(Edital)
             .where(Edital.itens.any(ItemEdital.unidade_medida.is_(None)))
             .where(
-                (Edital.data_encerramento.is_(None))
-                | (Edital.data_encerramento >= hoje)
+                (Edital.data_abertura.is_(None))
+                | (Edital.data_abertura >= hoje)
                 | (Edital.id.in_(sub_acompanhados))
             )
         ).scalars().unique().all()
@@ -2863,7 +2865,7 @@ def logs(user: Usuario = Depends(_auth.get_current_user),
 def resumo(user: Usuario = Depends(_auth.get_current_user),
            db: Session = Depends(get_session)):
     hoje = date.today()
-    ativo = (Edital.data_encerramento.is_(None)) | (Edital.data_encerramento >= hoje)
+    ativo = (Edital.data_abertura.is_(None)) | (Edital.data_abertura >= hoje)
     meu = Match.usuario_id == user.id
 
     total_prod = db.scalar(
@@ -2900,36 +2902,34 @@ def resumo(user: Usuario = Depends(_auth.get_current_user),
 @app.get("/api/agenda")
 def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
           db: Session = Depends(get_session)):
-    """Sessões de disputa dos editais com match do usuário numa semana
-    (domingo a sábado). offset=0 é a semana atual, -1 a anterior, 1 a
+    """Editais com match do usuário cuja janela de propostas abre numa
+    semana (domingo a sábado). offset=0 é a semana atual, -1 a anterior, 1 a
     seguinte. Sem o filtro "ativo" que /api/resumo usa: navegar pra uma
     semana passada tem que continuar mostrando o que aconteceu, não some
     só porque o edital já encerrou.
 
-    Usa data_encerramento (prazo final de propostas), NÃO data_abertura
-    (que no PNCP é dataAberturaProposta — quando a janela de propostas
-    ABRE, normalmente logo após a publicação, quase sempre já passado
-    quando o usuário está vendo o edital). Achado real: um edital com
-    "faltam 15 dias" (badge calculado com data_encerramento, igual em
-    toda a tela) aparecia no calendário com uma data já vencida, porque
-    data_abertura era usada aqui sozinha — data_encerramento é o mesmo
-    campo que já vira "dias_restantes" em todo o resto do app."""
+    Usa data_abertura (dataAberturaProposta no PNCP — início do
+    recebimento de propostas), por pedido do usuário: o calendário deve
+    refletir quando a janela de propostas ABRE, não o prazo final
+    (data_encerramento). Isso é deliberadamente diferente de como
+    "dias_restantes" era calculado antes desta mudança -- ver o mesmo
+    campo em listar_editais/resumo, agora também baseados em data_abertura."""
     hoje = date.today()
     inicio = hoje - timedelta(days=(hoje.weekday() + 1) % 7) + timedelta(weeks=offset)
     fim = inicio + timedelta(days=6)
     linhas = db.execute(
         select(Edital, Match).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
-        .where(Edital.data_encerramento.between(inicio, fim))
-        .order_by(Edital.data_encerramento)
+        .where(Edital.data_abertura.between(inicio, fim))
+        .order_by(Edital.data_abertura)
     ).all()
-    datas_com_sessao = {ed.data_encerramento for ed, _m in linhas}
+    datas_com_sessao = {ed.data_abertura for ed, _m in linhas}
     dias = [{"data": (inicio + timedelta(days=i)).isoformat(),
              "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao} for i in range(7)]
     sessoes = [{
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
-        "valor_estimado": ed.valor_estimado, "data_sessao": ed.data_encerramento.isoformat(),
+        "valor_estimado": ed.valor_estimado, "data_sessao": ed.data_abertura.isoformat(),
     } for ed, _m in linhas]
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
 
@@ -2947,10 +2947,9 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     data, pra caber num card de calendário sem precisar de duas consultas
     separadas no front.
 
-    Usa data_encerramento (prazo final de propostas) pro edital, não
-    data_abertura (dataAberturaProposta no PNCP — quando a janela de
-    propostas ABRE, quase sempre já passado) -- ver mesmo achado real em
-    /api/agenda, alguns metros acima."""
+    Usa data_abertura (dataAberturaProposta no PNCP — início do
+    recebimento de propostas) pro edital, por pedido do usuário -- ver
+    mesmo motivo em /api/agenda, alguns metros acima."""
     if fim < inicio or (fim - inicio).days > _MAX_DIAS_COMPROMISSOS:
         raise HTTPException(400, "Intervalo inválido.")
 
@@ -2961,14 +2960,14 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     editais = db.execute(
         select(Edital).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id, Match.status == "vou_participar")
-        .where(Edital.data_encerramento.between(inicio, fim))
+        .where(Edital.data_abertura.between(inicio, fim))
     ).scalars().all()
 
     compromissos_lista = [{
         "tipo": "documento", "data": d.data_validade.isoformat(),
         "documento_id": d.id, "nome": d.nome, "link": d.link,
     } for d in docs] + [{
-        "tipo": "edital", "data": ed.data_encerramento.isoformat(),
+        "tipo": "edital", "data": ed.data_abertura.isoformat(),
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
         "valor_estimado": ed.valor_estimado,

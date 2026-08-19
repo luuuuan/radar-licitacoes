@@ -884,8 +884,8 @@
           </div>
         </div>
         <div class="field">
-          <label>Prazo final
-            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data limite para envio de propostas — no pregão eletrônico, é quando a sessão de disputa acontece. É a mesma data do "faltam X dias" mostrado nos cards, não a data de publicação do edital.</span></span>
+          <label>Início do recebimento de propostas
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data em que a janela de propostas abre no PNCP (dataAberturaProposta) — é a mesma data do "faltam X dias" mostrado nos cards e no calendário, não o prazo final de encerramento.</span></span>
           </label>
           <div style="display:flex;gap:6px">
             <input type="date" id="f-data-de" onchange="loadEditais()" style="width:50%">
@@ -1771,7 +1771,7 @@ function _agendaHTML(r){
       <div class="info"><div class="org">${esc(s.orgao||'Órgão não informado')}</div>
         <div class="meta">${esc(meta)}</div></div>
     </div>`;
-  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhuma sessão de disputa nesta semana.</p>';
+  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhuma abertura de propostas nesta semana.</p>';
   return `<h3>Agenda da semana
       <span class="nav-semana">
         <button type="button" aria-label="Semana anterior" onclick="loadAgenda(_agendaOffset-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
@@ -1779,7 +1779,7 @@ function _agendaHTML(r){
         <button type="button" aria-label="Próxima semana" onclick="loadAgenda(_agendaOffset+1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
       </span>
     </h3>
-    <div class="sub">Sessões de disputa dos editais com match
+    <div class="sub">Início de recebimento de propostas dos editais com match
       <button type="button" class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="abrirCalendarioCompromissos()">
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:2px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
         Calendário
@@ -1821,7 +1821,7 @@ function abrirAgendaCompleta(){
       ${linhas?`<div style="overflow-x:auto;max-height:420px;overflow-y:auto;margin-top:10px"><table>
         <thead><tr><th>Data</th><th>Órgão</th><th>Objeto</th><th>Local</th><th>Valor</th><th></th></tr></thead>
         <tbody>${linhas}</tbody>
-      </table></div>`:'<p class="muted" style="margin-top:10px">Nenhuma sessão de disputa nesta semana.</p>'}
+      </table></div>`:'<p class="muted" style="margin-top:10px">Nenhuma abertura de propostas nesta semana.</p>'}
     </div>
   </div>`;
 }

@@ -1,15 +1,13 @@
 """
-GET /api/agenda: sessões de disputa (data_encerramento -- prazo final de
-propostas, que é quando a sessão de disputa acontece de fato em pregão
-eletrônico) dos editais com match do usuário, numa janela de uma semana
-(domingo a sábado), navegável por offset (semanas a partir da atual).
+GET /api/agenda: editais com match do usuário cuja janela de propostas abre
+(data_abertura -- dataAberturaProposta no PNCP, início do recebimento de
+propostas) numa semana (domingo a sábado), navegável por offset (semanas a
+partir da atual).
 
-Achado real: usava data_abertura (dataAberturaProposta no PNCP -- quando a
-janela de propostas ABRE, normalmente logo após a publicação, quase sempre
-já passado quando o usuário está olhando o edital) em vez de
-data_encerramento (o mesmo campo que já vira "dias_restantes"/"faltam X
-dias" em toda a tela) -- um edital com prazo em 15 dias aparecia no
-calendário com uma data já vencida. Rode com:  cd backend && pytest
+Por pedido explícito do usuário, o calendário usa data_abertura, não
+data_encerramento (prazo final) -- ver o mesmo campo em
+listar_editais/resumo, também baseados em data_abertura. Rode com:
+cd backend && pytest
 """
 import datetime
 
@@ -34,10 +32,10 @@ def _usuario(db, email="t@t.com"):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, data_encerramento, valor_estimado=None):
+def _edital_com_match(db, usuario, id_externo, data_abertura, valor_estimado=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
-                data_encerramento=data_encerramento)
+                data_abertura=data_abertura)
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.5, nivel="medio"))
@@ -63,13 +61,13 @@ def test_semana_vai_de_domingo_a_sabado():
     assert len(r["dias"]) == 7
 
 
-def test_so_traz_editais_com_prazo_final_dentro_da_semana():
+def test_so_traz_editais_com_abertura_dentro_da_semana():
     db = _sessao()
     u = _usuario(db)
     inicio = _inicio_semana()
-    dentro = _edital_com_match(db, u, "ed-dentro", data_encerramento=inicio + datetime.timedelta(days=2))
-    _edital_com_match(db, u, "ed-antes", data_encerramento=inicio - datetime.timedelta(days=1))
-    _edital_com_match(db, u, "ed-depois", data_encerramento=inicio + datetime.timedelta(days=7))
+    dentro = _edital_com_match(db, u, "ed-dentro", data_abertura=inicio + datetime.timedelta(days=2))
+    _edital_com_match(db, u, "ed-antes", data_abertura=inicio - datetime.timedelta(days=1))
+    _edital_com_match(db, u, "ed-depois", data_abertura=inicio + datetime.timedelta(days=7))
 
     r = agenda(offset=0, user=u, db=db)
 
@@ -81,9 +79,9 @@ def test_offset_navega_pra_semana_anterior_e_seguinte():
     db = _sessao()
     u = _usuario(db)
     ed_passada = _edital_com_match(db, u, "ed-passada",
-        data_encerramento=_inicio_semana(-1) + datetime.timedelta(days=1))
+        data_abertura=_inicio_semana(-1) + datetime.timedelta(days=1))
     ed_futura = _edital_com_match(db, u, "ed-futura",
-        data_encerramento=_inicio_semana(1) + datetime.timedelta(days=1))
+        data_abertura=_inicio_semana(1) + datetime.timedelta(days=1))
 
     r_passada = agenda(offset=-1, user=u, db=db)
     r_futura = agenda(offset=1, user=u, db=db)
@@ -100,7 +98,7 @@ def test_so_retorna_match_do_proprio_usuario():
     u2 = _usuario(db, email="u2@t.com")
     inicio = _inicio_semana()
     ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="X", uf="SP",
-                data_encerramento=inicio + datetime.timedelta(days=1))
+                data_abertura=inicio + datetime.timedelta(days=1))
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=u1.id, edital_id=ed.id, score=0.5, nivel="medio"))
@@ -115,7 +113,7 @@ def test_dias_marca_tem_sessao_apenas_no_dia_certo():
     db = _sessao()
     u = _usuario(db)
     inicio = _inicio_semana()
-    _edital_com_match(db, u, "ed1", data_encerramento=inicio + datetime.timedelta(days=3))
+    _edital_com_match(db, u, "ed1", data_abertura=inicio + datetime.timedelta(days=3))
 
     r = agenda(offset=0, user=u, db=db)
 
@@ -127,7 +125,7 @@ def test_edital_sem_sessao_na_semana_nao_aparece():
     db = _sessao()
     u = _usuario(db)
     inicio = _inicio_semana()
-    _edital_com_match(db, u, "ed1", data_encerramento=inicio + datetime.timedelta(days=30))
+    _edital_com_match(db, u, "ed1", data_abertura=inicio + datetime.timedelta(days=30))
 
     r = agenda(offset=0, user=u, db=db)
 
@@ -135,13 +133,13 @@ def test_edital_sem_sessao_na_semana_nao_aparece():
     assert all(not d["tem_sessao"] for d in r["dias"])
 
 
-def test_sessao_expoe_data_sessao_igual_ao_prazo_final():
+def test_sessao_expoe_data_sessao_igual_a_abertura():
     db = _sessao()
     u = _usuario(db)
     inicio = _inicio_semana()
-    prazo = inicio + datetime.timedelta(days=2)
-    _edital_com_match(db, u, "ed1", data_encerramento=prazo)
+    abertura = inicio + datetime.timedelta(days=2)
+    _edital_com_match(db, u, "ed1", data_abertura=abertura)
 
     r = agenda(offset=0, user=u, db=db)
 
-    assert r["sessoes"][0]["data_sessao"] == prazo.isoformat()
+    assert r["sessoes"][0]["data_sessao"] == abertura.isoformat()
