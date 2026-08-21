@@ -7,12 +7,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from .models import utcnow
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from .config import settings, parse_csv_str
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Usuario
+from .models import (
+    Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Usuario,
+    Proposta, AnaliseIAExtras,
+)
 from .connectors.base import BaseConnector, EditalColetado
 from .connectors.pncp import PNCPConnector
 from .matching.engine import (
@@ -41,6 +44,48 @@ def purgar_logs_antigos(db: Session) -> int:
     resultado = db.execute(delete(LogColeta).where(LogColeta.iniciado_em < limite))
     db.commit()
     return resultado.rowcount or 0
+
+
+# tamanho do lote de cada DELETE -- evita uma única transação gigante
+# segurando lock em dezenas de milhares de linhas de uma vez.
+_LOTE_PODA_EDITAIS = 2000
+
+
+def podar_editais_orfaos(db: Session) -> dict:
+    """Remove itens_edital + editais que NUNCA tiveram nenhum engajamento de
+    usuário (nem Match, nem Proposta, nem análise por IA) e já encerraram --
+    ruído puro da coleta periódica (compartilhada entre usuários, nunca
+    limpa sozinha) que nenhum recurso do app usa: Inteligência de Preço,
+    Encerrados, Favoritos e Agenda da semana exigem Match; Proposta/Análise
+    por IA são a própria prova de engajamento. Achado real: itens_edital
+    sozinha passou de 400MB no plano free do banco (Supabase, teto de
+    500MB) -- a esmagadora maioria de editais que nunca bateram com
+    catálogo nenhum, coletados 2x/dia sem parar.
+
+    Chamada ao fim de toda coleta (ver processar_coleta) — mantém a base do
+    tamanho de novo sozinha, em vez de precisar de faxina manual."""
+    hoje = date.today()
+    sem_engajamento = (
+        ~exists(select(Match.id).where(Match.edital_id == Edital.id))
+        & ~exists(select(Proposta.id).where(Proposta.edital_id == Edital.id))
+        & ~exists(select(AnaliseIAExtras.id).where(AnaliseIAExtras.edital_id == Edital.id))
+    )
+    ids = db.execute(
+        select(Edital.id)
+        .where(Edital.data_abertura.is_not(None), Edital.data_abertura < hoje)
+        .where(sem_engajamento)
+    ).scalars().all()
+
+    itens_removidos = 0
+    editais_removidos = 0
+    for i in range(0, len(ids), _LOTE_PODA_EDITAIS):
+        pedaco = ids[i:i + _LOTE_PODA_EDITAIS]
+        itens_removidos += db.execute(
+            delete(ItemEdital).where(ItemEdital.edital_id.in_(pedaco))).rowcount or 0
+        editais_removidos += db.execute(
+            delete(Edital).where(Edital.id.in_(pedaco))).rowcount or 0
+        db.commit()
+    return {"editais_removidos": editais_removidos, "itens_removidos": itens_removidos}
 
 
 def _carregar_catalogo(db: Session, usuario_id: int) -> list[ProdutoCat]:
@@ -669,6 +714,7 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
                     db.rollback()
 
     purgar_logs_antigos(db)
+    podar_editais_orfaos(db)
     log.info("Coleta concluída: %s", resumo)
     return resumo
 

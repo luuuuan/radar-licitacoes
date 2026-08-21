@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .database import get_session, init_db, SessionLocal
 from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras
-from .service import processar_coleta
+from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
 
 
@@ -2145,6 +2145,43 @@ def backfill_unidade_medida_endpoint(bg: BackgroundTasks, edital_id: int | None 
 @app.get("/api/admin/backfill-unidade-medida/status")
 def backfill_unidade_medida_status(user: Usuario = Depends(_auth.get_current_user)):
     return _backfill_unidade_status
+
+
+_poda_editais_status: dict = {"rodando": False, "editais_removidos": 0, "itens_removidos": 0, "erro": None}
+
+
+def _rodar_poda_editais_bg():
+    import logging
+    db = SessionLocal()
+    try:
+        _poda_editais_status.update(
+            {"rodando": True, "editais_removidos": 0, "itens_removidos": 0, "erro": None})
+        r = podar_editais_orfaos(db)
+        _poda_editais_status.update(r)
+    except Exception as e:
+        logging.getLogger("poda_editais").exception("Erro ao podar editais órfãos")
+        _poda_editais_status["erro"] = str(e)
+    finally:
+        _poda_editais_status["rodando"] = False
+        db.close()
+
+
+@app.post("/api/admin/podar-editais-orfaos")
+def podar_editais_orfaos_endpoint(bg: BackgroundTasks, user: Usuario = Depends(_auth.get_current_user)):
+    """Faxina pontual pra reclamar espaço agora (a poda automática -- ver
+    service.podar_editais_orfaos, chamada ao fim de toda coleta -- já evita
+    a base crescer de novo, mas não limpa o que já se acumulou antes dela
+    existir). Roda em segundo plano (base grande pode levar um tempo);
+    acompanhar em /api/admin/podar-editais-orfaos/status."""
+    if _poda_editais_status["rodando"]:
+        return {"ok": False, "mensagem": "Já tem uma poda rodando."}
+    bg.add_task(_rodar_poda_editais_bg)
+    return {"ok": True, "mensagem": "Poda iniciada em segundo plano."}
+
+
+@app.get("/api/admin/podar-editais-orfaos/status")
+def podar_editais_orfaos_status(user: Usuario = Depends(_auth.get_current_user)):
+    return _poda_editais_status
 
 
 @app.get("/api/editais/{edital_id}/documentos")
