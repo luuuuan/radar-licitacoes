@@ -20,7 +20,12 @@ class Settings(BaseSettings):
     # APP_ENCRYPTION_KEY cifra dados sensíveis (chave Gemini, CPF/CNPJ). Se vazio,
     # é derivada da SECRET_KEY. Defina no Render para algo estável e secreto.
     APP_ENCRYPTION_KEY: str = ""
-    TOKEN_EXPIRA_HORAS: int = 24 * 7        # sessão dura 7 dias
+    TOKEN_EXPIRA_HORAS: int = 24 * 7        # teto absoluto da sessão: 7 dias, mesmo com uso contínuo
+    # Sessão também expira por inatividade: cada requisição autenticada
+    # renova o cookie por mais TOKEN_IDLE_HORAS (ver auth.criar_token), sem
+    # nunca passar do teto absoluto acima. Fica sozinho sem usar o site por
+    # mais que isso e precisa logar de novo, mesmo dentro dos 7 dias.
+    TOKEN_IDLE_HORAS: int = 2
     # URL pública do app (para links de verificação de e-mail). Ex.: https://...onrender.com
     APP_BASE_URL: str = ""
     # Banco de dados

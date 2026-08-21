@@ -172,11 +172,11 @@ class LoginIn(BaseModel):
 
 
 def _set_cookie_sessao(resp: _Resp, usuario_id: int):
-    token = _auth.criar_token(usuario_id)
-    seguro = settings.APP_BASE_URL.startswith("https")
-    resp.set_cookie(_auth.COOKIE_NOME, token, httponly=True, samesite="lax",
-                    secure=seguro, max_age=settings.TOKEN_EXPIRA_HORAS * 3600,
-                    path="/")
+    """Cookie de um login novo -- sempre abre um teto absoluto novo de
+    TOKEN_EXPIRA_HORAS (exp_abs=None). Renovação por atividade dentro de uma
+    sessão já aberta é outro caminho (ver auth.get_current_user), que
+    carrega o exp_abs original em vez de recriar um."""
+    _auth.cookie_sessao(resp, usuario_id)
 
 
 # campos válidos do JSON cifrado de dados complementares — filtra chave
