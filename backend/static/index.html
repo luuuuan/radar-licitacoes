@@ -264,6 +264,14 @@
   .ed-obj{color:var(--txt);line-height:1.45;margin:6px 0}
   .prazo{font-weight:600}
   .prazo.urg{color:var(--destructive)}
+  /* badge "Encerrado" na página do edital -- vermelho com bastante
+     contraste de propósito (borda + fundo tingido + texto), pedido
+     explícito do usuário pra chamar mais atenção que o texto simples que
+     já existia ali antes. */
+  .badge-encerrado{display:inline-flex;align-items:center;vertical-align:middle;
+    margin-left:4px;font-size:12px;font-weight:700;letter-spacing:.02em;
+    color:var(--destructive);background:rgba(239,68,68,.14);
+    border:1.5px solid var(--destructive);border-radius:999px;padding:3px 11px}
   .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
   .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
   table{width:100%;border-collapse:collapse}
@@ -2046,7 +2054,7 @@ async function loadEditaisRecentes(){
         <div class="meta">${esc(meta)}</div></div>
       <div class="quando">${esc(haTempo(segAtras))}</div>
     </div>`;
-  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhum edital analisado ainda. Abra um edital e navegue entre as abas pra ele aparecer aqui.</p>';
+  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhum edital analisado ainda.</p>';
   el.innerHTML = `<h3>Analisados recentemente</h3>
     <div class="sub">Últimos editais que você abriu e explorou</div>
     <div class="recentes">${linhas}</div>`;
@@ -3711,13 +3719,17 @@ async function _renderPaginaEdital(editalId, aba){
 
 function _renderCabecalhoEdital(){
   const e = _paginaEditalDetalhe.edital;
-  const prazo = e.dias_restantes!=null?(e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`):'prazo n/d';
+  const encerrado = e.dias_restantes!=null && e.dias_restantes<0;
+  // "encerrado" vira um badge à parte (não só texto na linha muted) --
+  // achado real: passava despercebido no meio de modalidade/local/valor,
+  // pedido do usuário pra chamar mais atenção na página do edital.
+  const prazo = encerrado ? '' : (e.dias_restantes!=null?`faltam ${e.dias_restantes} dia(s)`:'prazo n/d');
   const linkPortal = linkSeguro(e.link);
   $('#edital-cabecalho').innerHTML = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
       <div>
-        <h2 style="margin:0 0 4px">${esc(e.orgao||'Órgão')}</h2>
-        <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')} · ${prazo}${e.valor_estimado!=null?' · '+fmtMoeda(e.valor_estimado):''}</div>
+        <h2 style="margin:0 0 4px">${esc(e.orgao||'Órgão')}${encerrado?' <span class="badge-encerrado">Encerrado</span>':''}</h2>
+        <div class="muted" style="font-size:13px">${esc(e.modalidade||'')} · ${esc(e.municipio||'')}/${esc(e.uf||'')}${prazo?' · '+prazo:''}${e.valor_estimado!=null?' · '+fmtMoeda(e.valor_estimado):''}</div>
       </div>
       <select class="status-sel st-${e.status}" onchange="_mudarStatusPaginaEdital(this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
