@@ -2073,8 +2073,8 @@ function cardEdital(e){
         <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
       </select>
       <span style="flex:1"></span>
-      <button class="btn ghost" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-      <button class="btn ghost" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+      <button class="btn ghost" data-edital-id="${e.edital_id}" data-campo="lido" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" data-edital-id="${e.edital_id}" data-campo="interessante" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' Favoritado':ICN.estrelaVazia+' Favoritar'}</button>
     </div>
   </div>`;
 }
@@ -2322,8 +2322,8 @@ function cardEditalSemMatch(e){
         <option value="descartado"${e.status==='descartado'?' selected':''}>Descartado</option>
       </select>
       <span style="flex:1"></span>
-      <button class="btn ghost" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-      <button class="btn ghost" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+      <button class="btn ghost" data-edital-id="${e.edital_id}" data-campo="lido" onclick="marcar(${e.edital_id},'lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
+      <button class="btn ghost" data-edital-id="${e.edital_id}" data-campo="interessante" onclick="marcar(${e.edital_id},'interessante',${!e.interessante})">${e.interessante?ICN.estrela+' Favoritado':ICN.estrelaVazia+' Favoritar'}</button>
     </div>
   </div>`;
 }
@@ -2353,7 +2353,7 @@ async function loadFavoritos(resetPagina=true){
   const qs=new URLSearchParams({pagina:paginaFavoritos, por_pagina:20, vista:'todos', apenas_interessantes:'true'});
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
-  if(!eds.length){ $('#lista-favoritos').innerHTML='<p class="muted">Nenhum edital favoritado ainda. Clique em "interessante" no card de um edital pra ele aparecer aqui.</p>'; return; }
+  if(!eds.length){ $('#lista-favoritos').innerHTML='<p class="muted">Nenhum edital favoritado ainda. Clique em "Favoritar" no card de um edital pra ele aparecer aqui.</p>'; return; }
   $('#lista-favoritos').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaFav',paginaFavoritos);
 }
 
@@ -2372,14 +2372,28 @@ function mudarPagina(delta){
 async function marcar(id,campo,val){
   await api(`/api/editais/${id}/marcar`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({[campo]:val})});
-  // atualiza a lista da aba que estiver aberta agora (não sempre "editais")
-  // — sem isso, desmarcar "interessante" na aba Favoritos não tirava o
-  // card de lá, só recarregava a aba de Editais ativos escondida atrás.
-  const abaAtiva = document.querySelector('nav button[data-tab].active')?.dataset.tab;
-  if(abaAtiva==='favoritos') loadFavoritos(false);
-  else if(abaAtiva==='encerrados') loadEncerrados(false);
-  else loadEditais(false);
   loadResumo();
+  // Só vale recarregar a lista inteira quando o novo valor faz o edital sair
+  // da vista filtrada atual (favoritos exige interessante=true; "só não
+  // lidos" em Editais exige lido=false) -- ex.: desmarcar "interessante" na
+  // aba Favoritos precisa tirar o card dali. Fora esses casos (o mais comum,
+  // que é só favoritar/marcar lido um edital normal), atualiza só o botão
+  // clicado no lugar, sem rebuscar tudo por causa de 1 campo.
+  const abaAtiva = document.querySelector('nav button[data-tab].active')?.dataset.tab;
+  const saiDaVistaFiltrada =
+    (abaAtiva==='favoritos' && campo==='interessante' && !val) ||
+    (abaAtiva==='editais' && campo==='lido' && val && $('#f-naolidos')?.checked);
+  if(saiDaVistaFiltrada){
+    if(abaAtiva==='favoritos') loadFavoritos(false);
+    else loadEditais(false);
+    return;
+  }
+  document.querySelectorAll(`button[data-edital-id="${id}"][data-campo="${campo}"]`).forEach(b=>{
+    b.innerHTML = campo==='lido'
+      ? (val? ICN.check+' lido' : 'marcar lido')
+      : (val? ICN.estrela+' Favoritado' : ICN.estrelaVazia+' Favoritar');
+    b.setAttribute('onclick', `marcar(${id},'${campo}',${!val})`);
+  });
 }
 
 async function importarPlanilha(input){
@@ -3654,7 +3668,7 @@ function _renderCabecalhoEdital(){
     <div class="toolbar">
       ${linkPortal?`<a class="btn ghost" href="${esc(linkPortal)}" target="_blank">Abrir edital no portal ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
-      <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' interessante':ICN.estrelaVazia+' interessante'}</button>
+      <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' Favoritado':ICN.estrelaVazia+' Favoritar'}</button>
     </div>
   </div>`;
 }
