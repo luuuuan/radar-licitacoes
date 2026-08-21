@@ -3868,6 +3868,18 @@ async function _completarDescricaoItens(id, ativo, avisar, btn){
   }
 }
 
+// true se o usuário já trocou algum <select> de sugestão de produto (aba
+// Itens/margem) pra um valor diferente do que veio pré-selecionado --
+// sinal de que há uma escolha em andamento que um redesenho silencioso da
+// aba (ex.: completar-descricao terminando em segundo plano) não pode
+// apagar sem avisar.
+function _selecaoDeSugestaoPendente(){
+  return Array.from(document.querySelectorAll('select[id^="sel-sugestao-"]')).some(sel=>{
+    const padrao = sel.querySelector('option[selected]');
+    return sel.value !== (padrao ? padrao.value : '');
+  });
+}
+
 // Consulta /completar-descricao/status a cada poucos segundos até o
 // trabalho em segundo plano terminar. Até 10 minutos de espera -- achado
 // real: uma reprodução local do pipeline completo (ler o zip com vários
@@ -3894,7 +3906,16 @@ async function _acompanharCompletarDescricao(id, ativo, avisar){
     if(st.status === 'ok' && st.atualizados > 0){
       _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
       if(!ativo() || _paginaEditalId !== id) return;
-      if(_abaEditalAtual === 'itens') $('#edital-conteudo').innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
+      // achado real: redesenhar a aba Itens do zero aqui apagava a escolha
+      // que o usuário já tivesse feito num <select> de sugestão de produto
+      // (trocar por outro candidato) antes de clicar em "Confirmar" -- o
+      // combobox voltava pro valor padrão e o clique confirmava o produto
+      // errado, sem nenhum aviso. Enquanto houver uma escolha assim
+      // pendente, só atualiza os dados em memória (_paginaEditalDetalhe já
+      // ficou fresco acima) e adia o redesenho pro próximo re-render natural
+      // (trocar de aba e voltar, ou terminar de confirmar) -- não synchroniza
+      // a tela por baixo do usuário no meio de uma ação em andamento.
+      if(_abaEditalAtual === 'itens' && !_selecaoDeSugestaoPendente()) $('#edital-conteudo').innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
       toast(`Descrição de ${st.atualizados} ${st.atualizados===1?'item completada':'itens completados'} a partir do documento do edital. Rode "Recalcular" pra atualizar a compatibilidade com o texto novo.`, 'ok', 7000);
       return;
     }
