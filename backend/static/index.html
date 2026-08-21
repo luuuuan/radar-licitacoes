@@ -142,7 +142,7 @@
 
   .kpis-prop{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
 
-  .painel-widgets{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
+  .painel-widgets{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
   .widget{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
   .widget h3{font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0}
   .widget h3 .contagem{font-size:11px;font-weight:700;color:var(--destructive);
@@ -190,6 +190,15 @@
   .doc .nome{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .doc .meta{font-size:11px;color:var(--muted);margin-top:1px}
   .doc .prazo{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;flex-shrink:0;white-space:nowrap}
+
+  .recentes{display:flex;flex-direction:column;gap:0;margin-top:10px}
+  .recente{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px dashed var(--line);cursor:pointer}
+  .recente:first-child{border-top:none;padding-top:0}
+  .recente .barra{width:3px;align-self:stretch;border-radius:2px;flex-shrink:0}
+  .recente .info{min-width:0;flex:1}
+  .recente .org{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .recente .meta{font-size:11px;color:var(--muted);margin-top:1px}
+  .recente .quando{font-size:11px;color:var(--muted);flex-shrink:0;white-space:nowrap}
 
   .compr-tabs{display:flex;gap:6px;margin-bottom:10px}
   .compr-tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
@@ -878,6 +887,7 @@
     <div id="painel-hero"></div>
     <div class="painel-widgets">
       <div class="widget" id="painel-agenda"></div>
+      <div class="widget" id="painel-recentes"></div>
       <div class="widget" id="painel-docs"></div>
     </div>
   </section>
@@ -2019,18 +2029,41 @@ async function loadDocumentosResumo(){
     </button>`;
 }
 
+// Card "Analisados recentemente": editais em que o usuário abriu a página e
+// navegou entre as abas (itens/cotação/análise/documentos/proposta) --
+// ver abaEdital() e POST .../interacao. Mais recente primeiro.
+async function loadEditaisRecentes(){
+  const el = $('#painel-recentes');
+  if(!el) return;
+  let editais = [];
+  try{ editais = (await api('/api/editais/recentes?limite=4')).editais||[]; }catch(e){}
+  const linhas = editais.length ? editais.map(ed=>{
+    const meta = [ed.modalidade, [ed.municipio, ed.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ');
+    const segAtras = ed.interagido_em ? (Date.now() - new Date(ed.interagido_em).getTime())/1000 : null;
+    return `<div class="recente" onclick="abrirPaginaEdital(${ed.edital_id})">
+      <div class="barra" style="background:var(--${ed.nivel})"></div>
+      <div class="info"><div class="org">${esc(ed.orgao||'Órgão não informado')}</div>
+        <div class="meta">${esc(meta)}</div></div>
+      <div class="quando">${esc(haTempo(segAtras))}</div>
+    </div>`;
+  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhum edital analisado ainda. Abra um edital e navegue entre as abas pra ele aparecer aqui.</p>';
+  el.innerHTML = `<h3>Analisados recentemente</h3>
+    <div class="sub">Últimos editais que você abriu e explorou</div>
+    <div class="recentes">${linhas}</div>`;
+}
+
 function _marcarPainelAtualizado(){
   const agora = new Date();
   const lbl = $('#painel-atualizado');
   if(lbl) lbl.textContent = `Atualizado às ${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
 }
-// botão "Atualizar" do painel: reconsulta os 3 pedaços (KPIs, agenda na
-// semana em exibição, documentos) de uma vez, sem precisar dar F5 na
-// página inteira.
+// botão "Atualizar" do painel: reconsulta os 4 pedaços (KPIs, agenda na
+// semana em exibição, documentos, editais analisados recentemente) de uma
+// vez, sem precisar dar F5 na página inteira.
 async function atualizarPainel(btn){
   if(btn){ btn.disabled = true; btn.classList.remove('girando'); void btn.offsetWidth; btn.classList.add('girando'); }
   try{
-    await Promise.all([loadResumo(), loadAgenda(_agendaOffset), loadDocumentosResumo()]);
+    await Promise.all([loadResumo(), loadAgenda(_agendaOffset), loadDocumentosResumo(), loadEditaisRecentes()]);
     _marcarPainelAtualizado();
   } finally {
     if(btn) btn.disabled = false;
@@ -3722,6 +3755,11 @@ async function abaEdital(nome, forcar){
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===nome));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
+  // sinal pro card "Analisados recentemente" do painel Início -- silencioso
+  // (sem toast, sem esperar resposta): abrir a página já entra direto numa
+  // aba, então toda chamada daqui (inclusive a 1ª, "itens") conta como
+  // interação de verdade, não só cliques em trocar de aba depois.
+  api(`/api/editais/${id}/interacao`, {method:'POST'}).catch(()=>{});
 
   // 1ª análise de um edital não roda sozinha (é cara: baixa PDF, roda OCR,
   // chama a IA pra ler o edital inteiro) — mostra um botão em vez de

@@ -1381,6 +1381,20 @@ def mudar_status(edital_id: int, dados: StatusIn,
     return {"ok": True}
 
 
+@app.post("/api/editais/{edital_id}/interacao")
+def registrar_interacao(edital_id: int,
+                        user: Usuario = Depends(_auth.get_current_user),
+                        db: Session = Depends(get_session)):
+    """Chamado pelo front (silencioso, sem toast) toda vez que o usuário
+    navega entre as abas de um edital aberto -- ver abaEdital() no JS.
+    Alimenta o card "Analisados recentemente" do painel Início
+    (GET /api/editais/recentes)."""
+    m = _match_do_usuario_por_edital(db, edital_id, user)
+    m.interagido_em = _utcnow_main()
+    db.commit()
+    return {"ok": True}
+
+
 def _produto_json(p: Produto) -> dict:
     return {
         "id": p.id, "descricao": p.descricao,
@@ -2959,6 +2973,29 @@ def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
         "valor_estimado": ed.valor_estimado, "data_sessao": ed.data_abertura.isoformat(),
     } for ed, _m in linhas]
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
+
+
+@app.get("/api/editais/recentes")
+def editais_recentes(limite: int = 5, user: Usuario = Depends(_auth.get_current_user),
+                     db: Session = Depends(get_session)):
+    """Últimos editais com que o usuário interagiu -- abriu a página e
+    navegou entre as abas (itens/cotação/análise/documentos/proposta), ver
+    POST .../interacao -- mais recente primeiro. Alimenta o card
+    "Analisados recentemente" do painel Início."""
+    limite = max(1, min(limite, 20))
+    linhas = db.execute(
+        select(Edital, Match).join(Match, Match.edital_id == Edital.id)
+        .where(Match.usuario_id == user.id)
+        .where(Match.interagido_em.is_not(None))
+        .order_by(Match.interagido_em.desc())
+        .limit(limite)
+    ).all()
+    return {"editais": [{
+        "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+        "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
+        "valor_estimado": ed.valor_estimado, "nivel": m.nivel, "score": m.score,
+        "interagido_em": _brt(m.interagido_em),
+    } for ed, m in linhas]}
 
 
 _MAX_DIAS_COMPROMISSOS = 62  # ~2 meses -- trava de custo, evita varredura de intervalo absurdo

@@ -228,6 +228,10 @@ class Match(Base):
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # última vez que o usuário navegou entre as abas da página deste edital
+    # (itens/cotação/análise/documentos/proposta) -- alimenta o card
+    # "Analisados recentemente" do painel Início. None = nunca abriu.
+    interagido_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
 
