@@ -8,6 +8,7 @@ import json
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException, Response
+from starlette.requests import Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -24,6 +25,12 @@ def _sessao():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     return Session()
+
+
+def _req(ip="1.2.3.4"):
+    """Request mínima só pra rate limit (app.ratelimit.ip_cliente) conseguir
+    ler um IP -- não precisa de corpo nem de mais nada do ASGI real aqui."""
+    return Request({"type": "http", "headers": [], "client": (ip, 12345)})
 
 
 _LOGO_VALIDA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -79,7 +86,7 @@ def test_cadastro_persiste_endereco_dados_empresa_e_logo():
                       "banco_nome": "Banco X", "banco_agencia": "0001", "banco_conta": "12345-6"},
         logo_base64=_LOGO_VALIDA,
     )
-    auth_cadastro(dados, Response(), BackgroundTasks(), db)
+    auth_cadastro(dados, _req(), Response(), BackgroundTasks(), db)
 
     u = db.query(Usuario).filter(Usuario.email == "empresa@teste.com").first()
     assert u is not None
@@ -97,7 +104,7 @@ def test_cadastro_sem_dados_complementares_continua_funcionando():
     existia antes) não pode quebrar."""
     db = _sessao()
     dados = CadastroIn(nome="Fulano", email="fulano@teste.com", senha="Senha123!")
-    auth_cadastro(dados, Response(), BackgroundTasks(), db)
+    auth_cadastro(dados, _req(), Response(), BackgroundTasks(), db)
 
     u = db.query(Usuario).filter(Usuario.email == "fulano@teste.com").first()
     assert u is not None
@@ -111,7 +118,7 @@ def test_cadastro_rejeita_logo_invalida():
     dados = CadastroIn(nome="Fulano", email="fulano2@teste.com", senha="Senha123!",
                        logo_base64="isso não é uma imagem")
     with pytest.raises(HTTPException) as exc:
-        auth_cadastro(dados, Response(), BackgroundTasks(), db)
+        auth_cadastro(dados, _req(), Response(), BackgroundTasks(), db)
     assert exc.value.status_code == 400
 
 

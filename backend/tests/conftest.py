@@ -4,6 +4,20 @@ Fixtures globais da suíte de testes.
 import pytest
 
 from app.config import settings
+from app import ratelimit as _rl
+
+
+@pytest.fixture(autouse=True)
+def _rate_limit_zerado():
+    """Zera os contadores do rate limit antes de CADA teste -- sem isso, o
+    dict em memória de app.ratelimit persiste entre testes (é módulo,
+    compartilhado pelo processo inteiro do pytest), então testes de login/
+    cadastro que reusam o mesmo IP/e-mail entre si (ou com outros arquivos
+    de teste) iam eventualmente bater o limite e começar a falhar com 429
+    de forma dependente da ordem de execução."""
+    _rl._tentativas.clear()
+    yield
+    _rl._tentativas.clear()
 
 
 @pytest.fixture(autouse=True)

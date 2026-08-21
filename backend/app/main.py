@@ -109,6 +109,7 @@ from email_validator import validate_email, EmailNotValidError
 from fastapi import Response as _Resp
 from .models import Usuario
 from . import auth as _auth
+from . import ratelimit as _rl
 from .notifications import email as _email_mod
 
 
@@ -209,8 +210,12 @@ def _validar_logo_base64(valor: str | None) -> str | None:
 
 
 @app.post("/api/auth/cadastro")
-def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
+def auth_cadastro(dados: CadastroIn, request: Request, resp: _Resp, bg: BackgroundTasks,
                   db: Session = Depends(get_session)):
+    # limite generoso (criar conta não é algo que usuário legítimo faz em
+    # rajada) -- barra criação automatizada de contas em massa a partir de
+    # um mesmo IP.
+    _rl.checar(f"cadastro-ip:{_rl.ip_cliente(request)}", limite=5, janela_seg=3600)
     # valida e-mail
     try:
         email = validate_email(dados.email, check_deliverability=False).normalized.lower()
@@ -274,8 +279,13 @@ def auth_cadastro(dados: CadastroIn, resp: _Resp, bg: BackgroundTasks,
 
 
 @app.post("/api/auth/login")
-def auth_login(dados: LoginIn, resp: _Resp, db: Session = Depends(get_session)):
+def auth_login(dados: LoginIn, request: Request, resp: _Resp, db: Session = Depends(get_session)):
     email = (dados.email or "").strip().lower()
+    # duas chaves pegam ataques diferentes: só por IP pega força bruta
+    # distribuída entre vários e-mails a partir de uma máquina; só por
+    # e-mail pega credential stuffing rotacionando IP contra uma conta só.
+    _rl.checar(f"login-ip:{_rl.ip_cliente(request)}", limite=20, janela_seg=300)
+    _rl.checar(f"login-email:{email}", limite=6, janela_seg=300)
     u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
     if not u or not _auth.conferir_senha(dados.senha, u.senha_hash):
         raise HTTPException(401, "E-mail ou senha incorretos.")
@@ -283,6 +293,13 @@ def auth_login(dados: LoginIn, resp: _Resp, db: Session = Depends(get_session)):
         raise HTTPException(403, "Conta desativada.")
     if not u.email_verificado:
         raise HTTPException(403, "Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.")
+    # login deu certo: zera o contador por e-mail -- sem isso, um usuário
+    # que só errou a senha uma ou duas vezes antes de acertar ia ficando
+    # cada vez mais perto do limite pra sempre, por nenhum motivo real. O
+    # contador por IP fica de fora de propósito: ele existe pra pegar
+    # varredura contra várias contas, não deve resetar por causa de UM
+    # login certo no meio.
+    _rl.limpar(f"login-email:{email}")
     _set_cookie_sessao(resp, u.id)
     return {"ok": True}
 
@@ -365,12 +382,19 @@ def _email_html_reset_senha(nome: str, link: str) -> str:
 
 
 @app.post("/api/auth/esqueci-senha")
-def auth_esqueci_senha(dados: EsqueciSenhaIn, bg: BackgroundTasks,
+def auth_esqueci_senha(dados: EsqueciSenhaIn, request: Request, bg: BackgroundTasks,
                        db: Session = Depends(get_session)):
     """Sempre responde com sucesso genérico (não revela se o e-mail existe)."""
     mensagem = ("Se este e-mail estiver cadastrado, enviamos um link para redefinir "
                 "a senha. Confira também a caixa de spam.")
     email = (dados.email or "").strip().lower()
+    # por e-mail: barra mandar o mesmo usuário ser inundado de e-mail de
+    # redefinição (achado real conhecido em outros produtos: "e-mail bomb"
+    # incomoda a vítima mesmo sem nenhuma conta ser de fato comprometida).
+    # por IP: rede mais larga contra varredura de e-mails em massa.
+    _rl.checar(f"esqueci-ip:{_rl.ip_cliente(request)}", limite=10, janela_seg=3600)
+    if email:
+        _rl.checar(f"esqueci-email:{email}", limite=3, janela_seg=3600)
     if not email or not _email_mod.smtp_configurado():
         return {"ok": True, "mensagem": mensagem}
 
@@ -394,7 +418,10 @@ def auth_esqueci_senha(dados: EsqueciSenhaIn, bg: BackgroundTasks,
 
 
 @app.post("/api/auth/redefinir-senha")
-def auth_redefinir_senha(dados: RedefinirSenhaIn, db: Session = Depends(get_session)):
+def auth_redefinir_senha(dados: RedefinirSenhaIn, request: Request, db: Session = Depends(get_session)):
+    # o token em si já é praticamente impossível de adivinhar (32 bytes
+    # aleatórios) -- isto é defesa em profundidade, não a proteção principal.
+    _rl.checar(f"redefinir-ip:{_rl.ip_cliente(request)}", limite=10, janela_seg=3600)
     u = db.execute(
         select(Usuario).where(Usuario.token_reset_senha == dados.token)
     ).scalars().first()
