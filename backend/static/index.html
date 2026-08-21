@@ -84,11 +84,17 @@
      que o normal. Sem isso, "Sair" ficava cortado e inalcançável (o
      html{overflow-x:hidden} lá em cima existe de propósito, ver comentário,
      então não dava pra rolar a página pra alcançar) — achado real reportado
-     pelo usuário. */
+     pelo usuário. Barra de rolagem escondida de propósito (scrollbar-width:
+     none / ::-webkit-scrollbar{display:none}) — achado real: em uso normal
+     (nome de empresa comum) isso aqui nunca chega a rolar de verdade, mas o
+     Windows já reserva/desenha a barra só por overflow-x:auto estar
+     presente, aparecendo como uma faixa vazia sempre visível ao rolar a
+     página. Continua rolável por gesto/scroll horizontal (trackpad, shift+
+     wheel) no raríssimo caso de precisar; só a barra em si é que não
+     aparece à toa. */
   .header-meio{display:flex;align-items:center;gap:14px;flex:1;min-width:0;
-    overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
-  .header-meio::-webkit-scrollbar{height:4px}
-  .header-meio::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+    overflow-x:auto;scrollbar-width:none}
+  .header-meio::-webkit-scrollbar{display:none}
   #btn-coletar,.header-conta-desktop{flex-shrink:0}
   .header-conta-desktop{display:flex;align-items:center;gap:8px;margin-left:6px;
     border-left:1px solid var(--line);padding-left:12px}
