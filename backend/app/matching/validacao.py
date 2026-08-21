@@ -163,7 +163,7 @@ def _validar_numerico_simples(exigido, candidatos: list) -> list[Pendencia]:
             # derruba um produto bom.
             pendencias.append(Pendencia(
                 "numerico",
-                f"item exige {exigido.bruto} (unidade assumida, não informada no texto) "
+                f"item exige {exigido.bruto} (medida estimada, não confirmada no texto do edital) "
                 f"— produto oferece {melhor.bruto} — confirmar unidade manualmente",
                 critico=False,
             ))
@@ -214,7 +214,7 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
     mensagens pra dizer a mesma coisa duas vezes)."""
     bruto_exigido = _bruto_grupo(exigidos)
     if not candidatos:
-        sufixo = " (unidade assumida, não informada no texto — confirmar)" if any(e.inferido for e in exigidos) else ""
+        sufixo = " (medida estimada, não confirmada no texto do edital — verificar manualmente)" if any(e.inferido for e in exigidos) else ""
         return [Pendencia(
             "numerico",
             f"item exige {bruto_exigido}{sufixo} — produto não informa a medida na descrição",
@@ -232,7 +232,7 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
         # texto) não pode reprovar sozinha, só virar aviso.
         return [Pendencia(
             "numerico",
-            f"item exige {bruto_exigido} (unidade assumida, não informada no texto) "
+            f"item exige {bruto_exigido} (medida estimada, não confirmada no texto do edital) "
             f"— produto oferece {bruto_ofertado} — confirmar medida manualmente",
             critico=False,
         )]

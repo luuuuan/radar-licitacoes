@@ -197,7 +197,7 @@ def test_validacao_rebaixa_para_aviso_quando_unidade_do_item_e_inferida():
     r = validar(item, produto)
     assert r.atende  # não reprova mais
     assert not r.criticas
-    assert any(p.tipo == "numerico" and "unidade assumida" in p.descricao for p in r.avisos)
+    assert any(p.tipo == "numerico" and "medida estimada" in p.descricao for p in r.avisos)
     assert classificar(0.6, r) == "Atende parcialmente"  # ainda pede conferência, não vira "Atende" pleno
 
 
@@ -210,7 +210,7 @@ def test_validacao_mantem_critica_quando_unidade_e_explicita_dos_dois_lados():
     produto = "Régua Acrílica Transparente 150mm Waleu"
     r = validar(item, produto)
     assert not r.atende
-    assert any(p.tipo == "numerico" and p.critico and "unidade assumida" not in p.descricao
+    assert any(p.tipo == "numerico" and p.critico and "medida estimada" not in p.descricao
               for p in r.criticas)
 
 
@@ -486,9 +486,9 @@ def test_bruto_de_valor_inferido_nao_mostra_unidade_inventada():
     """Caso real: 'comprimento: 13, largura: 4, altura: 2,3' (apagador de
     quadro branco) virava, na mensagem pro usuário, 'item exige 13 mm x 4mm
     x 2,3mm' — o 'mm' foi uma suposição interna (nunca esteve no texto),
-    mas aparecia como se fosse. Contraditório com o próprio aviso "(unidade
-    assumida, não informada no texto)" logo depois. bruto tem que trazer só
-    o número que de fato apareceu no edital."""
+    mas aparecia como se fosse. Contraditório com o próprio aviso "(medida
+    estimada, não confirmada no texto do edital)" logo depois. bruto tem
+    que trazer só o número que de fato apareceu no edital."""
     a = extrair_atributos("comprimento: 13, largura: 4, altura: 2,3")
     for n in a.numericos:
         assert n.inferido
@@ -503,7 +503,7 @@ def test_validacao_de_grupo_inferido_nao_mostra_unidade_inventada_na_mensagem():
     msg = r.pendencias[0].descricao
     assert "13 x 4 x 2,3" in msg
     assert "mm" not in msg   # não inventa unidade na frente do usuário
-    assert "unidade assumida" in msg   # mas deixa claro que precisa confirmar
+    assert "medida estimada" in msg   # mas deixa claro que precisa confirmar
 
 
 def test_itens_por_unidade_corrige_folhas_de_embalagem_maior():

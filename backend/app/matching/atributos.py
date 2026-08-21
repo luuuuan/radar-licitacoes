@@ -339,7 +339,7 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
         # 13" virou "13 mm" internamente pra reaproveitar o scan normal),
         # não mostra esse "mm" pro usuário como se estivesse no texto — só
         # o número, que é o que de fato foi lido. Mostrar "13 mm" bem do
-        # lado de "(unidade assumida, não informada no texto)" é
+        # lado de "(medida estimada, não confirmada no texto do edital)" é
         # contraditório e passa confiança que a unidade não tem.
         bruto_exibido = bruto.split()[0] if inferido else bruto
         achados.append(AtributoNumerico(unidade, valor, operador, bruto_exibido, inferido, cadeia_id))
