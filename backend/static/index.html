@@ -76,6 +76,20 @@
      único elemento com estado (id="coleta-status" etc.) em vez de duplicar
      e arriscar desincronizar. */
   #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px}
+  /* Envolve menu compacto + status/tema/Recalcular: única parte do cabeçalho
+     que pode "sobrar" espaço pra menos — ganha scroll horizontal próprio
+     (min-width:0 é o que permite encolher abaixo do conteúdo) em vez de
+     empurrar Coletar agora/Conta/Sair (flex-shrink:0 abaixo) pra fora da
+     tela quando o texto de status ou o nome da empresa fica mais comprido
+     que o normal. Sem isso, "Sair" ficava cortado e inalcançável (o
+     html{overflow-x:hidden} lá em cima existe de propósito, ver comentário,
+     então não dava pra rolar a página pra alcançar) — achado real reportado
+     pelo usuário. */
+  .header-meio{display:flex;align-items:center;gap:14px;flex:1;min-width:0;
+    overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+  .header-meio::-webkit-scrollbar{height:4px}
+  .header-meio::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  #btn-coletar,.header-conta-desktop{flex-shrink:0}
   .header-conta-desktop{display:flex;align-items:center;gap:8px;margin-left:6px;
     border-left:1px solid var(--line);padding-left:12px}
   /* menu compacto: some por padrão (só existe pra caber na mesma linha do
@@ -756,39 +770,48 @@
   <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
        Mantenha os itens em sincronia com o <nav id="nav"> logo abaixo. -->
-  <nav class="nav-compacta" id="nav-compacta">
-    <button data-tab="inicio" onclick="tab('inicio')">Início</button>
-    <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
-    <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
-    <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
-    <div class="nav-grupo-wrap">
-      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
-        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
-      <div class="nav-dropdown">
-        <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
-        <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
-        <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
-        <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
-        <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+  <!-- .header-meio: só esta faixa (menu compacto + status/tema/Recalcular)
+       ganha scroll horizontal próprio quando não cabe -- Coletar agora/Conta/
+       Sair ficam FORA dela, com flex-shrink:0 (ver CSS), pra nunca serem
+       empurrados pra fora da tela por um nome de empresa ou texto de status
+       mais compridos que o normal (achado real: o cálculo antigo assumia um
+       total fixo de largura e não sobrava margem nenhuma no limiar de
+       1500px -- qualquer texto um pouco mais longo cortava o botão Sair, sem
+       jeito de rolar até ele). -->
+  <div class="header-meio">
+    <nav class="nav-compacta" id="nav-compacta">
+      <button data-tab="inicio" onclick="tab('inicio')">Início</button>
+      <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
+      <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+      <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
+      <div class="nav-grupo-wrap">
+        <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
+          <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-dropdown">
+          <button data-tab="catalogo" onclick="tab('catalogo')">Catálogo</button>
+          <button data-tab="fornecedores" onclick="tab('fornecedores')">Fornecedores</button>
+          <button data-tab="precos" onclick="tab('precos')">Inteligência de preço</button>
+          <button data-tab="documentos" onclick="tab('documentos')">Documentos</button>
+          <button data-tab="regras" onclick="tab('regras')">Regras de exclusão</button>
+        </div>
       </div>
-    </div>
-    <div class="nav-grupo-wrap">
-      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Conta
-        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
-      <div class="nav-dropdown">
-        <button data-tab="config" onclick="tab('config')">Configurações</button>
-        <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
-        <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+      <div class="nav-grupo-wrap">
+        <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Conta
+          <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-dropdown">
+          <button data-tab="config" onclick="tab('config')">Configurações</button>
+          <button data-tab="perfil" onclick="tab('perfil')">Meu perfil</button>
+          <button data-tab="logs" onclick="tab('logs')">Histórico</button>
+        </div>
       </div>
-    </div>
-  </nav>
-
-  <span style="flex:1"></span>
-  <div id="slot-header-extra-desktop">
-    <div id="slot-header-extra">
-      <span id="coleta-status" class="badge">—</span>
-      <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
-      <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+    </nav>
+    <span style="flex:1"></span>
+    <div id="slot-header-extra-desktop">
+      <div id="slot-header-extra">
+        <span id="coleta-status" class="badge">—</span>
+        <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
+        <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
+      </div>
     </div>
   </div>
   <button class="btn" id="btn-coletar" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
