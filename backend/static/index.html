@@ -76,25 +76,19 @@
      único elemento com estado (id="coleta-status" etc.) em vez de duplicar
      e arriscar desincronizar. */
   #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px}
-  /* Envolve menu compacto + status/tema/Recalcular: única parte do cabeçalho
-     que pode "sobrar" espaço pra menos — ganha scroll horizontal próprio
-     (min-width:0 é o que permite encolher abaixo do conteúdo) em vez de
-     empurrar Coletar agora/Conta/Sair (flex-shrink:0 abaixo) pra fora da
-     tela quando o texto de status ou o nome da empresa fica mais comprido
-     que o normal. Sem isso, "Sair" ficava cortado e inalcançável (o
-     html{overflow-x:hidden} lá em cima existe de propósito, ver comentário,
-     então não dava pra rolar a página pra alcançar) — achado real reportado
-     pelo usuário. Barra de rolagem escondida de propósito (scrollbar-width:
-     none / ::-webkit-scrollbar{display:none}) — achado real: em uso normal
-     (nome de empresa comum) isso aqui nunca chega a rolar de verdade, mas o
-     Windows já reserva/desenha a barra só por overflow-x:auto estar
-     presente, aparecendo como uma faixa vazia sempre visível ao rolar a
-     página. Continua rolável por gesto/scroll horizontal (trackpad, shift+
-     wheel) no raríssimo caso de precisar; só a barra em si é que não
-     aparece à toa. */
-  .header-meio{display:flex;align-items:center;gap:14px;flex:1;min-width:0;
-    overflow-x:auto;scrollbar-width:none}
-  .header-meio::-webkit-scrollbar{display:none}
+  /* Envolve menu compacto + status/tema/Recalcular. Existiu uma versão com
+     overflow-x:auto aqui (proteger Coletar agora/Conta/Sair de sumir da tela
+     quando o texto de status ficava mais comprido que o normal) — REVERTIDO:
+     um container só pode ter overflow-x diferente de "visible" sem também
+     forçar overflow-y pro mesmo valor (regra do próprio CSS -- não dá pra
+     misturar um eixo "visible" com o outro não), e isso cortava os
+     dropdowns "Editais"/"Meu negócio"/"Conta" (abrem pra baixo, position:
+     absolute) que vivem dentro desta faixa. A proteção contra texto comprido
+     agora mora só no #coleta-status abaixo (max-width + "…", mesma técnica
+     já usada em #user-nome) -- nav-compacta em si só tem rótulos fixos
+     (Início/Editais/Meu negócio/Conta), largura sempre previsível, não
+     precisa de rede de segurança nenhuma. */
+  .header-meio{display:flex;align-items:center;gap:14px;flex:1;min-width:0}
   #btn-coletar,.header-conta-desktop{flex-shrink:0}
   .header-conta-desktop{display:flex;align-items:center;gap:8px;margin-left:6px;
     border-left:1px solid var(--line);padding-left:12px}
@@ -627,12 +621,13 @@
        comentário do @media. */
     #topo-fixo.compacto header,
     #topo-fixo.compacto header *{white-space:nowrap}
-    /* nome da empresa é o único texto sem tamanho previsível dessa barra
-       (razão social digitada pelo usuário) — trunca com "…" em vez de
-       arriscar estourar a largura de novo com um nome muito longo, mesmo
-       padrão já usado em .nav-footer .nav-user-nome pro mesmo campo na
-       gaveta do celular. */
+    /* nome da empresa e o texto de status da coleta são os dois textos sem
+       tamanho previsível dessa barra (razão social digitada pelo usuário; e
+       "Última coleta há X min · Y novos" varia de tamanho) — truncam com
+       "…" em vez de arriscar estourar a largura de novo, mesmo padrão já
+       usado em .nav-footer .nav-user-nome pro nome na gaveta do celular. */
     #topo-fixo.compacto #user-nome{max-width:170px;overflow:hidden;text-overflow:ellipsis}
+    #topo-fixo.compacto #coleta-status{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
     /* Folga extra no fim da página — sem ela, em telas com pouco conteúdo
        (poucos editais, abas curtas etc.) o scroll máximo fica bem perto do
        limiar de 60px que liga o modo compacto: ligar o compacto encolhe o
@@ -812,9 +807,15 @@
   <div class="header-meio">
     <nav class="nav-compacta" id="nav-compacta">
       <button data-tab="inicio" onclick="tab('inicio')">Início</button>
-      <button data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
-      <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
-      <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
+      <div class="nav-grupo-wrap">
+        <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Editais
+          <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="nav-dropdown">
+          <button data-tab="editais" onclick="tab('editais')">Encontrados</button>
+          <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+          <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
+        </div>
+      </div>
       <div class="nav-grupo-wrap">
         <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
           <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -856,10 +857,16 @@
 <nav id="nav">
     <div class="nav-head">Menu<button class="nav-close" onclick="toggleMenu()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div id="slot-header-extra-mobile"></div>
-    <button data-tab="inicio" onclick="tab('inicio')">Início</button>
-    <button class="active" data-tab="editais" onclick="tab('editais')">Editais encontrados</button>
-    <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
-    <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
+    <button class="active" data-tab="inicio" onclick="tab('inicio')">Início</button>
+    <div class="nav-grupo-wrap">
+      <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Editais
+        <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="nav-dropdown">
+        <button data-tab="editais" onclick="tab('editais')">Encontrados</button>
+        <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
+        <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
+      </div>
+    </div>
     <div class="nav-grupo-wrap">
       <button class="nav-grupo-btn" onclick="toggleNavGrupo(this,event)">Meu negócio
         <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -4938,24 +4945,17 @@ async function sair(){
   _initBuscaItemDestaque();
   _reposicionarHeaderExtra();
   window.addEventListener('resize', _reposicionarHeaderExtra);
-  // loadResumo() continua na carga inicial (PRODUTOS_COUNT alimenta o estado
-  // vazio da aba Editais, que é a padrão); agenda/documentos são só do
-  // painel "Início" — carregam sozinhos quando o usuário entra nessa aba
-  // (ver tab()), não em toda carga de página.
+  // Início é a aba padrão (tab() cuida de marcar o botão certo como ativo,
+  // esconder as outras seções e carregar o painel do dia — mesma função
+  // usada pra qualquer troca de aba, sem duplicar lógica aqui). loadEditais()
+  // continua rodando na carga inicial mesmo assim: PRODUTOS_COUNT (dentro de
+  // loadResumo) alimenta o estado vazio da aba Editais, e pré-carregar a
+  // lista deixa a troca pra lá mais rápida quando o usuário for.
+  tab('inicio');
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
-
-  // login.html manda pra cá com "?aba=inicio" logo após autenticar — mostra
-  // o painel do dia nesse momento específico (recém-logado), sem mudar a
-  // aba padrão de quem só recarrega a página com sessão já aberta (essa
-  // continua sendo Editais encontrados). Limpa o parâmetro da URL depois,
-  // senão um F5 manual continuaria forçando a aba Início pra sempre.
-  if(new URLSearchParams(location.search).get('aba')==='inicio'){
-    history.replaceState({}, '', location.pathname);
-    tab('inicio');
-  }
 
   // carregado direto em /edital/{id} (link colado/compartilhado/recarregado)
   // — mesmo padrão do login.html: decide pela URL. Usa replaceState (não

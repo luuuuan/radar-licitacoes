@@ -456,10 +456,8 @@ async function entrar(e){
   const btn=$('#l-submit'); btn.disabled=true;
   const r=await post('/api/auth/login',{email:$('#l-email').value, senha:$('#l-senha').value});
   btn.disabled=false;
-  // manda direto pro painel "Início" logo após entrar — quem só recarrega a
-  // página com sessão já aberta continua caindo em Editais encontrados (ver
-  // index.html), isso aqui é só o momento específico de acabar de logar.
-  if(r.ok){ location.href='/?aba=inicio'; }
+  // "/" já abre no painel "Início" por padrão (ver index.html)
+  if(r.ok){ location.href='/'; }
   else msg(r.data.detail || 'Não foi possível entrar.');
   return false;
 }
