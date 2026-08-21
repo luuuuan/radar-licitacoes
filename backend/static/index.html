@@ -406,7 +406,15 @@
   /* Tablet */
   @media (max-width:1024px){
     .wrap{padding:18px}
-    .painel-widgets{grid-template-columns:1fr}
+    /* minmax(0,...) — não só "1fr" — de propósito: repete a mesma proteção
+       da regra desktop (ver .painel-widgets acima). Um "1fr" puro tem
+       mínimo automático igual ao min-content do conteúdo mais largo lá
+       dentro (achado real: nenhum texto interno tinha nowrap suficiente
+       pra ser óbvio, mas a soma bastava pra estourar), então a coluna nunca
+       encolhia de verdade abaixo de ~540px — isso empurrava a página
+       inteira mais larga que a tela no celular, quebrando o layout
+       (Agenda da semana e Documentos ficavam cortados/zoom out). */
+    .painel-widgets{grid-template-columns:minmax(0,1fr)}
     .modal-card{max-width:92vw}
   }
   /* Celular */
