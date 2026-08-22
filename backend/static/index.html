@@ -200,6 +200,54 @@
   .recente .meta{font-size:11px;color:var(--muted);margin-top:1px}
   .recente .quando{font-size:11px;color:var(--muted);flex-shrink:0;white-space:nowrap}
 
+  /* ---- card "Editais ganhos": valor/custo/margem vêm da Proposta salva,
+     nunca do valor estimado do edital -- ver GET /api/ganhos ---- */
+  .card-ganhos{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:20px 22px;margin-top:16px}
+  .ganhos-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+    flex-wrap:wrap;margin-bottom:16px}
+  .ganhos-head h3{font-size:15px;margin:0;font-weight:700}
+  .mes-nav{display:flex;align-items:center;gap:2px;flex-shrink:0}
+  .mes-nav button{display:flex;align-items:center;justify-content:center;background:none;
+    border:1px solid var(--line);color:var(--muted);width:26px;height:26px;border-radius:7px;
+    cursor:pointer;padding:0;transition:border-color .15s,color .15s;font:inherit}
+  .mes-nav button:hover{border-color:var(--accent);color:var(--accent)}
+  .mes-nav button svg{width:14px;height:14px}
+  .mes-nav .rotulo{background:none;border:1px solid var(--line);color:var(--txt);font:inherit;
+    font-weight:700;font-size:12.5px;padding:0 12px;height:26px;border-radius:7px;margin:0 2px;
+    min-width:112px;text-align:center}
+  .ganhos-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+  .ganhos-stats .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .ganhos-stats .stat .n{font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.15;
+    display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+  .ganhos-stats .stat .l{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .ganhos-stats .stat.margem .n{color:var(--forte)}
+  .ganhos-stats .stat.margem.negativa .n{color:var(--destructive)}
+  .ganhos-variacao{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;white-space:nowrap}
+  .ganhos-variacao.pos{background:rgba(34,197,94,.14);color:var(--forte)}
+  .ganhos-variacao.neg{background:rgba(239,68,68,.14);color:var(--destructive)}
+  .ganhos-lista{display:flex;flex-direction:column;gap:0}
+  .ganho-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px dashed var(--line);cursor:pointer}
+  .ganho-row:first-child{border-top:none;padding-top:2px}
+  .ganho-row:hover .org{color:var(--accent-claro)}
+  .ganho-row .barra{width:3px;align-self:stretch;border-radius:2px;flex-shrink:0;background:var(--forte)}
+  .ganho-row.sem-proposta .barra{background:var(--fraco)}
+  .ganho-row .info{min-width:0;flex:1}
+  .ganho-row .org{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;transition:color .15s}
+  .ganho-row .meta{font-size:11.5px;color:var(--muted);margin-top:1px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .ganho-row .valores{text-align:right;flex-shrink:0}
+  .ganho-row .valor-total{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .ganho-row .margem-pill{display:inline-block;margin-top:3px;font-size:10.5px;font-weight:700;
+    padding:2px 8px;border-radius:999px;background:rgba(34,197,94,.14);color:var(--forte);
+    font-variant-numeric:tabular-nums}
+  .ganho-row.sem-proposta .valores{color:var(--muted);font-size:11.5px;font-style:italic}
+  @media (max-width:680px){
+    .ganhos-stats{grid-template-columns:repeat(2,1fr)}
+    .ganho-row .meta{display:none}
+  }
+
   .compr-tabs{display:flex;gap:6px;margin-bottom:10px}
   .compr-tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
     padding:6px 14px;border-radius:999px;cursor:pointer;font-size:12.5px;font-weight:600}
@@ -911,6 +959,7 @@
       <div class="widget" id="painel-recentes"></div>
       <div class="widget" id="painel-docs"></div>
     </div>
+    <div class="card-ganhos" id="painel-ganhos"></div>
   </section>
 
   <!-- EDITAIS -->
@@ -1739,7 +1788,10 @@ function tab(name){
   // função do botão "Atualizar") pra também deixar os KPIs/hero em dia,
   // sem duplicar a lógica de busca em outro lugar.
   if(name==='inicio') atualizarPainel();
-  if(name==='encerrados') loadEncerrados();
+  // entrar pela navegação normal sempre reseta o filtro de status (mesmo
+  // que uma visita anterior via verGanhosEmEncerrados() tenha deixado
+  // "ganho" grudado) -- só quem entra explicitamente por ali pede filtro.
+  if(name==='encerrados') loadEncerrados(true, null);
   if(name==='favoritos') loadFavoritos();
   if(name==='catalogo') loadProdutos();
   if(name==='fornecedores') loadFornecedores();
@@ -1799,6 +1851,8 @@ function filtrarDoDia(){ filtrarKpi('hoje'); }
 
 // ---- Agenda da semana + Documentos a vencer: widgets do painel do dia ----
 const _MESES_ABREV=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const _MESES_NOME=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho',
+  'Agosto','Setembro','Outubro','Novembro','Dezembro'];
 // parse manual (sem `new Date(iso)`) de propósito — evita o dia mudar por
 // causa do fuso ao interpretar "YYYY-MM-DD" como UTC meia-noite.
 function _diaMes(iso){
@@ -2057,7 +2111,7 @@ async function loadEditaisRecentes(){
   const el = $('#painel-recentes');
   if(!el) return;
   let editais = [];
-  try{ editais = (await api('/api/editais/recentes?limite=4')).editais||[]; }catch(e){}
+  try{ editais = (await api('/api/editais/recentes?limite=5')).editais||[]; }catch(e){}
   const linhas = editais.length ? editais.map(ed=>{
     const meta = [ed.modalidade, [ed.municipio, ed.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ');
     const segAtras = ed.interagido_em ? (Date.now() - new Date(ed.interagido_em).getTime())/1000 : null;
@@ -2073,18 +2127,92 @@ async function loadEditaisRecentes(){
     <div class="recentes">${linhas}</div>`;
 }
 
+// Card "Editais ganhos": valor/custo/margem vêm da Proposta salva (nunca
+// do valor estimado do edital) -- ver GET /api/ganhos. Filtro por mês
+// (quando o status virou "ganho", não nenhuma data do próprio edital).
+let _ganhosAno = new Date().getFullYear();
+let _ganhosMes = new Date().getMonth() + 1;   // 1-12
+
+function _mudarMesGanhos(delta){
+  _ganhosMes += delta;
+  if(_ganhosMes < 1){ _ganhosMes = 12; _ganhosAno--; }
+  else if(_ganhosMes > 12){ _ganhosMes = 1; _ganhosAno++; }
+  loadGanhos();
+}
+function _voltarMesAtualGanhos(){
+  const agora = new Date();
+  _ganhosAno = agora.getFullYear(); _ganhosMes = agora.getMonth()+1;
+  loadGanhos();
+}
+// "Ver todos os ganhos": mesma tela de Encerrados que já existe, só
+// filtrada por status -- em vez de construir uma página nova só pra
+// listar de novo o que o card já resume. "Ver detalhes" de cada um é a
+// própria aba Proposta do edital (onde já dá pra ver os itens e valores).
+function verGanhosEmEncerrados(){
+  tab('encerrados');
+  loadEncerrados(true, 'ganho');
+}
+
+async function loadGanhos(){
+  const el = $('#painel-ganhos');
+  if(!el) return;
+  let r;
+  try{ r = await api(`/api/ganhos?ano=${_ganhosAno}&mes=${_ganhosMes}`); }
+  catch(e){ return; }
+
+  let variacaoHtml = '';
+  if(r.margem_variacao_pct != null){
+    const pos = r.margem_variacao_pct >= 0;
+    variacaoHtml = ` <span class="ganhos-variacao ${pos?'pos':'neg'}">${pos?'▲':'▼'} ${Math.abs(r.margem_variacao_pct)}% vs. mês anterior</span>`;
+  }
+
+  const linhas = r.editais.length ? r.editais.map(ed=>{
+    const meta = [ed.modalidade, ed.objeto].filter(Boolean).join(' · ');
+    const valores = ed.tem_proposta
+      ? `<div class="valor-total">${fmtMoeda(ed.valor_total)}</div>
+         <span class="margem-pill">${ed.margem>=0?'+':''}${ed.margem_pct}%</span>`
+      : 'sem proposta salva';
+    return `<div class="ganho-row${ed.tem_proposta?'':' sem-proposta'}" onclick="abrirPaginaEdital(${ed.edital_id},'proposta')">
+      <div class="barra"></div>
+      <div class="info"><div class="org">${esc(ed.orgao||'Órgão não informado')}</div>
+        <div class="meta">${esc(meta)}</div></div>
+      <div class="valores">${valores}</div>
+    </div>`;
+  }).join('') : '<p class="muted" style="font-size:12px;margin:4px 0 0">Nenhum edital ganho neste mês.</p>';
+
+  el.innerHTML = `
+    <div class="ganhos-head">
+      <h3>Editais ganhos</h3>
+      <div class="mes-nav">
+        <button type="button" aria-label="Mês anterior" onclick="_mudarMesGanhos(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+        <button type="button" class="rotulo" onclick="_voltarMesAtualGanhos()">${_MESES_NOME[_ganhosMes-1]} ${_ganhosAno}</button>
+        <button type="button" aria-label="Próximo mês" onclick="_mudarMesGanhos(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+    </div>
+    <div class="ganhos-stats">
+      <div class="stat"><div class="n">${r.quantidade}</div><div class="l">Editais ganhos</div></div>
+      <div class="stat"><div class="n">${fmtMoeda(r.valor_total)}</div><div class="l">Valor total (proposta)</div></div>
+      <div class="stat"><div class="n">${fmtMoeda(r.custo_total)}</div><div class="l">Custo total</div></div>
+      <div class="stat margem${r.margem_total<0?' negativa':''}"><div class="n">${r.margem_total>=0?'+':''}${fmtMoeda(r.margem_total)}${variacaoHtml}</div><div class="l">Margem (${r.margem_pct}%)</div></div>
+    </div>
+    <div class="ganhos-lista">${linhas}</div>
+    <button class="ver-mais" type="button" onclick="verGanhosEmEncerrados()">Ver todos os ganhos
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </button>`;
+}
+
 function _marcarPainelAtualizado(){
   const agora = new Date();
   const lbl = $('#painel-atualizado');
   if(lbl) lbl.textContent = `Atualizado às ${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
 }
-// botão "Atualizar" do painel: reconsulta os 4 pedaços (KPIs, agenda na
-// semana em exibição, documentos, editais analisados recentemente) de uma
-// vez, sem precisar dar F5 na página inteira.
+// botão "Atualizar" do painel: reconsulta os 5 pedaços (KPIs, agenda na
+// semana em exibição, documentos, editais analisados recentemente, editais
+// ganhos no mês em exibição) de uma vez, sem precisar dar F5 na página inteira.
 async function atualizarPainel(btn){
   if(btn){ btn.disabled = true; btn.classList.remove('girando'); void btn.offsetWidth; btn.classList.add('girando'); }
   try{
-    await Promise.all([loadResumo(), loadAgenda(_agendaOffset), loadDocumentosResumo(), loadEditaisRecentes()]);
+    await Promise.all([loadResumo(), loadAgenda(_agendaOffset), loadDocumentosResumo(), loadEditaisRecentes(), loadGanhos()]);
     _marcarPainelAtualizado();
   } finally {
     if(btn) btn.disabled = false;
@@ -2414,14 +2542,30 @@ function cardEditalSemMatch(e){
 }
 
 let paginaEncerrados = 1;
+// null = sem filtro (padrão da aba); "ganho" quando chega aqui pelo card
+// "Editais ganhos" do painel Início (ver verGanhosEmEncerrados). Fica
+// "grudado" entre páginas (mudarPaginaEnc não passa 2º argumento, então
+// não sobrescreve) até o usuário limpar ou entrar na aba de novo pelo menu.
+let _encerradosStatusFiltro = null;
 
-async function loadEncerrados(resetPagina=true){
+async function loadEncerrados(resetPagina=true, statusFiltro=undefined){
   if(resetPagina) paginaEncerrados = 1;
+  if(statusFiltro !== undefined) _encerradosStatusFiltro = statusFiltro;
   const qs=new URLSearchParams({pagina:paginaEncerrados, por_pagina:20, vista:'encerrados'});
+  if(_encerradosStatusFiltro) qs.set('status', _encerradosStatusFiltro);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
-  if(!eds.length){ $('#lista-encerrados').innerHTML='<p class="muted">Nenhum edital encerrado que você participou. Aparecem aqui os editais com prazo vencido marcados como “proposta enviada”, “ganho” ou “perdido”.</p>'; return; }
-  $('#lista-encerrados').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaEnc',paginaEncerrados);
+  const aviso = _encerradosStatusFiltro === 'ganho'
+    ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">Mostrando só os editais ganhos —
+        <a href="#" onclick="event.preventDefault();loadEncerrados(true,null)" style="color:var(--accent)">ver todos os encerrados</a></p>`
+    : '';
+  if(!eds.length){
+    $('#lista-encerrados').innerHTML = aviso + '<p class="muted">Nenhum edital encerrado' +
+      (_encerradosStatusFiltro?' com esse status':' que você participou') +
+      '. Aparecem aqui os editais com prazo vencido marcados como “proposta enviada”, “ganho” ou “perdido”.</p>';
+    return;
+  }
+  $('#lista-encerrados').innerHTML = aviso + eds.map(cardEdital).join('') + navPaginacao(r,'mudarPaginaEnc',paginaEncerrados);
 }
 
 function mudarPaginaEnc(delta){

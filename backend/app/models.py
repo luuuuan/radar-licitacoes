@@ -232,6 +232,11 @@ class Match(Base):
     # (itens/cotação/análise/documentos/proposta) -- alimenta o card
     # "Analisados recentemente" do painel Início. None = nunca abriu.
     interagido_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # última vez que "status" mudou (qualquer valor, não só "ganho") --
+    # alimenta o filtro por mês do card "Editais ganhos" do painel Início.
+    # Sem isso não tinha como saber QUANDO o usuário marcou como ganho, só
+    # o valor atual do status.
+    status_atualizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
 

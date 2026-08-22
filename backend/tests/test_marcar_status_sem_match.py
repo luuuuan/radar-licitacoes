@@ -122,3 +122,17 @@ def test_mudar_status_edital_inexistente_da_404():
     with pytest.raises(HTTPException) as exc:
         mudar_status(999999, StatusIn(status="vou_participar"), user=u, db=db)
     assert exc.value.status_code == 404
+
+
+def test_mudar_status_grava_quando_a_mudanca_aconteceu():
+    """status_atualizado_em alimenta o filtro por mês do card "Editais
+    ganhos" -- sem isso não tinha como saber QUANDO virou "ganho", só o
+    status atual."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db)
+
+    mudar_status(ed.id, StatusIn(status="ganho"), user=u, db=db)
+
+    match = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert match.status_atualizado_em is not None

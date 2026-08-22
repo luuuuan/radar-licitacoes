@@ -93,7 +93,8 @@ _COLUNAS_NOVAS.setdefault("matches", [])
 for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),
           ("prazo_avisado_telegram", "BOOLEAN DEFAULT FALSE"),
           ("abertura_avisada_telegram", "BOOLEAN DEFAULT FALSE"),
-          ("interagido_em", "TIMESTAMP")):
+          ("interagido_em", "TIMESTAMP"),
+          ("status_atualizado_em", "TIMESTAMP")):
     if _c not in _COLUNAS_NOVAS["matches"]:
         _COLUNAS_NOVAS["matches"].append(_c)
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])

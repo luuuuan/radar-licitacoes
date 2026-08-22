@@ -1377,6 +1377,9 @@ def mudar_status(edital_id: int, dados: StatusIn,
         raise HTTPException(400, f"Status inválido. Use um de: {', '.join(sorted(STATUS_VALIDOS))}")
     m = _match_do_usuario_por_edital(db, edital_id, user)
     m.status = dados.status
+    # quando o status mudou, não só o valor atual -- alimenta o filtro por
+    # mês do card "Editais ganhos" do painel Início (ver GET /api/ganhos).
+    m.status_atualizado_em = _utcnow_main()
     db.commit()
     return {"ok": True}
 
@@ -3033,6 +3036,106 @@ def editais_recentes(limite: int = 5, user: Usuario = Depends(_auth.get_current_
         "valor_estimado": ed.valor_estimado, "nivel": m.nivel, "score": m.score,
         "interagido_em": _brt(m.interagido_em),
     } for ed, m in linhas]}
+
+
+def _intervalo_mes(ano: int, mes: int) -> tuple[datetime, datetime]:
+    inicio = datetime(ano, mes, 1)
+    fim = datetime(ano + 1, 1, 1) if mes == 12 else datetime(ano, mes + 1, 1)
+    return inicio, fim
+
+
+def _mes_anterior(ano: int, mes: int) -> tuple[int, int]:
+    return (ano - 1, 12) if mes == 1 else (ano, mes - 1)
+
+
+def _totais_ganhos_mes(db: Session, user: Usuario, ano: int, mes: int) -> dict:
+    """Soma valor/custo/margem das Propostas salvas dos editais marcados
+    "ganho" nesse mês -- só usada pra comparação com o mês corrente (ver
+    GET /api/ganhos), não precisa da lista de editais, só os totais."""
+    inicio, fim = _intervalo_mes(ano, mes)
+    edital_ids = db.execute(
+        select(Match.edital_id).where(
+            Match.usuario_id == user.id, Match.status == "ganho",
+            Match.status_atualizado_em.is_not(None),
+            Match.status_atualizado_em >= inicio, Match.status_atualizado_em < fim,
+        )
+    ).scalars().all()
+    valor_total = custo_total = 0.0
+    if edital_ids:
+        for p in db.execute(
+            select(Proposta).where(Proposta.edital_id.in_(edital_ids), Proposta.usuario_id == user.id)
+        ).scalars():
+            if not p.itens:
+                continue
+            valor_total += sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in p.itens)
+            custo_total += sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in p.itens)
+    margem_total = valor_total - custo_total
+    return {"quantidade": len(edital_ids), "valor_total": round(valor_total, 2),
+           "custo_total": round(custo_total, 2), "margem_total": round(margem_total, 2)}
+
+
+@app.get("/api/ganhos")
+def ganhos(ano: int = Query(...), mes: int = Query(..., ge=1, le=12),
+          user: Usuario = Depends(_auth.get_current_user),
+          db: Session = Depends(get_session)):
+    """Editais marcados "ganho" no mês informado -- o mês é quando o status
+    virou "ganho" (status_atualizado_em), não nenhuma data do próprio
+    edital. Valor/custo/margem vêm da Proposta salva pelo usuário, nunca do
+    valor estimado do edital -- edital ganho sem proposta salva conta na
+    quantidade mas não entra nos valores (tem_proposta=false). Alimenta o
+    card "Editais ganhos" do painel Início, incluindo a comparação com o
+    mês anterior."""
+    inicio, fim = _intervalo_mes(ano, mes)
+    linhas = db.execute(
+        select(Match, Edital).join(Edital, Edital.id == Match.edital_id)
+        .where(Match.usuario_id == user.id, Match.status == "ganho")
+        .where(Match.status_atualizado_em.is_not(None))
+        .where(Match.status_atualizado_em >= inicio, Match.status_atualizado_em < fim)
+        .order_by(Match.status_atualizado_em.desc())
+    ).all()
+
+    edital_ids = [ed.id for _m, ed in linhas]
+    propostas = {}
+    if edital_ids:
+        for p in db.execute(
+            select(Proposta).where(Proposta.edital_id.in_(edital_ids), Proposta.usuario_id == user.id)
+        ).scalars():
+            propostas[p.edital_id] = p
+
+    editais_out = []
+    valor_total = custo_total = 0.0
+    for _m, ed in linhas:
+        prop = propostas.get(ed.id)
+        tem_proposta = bool(prop and prop.itens)
+        item = {"edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+               "modalidade": ed.modalidade, "tem_proposta": tem_proposta}
+        if tem_proposta:
+            tv = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in prop.itens)
+            tc = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in prop.itens)
+            margem = tv - tc
+            item.update({
+                "valor_total": round(tv, 2), "custo_total": round(tc, 2),
+                "margem": round(margem, 2),
+                "margem_pct": round(margem / tv * 100, 1) if tv else 0.0,
+            })
+            valor_total += tv
+            custo_total += tc
+        editais_out.append(item)
+
+    margem_total = valor_total - custo_total
+    comparacao = _totais_ganhos_mes(db, user, *_mes_anterior(ano, mes))
+    margem_variacao_pct = (round((margem_total - comparacao["margem_total"]) / abs(comparacao["margem_total"]) * 100, 1)
+                           if comparacao["margem_total"] else None)
+
+    return {
+        "ano": ano, "mes": mes,
+        "quantidade": len(linhas),
+        "valor_total": round(valor_total, 2), "custo_total": round(custo_total, 2),
+        "margem_total": round(margem_total, 2),
+        "margem_pct": round(margem_total / valor_total * 100, 1) if valor_total else 0.0,
+        "margem_variacao_pct": margem_variacao_pct,
+        "editais": editais_out,
+    }
 
 
 _MAX_DIAS_COMPROMISSOS = 62  # ~2 meses -- trava de custo, evita varredura de intervalo absurdo
