@@ -8,6 +8,8 @@ Nem todos os campos precisam estar presentes.
 from __future__ import annotations
 import html
 
+from ..config import settings
+
 
 # ----------------------------- helpers ----------------------------- #
 def _esc(t) -> str:
@@ -21,6 +23,17 @@ def _linha_local(it) -> str:
     return m or uf or ""
 
 
+def _link_edital(ed) -> str | None:
+    """Link "Abrir edital" das notificações -- pedido do usuário: manda pra
+    página do PRÓPRIO site (onde já dá pra ver compatibilidade, cotação,
+    proposta etc.), não pro portal de origem (PNCP). Sem APP_BASE_URL
+    configurado (dev local, sem envio de verdade) cai pro link original do
+    portal, pra nunca gerar uma URL relativa quebrada dentro do e-mail."""
+    if settings.APP_BASE_URL:
+        return f"{settings.APP_BASE_URL.rstrip('/')}/edital/{ed.id}"
+    return ed.link
+
+
 def item_edital(ed, nivel: str | None = None) -> dict:
     """Constrói o dict padrão de um edital a partir do modelo Edital, usado
     tanto pelo aviso de novas oportunidades quanto pelos lembretes de prazo/
@@ -28,7 +41,7 @@ def item_edital(ed, nivel: str | None = None) -> dict:
     datas) em vez de cada chamador montar um subconjunto diferente."""
     return {
         "objeto": ed.objeto, "orgao": ed.orgao,
-        "municipio": ed.municipio, "uf": ed.uf, "link": ed.link,
+        "municipio": ed.municipio, "uf": ed.uf, "link": _link_edital(ed),
         "valor_estimado": ed.valor_estimado,
         "abertura": str(ed.data_abertura) if ed.data_abertura else "",
         "encerramento": str(ed.data_encerramento) if ed.data_encerramento else "",
