@@ -84,7 +84,7 @@ class _PropostaPDF(FPDF):
             # da imagem dentro da caixa, sem esticar/achatar.
             lado = 110
             cx, cy = self.w / 2, self.h / 2
-            with self.local_context(fill_opacity=0.07, stroke_opacity=0.07):
+            with self.local_context(fill_opacity=0.18, stroke_opacity=0.18):
                 self.image(buf, x=cx - lado / 2, y=cy - lado / 2, w=lado, h=lado,
                           keep_aspect_ratio=True)
         except Exception:
