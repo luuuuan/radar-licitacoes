@@ -5089,26 +5089,34 @@ async function sair(){
   _initBuscaItemDestaque();
   _reposicionarHeaderExtra();
   window.addEventListener('resize', _reposicionarHeaderExtra);
-  // Início é a aba padrão (tab() cuida de marcar o botão certo como ativo,
-  // esconder as outras seções e carregar o painel do dia — mesma função
-  // usada pra qualquer troca de aba, sem duplicar lógica aqui). loadEditais()
-  // continua rodando na carga inicial mesmo assim: PRODUTOS_COUNT (dentro de
-  // loadResumo) alimenta o estado vazio da aba Editais, e pré-carregar a
-  // lista deixa a troca pra lá mais rápida quando o usuário for.
-  tab('inicio');
-  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
-    setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
-  });
-  setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
-
-  // carregado direto em /edital/{id} (link colado/compartilhado/recarregado)
-  // — mesmo padrão do login.html: decide pela URL. Usa replaceState (não
-  // pushState) pra não empilhar um estado de história duplicado da mesma URL.
+  // carregado direto em /edital/{id} (link colado/compartilhado/recarregado,
+  // inclusive o link "Abrir edital" das notificações) — mesmo padrão do
+  // login.html: decide pela URL. Usa replaceState (não pushState) pra não
+  // empilhar um estado de história duplicado da mesma URL. PRECISA vir
+  // antes do tab('inicio') abaixo: achado real -- tab() reescreve a URL
+  // pra "/" toda vez que a aba ativa não é a página de um edital (ver
+  // dentro de tab(), pensado pra sair de dentro de /edital/{id} navegando
+  // pelo menu). Chamando tab('inicio') primeiro, a URL já virava "/" antes
+  // do teste abaixo rodar, e o regex nunca mais casava -- o link da
+  // notificação abria e caía direto no painel Início, silenciosamente.
   const mEdital = location.pathname.match(/^\/edital\/(\d+)$/);
   if(mEdital){
     history.replaceState({view:'edital', editalId:+mEdital[1]}, '', location.pathname);
     _renderPaginaEdital(+mEdital[1], 'itens');
+  } else {
+    // Início é a aba padrão (tab() cuida de marcar o botão certo como
+    // ativo, esconder as outras seções e carregar o painel do dia — mesma
+    // função usada pra qualquer troca de aba, sem duplicar lógica aqui).
+    tab('inicio');
   }
+  // loadEditais() continua rodando na carga inicial mesmo assim (mesmo
+  // entrando direto num edital): PRODUTOS_COUNT (dentro de loadResumo)
+  // alimenta o estado vazio da aba Editais, e pré-carregar a lista deixa
+  // a troca pra lá mais rápida quando o usuário voltar do edital.
+  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
+    setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
+  });
+  setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
 })();
 </script>
 </body>
