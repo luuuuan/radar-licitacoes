@@ -1488,9 +1488,25 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
     (ex.: "PCTE"), tenta achar o tamanho na DESCRIÇÃO do item (ex.: "caixa
     com 50 unidades") antes de desistir — só quando nem isso dá pra achar é
     que assume a mesma coisa com alerta_unidade=True (sem como confirmar o
-    TAMANHO, só que não é peça avulsa)."""
+    TAMANHO, só que não é peça avulsa).
+
+    Achado real (edital PNCP 87612941000164/2026/235, item "Cola Branca
+    Lavável", unidadeMedida="UN" — nem embalagem sem número nem embalagem de
+    tamanho diferente): o alerta ainda disparava, mas por um motivo TOTALMENTE
+    diferente — a margem batia -313% porque o custo cadastrado (fornecedor
+    de varejo, ~R$53) era muito maior que o valor que o órgão paga (R$13,59).
+    Não é as unidades que "não batem", é o preço mesmo que não é competitivo
+    pra este item — mas a mensagem de "confira a unidade de venda" enganava,
+    já que ajustar unidade_venda/itens_por_unidade nunca faz esse alerta
+    sumir (o problema não está ali). alerta_embalagem cobre só os dois casos
+    de cima (isso SIM se resolve ajustando o catálogo); alerta_margem_extrema
+    cobre esse terceiro caso (isso só se resolve conferindo o preço de custo,
+    ou aceitando que o item não é viável). alerta_unidade continua sendo a
+    união dos dois — mantém o comportamento de "esconder a margem calculada,
+    mostrar 'conferir'" em todo lugar que já usava só esse campo."""
     if valor_unitario is None or produto.preco_custo is None:
-        return {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
+        return {"margem": None, "margem_pct": None, "custo_comparavel": None,
+                "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
     por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
     qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
     if qtd_embalagem_item is None:
@@ -1512,11 +1528,15 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
         custo_comparavel = round(produto.preco_custo / por_unid, 4)
     margem = round(valor_unitario - custo_comparavel, 4)
     margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
-    # se a margem ainda é absurda, provavelmente as unidades não batem
-    alerta_unidade = embalagem_incompativel or embalagem_nao_confirmada or (
-        margem_pct is not None and (margem_pct < -300 or margem_pct > 300))
+    alerta_embalagem = embalagem_incompativel or embalagem_nao_confirmada
+    # margem fora de -300%/+300% é um sinal de algo errado, mas não
+    # necessariamente unidade — pode ser preço de custo digitado errado, ou
+    # simplesmente um item sem competitividade nenhuma pra esse fornecedor.
+    alerta_margem_extrema = margem_pct is not None and (margem_pct < -300 or margem_pct > 300)
+    alerta_unidade = alerta_embalagem or alerta_margem_extrema
     return {"margem": margem, "margem_pct": margem_pct, "custo_comparavel": custo_comparavel,
-           "alerta_unidade": alerta_unidade}
+           "alerta_unidade": alerta_unidade, "alerta_embalagem": alerta_embalagem,
+           "alerta_margem_extrema": alerta_margem_extrema}
 
 
 def _validacao_tecnica_json(descricao_item: str, produto: Produto, score_semantico: float) -> dict | None:
@@ -1587,7 +1607,8 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         # em auditoria de produção).
         compativel = prod is not None and (confianca == "alta" or confirmado)
 
-        margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
+        margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None,
+                        "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
         validacao_tecnica = None
         if compativel:
             margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida, it.descricao)

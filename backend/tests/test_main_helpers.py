@@ -48,6 +48,10 @@ def test_custo_e_margem_marca_alerta_unidade_quando_absurda():
     p = _produto(preco_custo=1000.0, itens_por_unidade=None)
     r = _custo_e_margem(1.0, p)
     assert r["alerta_unidade"] is True
+    # margem absurda SEM nenhuma embalagem envolvida (itens_por_unidade=None)
+    # — não é caso de "unidade não bate", é margem_extrema mesmo.
+    assert r["alerta_embalagem"] is False
+    assert r["alerta_margem_extrema"] is True
 
 
 def test_qtd_embalagem_pncp_extrai_numero():
@@ -166,6 +170,24 @@ def test_custo_e_margem_sem_numero_na_unidade_nem_na_descricao_continua_alertand
     anterior (não tem como confirmar, alerta pedindo conferência)."""
     p = _produto(preco_custo=30.75, itens_por_unidade=500)
     r = _custo_e_margem(21.69, p, unidade_medida_item="PCTE", descricao_item="Papel sulfite branco")
+    assert r["alerta_unidade"] is True
+
+
+def test_custo_e_margem_margem_extrema_sem_embalagem_nao_e_problema_de_unidade():
+    """Achado real de produção (mesmo edital, item 29 "Cola Branca Lavável -
+    01kg"): unidadeMedida="UN" — nem abreviação de embalagem, nem número
+    incompatível, então alerta_embalagem nunca entra em jogo. O alerta que
+    aparecia vinha só da margem batendo -313% (custo de fornecedor de
+    varejo ~R$53 contra os R$13,59 que o órgão paga) — ajustar unidade de
+    venda/itens por unidade no Catálogo NUNCA faria esse alerta sumir,
+    porque o problema não é de unidade. alerta_embalagem tem que ficar
+    False aqui, mesmo com alerta_unidade (o campo "geral") True."""
+    p = _produto(preco_custo=56.21, itens_por_unidade=None)
+    r = _custo_e_margem(13.59, p, unidade_medida_item="UN",
+                        descricao_item="Cola Branca Lavável - 01kg")
+    assert r["margem_pct"] < -300
+    assert r["alerta_embalagem"] is False
+    assert r["alerta_margem_extrema"] is True
     assert r["alerta_unidade"] is True
 
 
