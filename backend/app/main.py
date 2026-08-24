@@ -1445,8 +1445,33 @@ def _e_unidade_embalagem_pncp(unidade_medida: str | None) -> bool:
     return normalizar(unidade_medida).strip() in _UNIDADES_EMBALAGEM_PNCP
 
 
+# Achado real (edital "Caneta esferográfica... caixa com 50 unidades", PNCP
+# unidadeMedida="CX" sem número): o campo unidadeMedida às vezes vem SÓ com a
+# abreviação, mas o tamanho real da embalagem está escrito na DESCRIÇÃO do
+# item mesmo — _qtd_embalagem_pncp nunca olhava pra lá, então esses itens
+# caíam sempre no ramo "embalagem_nao_confirmada" (alerta_unidade=True) por
+# mais que o produto do catálogo já tivesse itens_por_unidade=50 certinho: a
+# confirmação era simplesmente impossível de alcançar, não importava o que o
+# usuário cadastrasse. Mesma lista de palavras de embalagem, procurando
+# "<palavra> [com/de/c/] <número>" na descrição.
+_RE_QTD_EMBALAGEM_DESCRICAO = re.compile(
+    r"(?:" + "|".join(sorted(_UNIDADES_EMBALAGEM_PNCP, key=len, reverse=True)) +
+    r")s?\s*(?:com|de|c)?\s*(\d+)")
+
+
+def _qtd_embalagem_descricao(descricao: str | None) -> int | None:
+    if not descricao:
+        return None
+    from .matching.engine import normalizar
+    # normalizar já baixa a caixa e tira acento/pontuação (então "c/" vira
+    # "c" e "caixa," vira "caixa") — a regex roda em cima do texto já limpo.
+    m = _RE_QTD_EMBALAGEM_DESCRICAO.search(normalizar(descricao))
+    return int(m.group(1)) if m else None
+
+
 def _custo_e_margem(valor_unitario: float | None, produto: Produto,
-                    unidade_medida_item: str | None = None) -> dict:
+                    unidade_medida_item: str | None = None,
+                    descricao_item: str | None = None) -> dict:
     """Custo/margem de UM produto contra o valor unitário que o órgão paga
     por um item — mesmo cálculo usado em /detalhe, reaproveitado onde quer
     que a gente precise comparar preço (ex.: sugestão da IA de catálogo).
@@ -1460,12 +1485,16 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
     (`unidadeMedida`, ex.: "Embalagem 500 FL") — quando o número bate com
     itens_por_unidade do produto, o valor já está na mesma base, não divide
     de novo. Quando a unidade é só uma abreviação de embalagem sem número
-    (ex.: "PCTE"), assume a mesma coisa mas com alerta_unidade=True (sem
-    como confirmar o TAMANHO, só que não é peça avulsa)."""
+    (ex.: "PCTE"), tenta achar o tamanho na DESCRIÇÃO do item (ex.: "caixa
+    com 50 unidades") antes de desistir — só quando nem isso dá pra achar é
+    que assume a mesma coisa com alerta_unidade=True (sem como confirmar o
+    TAMANHO, só que não é peça avulsa)."""
     if valor_unitario is None or produto.preco_custo is None:
         return {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
     por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
     qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
+    if qtd_embalagem_item is None:
+        qtd_embalagem_item = _qtd_embalagem_descricao(descricao_item)
     embalagem_incompativel = False
     embalagem_nao_confirmada = False
     if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
@@ -1561,7 +1590,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None, "alerta_unidade": False}
         validacao_tecnica = None
         if compativel:
-            margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida)
+            margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida, it.descricao)
             # só reporta validação técnica quando havia um score por item
             # disponível — senão fica sem opinião, em vez de inventar um
             # "Atende" sem nenhuma checagem por trás (_validacao_tecnica_json
@@ -2415,7 +2444,7 @@ def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, 
                     "produto_id": p.id, "produto": _produto_json(p),
                     "justificativa": c["justificativa"],
                     "validacao_tecnica": _validacao_tecnica_json(ie.descricao, p, 1.0),
-                    **_custo_e_margem(ie.valor_unitario, p, ie.unidade_medida),
+                    **_custo_e_margem(ie.valor_unitario, p, ie.unidade_medida, ie.descricao),
                 })
             if not candidatos:
                 continue

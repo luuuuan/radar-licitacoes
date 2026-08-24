@@ -8,6 +8,7 @@ import pytest
 from app.models import Produto
 from app.main import (
     _custo_e_margem, _qtd_embalagem_pncp, _e_unidade_embalagem_pncp, _validacao_tecnica_json,
+    _qtd_embalagem_descricao,
 )
 
 
@@ -122,6 +123,50 @@ def test_custo_e_margem_unidade_sem_relacao_com_embalagem_continua_dividindo():
     r = _custo_e_margem(0.10, p, unidade_medida_item="Unidade")
     assert r["custo_comparavel"] == 0.05
     assert r["alerta_unidade"] is False
+
+
+def test_qtd_embalagem_descricao_extrai_tamanho_da_embalagem():
+    assert _qtd_embalagem_descricao(
+        "Caneta esferográfica 1.0 MM, Cristal clássica azul - caixa com 50 "
+        "unidades. Da marca Bic ou melhor qualidade") == 50
+    assert _qtd_embalagem_descricao("Pacote com 500 folhas de papel sulfite") == 500
+    assert _qtd_embalagem_descricao("Bola Basquete oficial, Circunferência 72-74cm") is None
+    assert _qtd_embalagem_descricao(None) is None
+
+
+def test_custo_e_margem_acha_tamanho_da_embalagem_na_descricao_quando_unidade_nao_diz():
+    """Achado real de produção (edital PNCP 87612941000164/2026/235, itens
+    19/20): unidadeMedida vem só "CX" (sem número), mas a descrição do item
+    diz "caixa com 50 unidades" — o tamanho real está ali, só que
+    _qtd_embalagem_pncp nunca olhava pra descrição. Isso fazia o alerta
+    "as unidades podem não bater" aparecer sempre, mesmo com o catálogo
+    (itens_por_unidade) configurado exatamente certo — não tinha como o
+    usuário nunca fazer o alerta sumir. Com o fallback pra descrição, bate
+    com itens_por_unidade=50 e o alerta não aparece mais."""
+    p = _produto(preco_custo=47.91, itens_por_unidade=50)
+    r = _custo_e_margem(47.91, p, unidade_medida_item="CX",
+                        descricao_item="Caneta esferográfica 1.0 MM, Cristal clássica azul - "
+                                        "caixa com 50 unidades. Da marca Bic ou melhor qualidade")
+    assert r["custo_comparavel"] == 47.91
+    assert r["alerta_unidade"] is False
+
+
+def test_custo_e_margem_descricao_com_tamanho_diferente_do_catalogo_marca_alerta():
+    """Mesmo cenário, mas o catálogo tem um tamanho de embalagem diferente
+    do que a descrição do item diz — aí SIM é uma incompatibilidade real,
+    tem que alertar (não confirmar por engano)."""
+    p = _produto(preco_custo=47.91, itens_por_unidade=25)
+    r = _custo_e_margem(47.91, p, unidade_medida_item="CX",
+                        descricao_item="caixa com 50 unidades")
+    assert r["alerta_unidade"] is True
+
+
+def test_custo_e_margem_sem_numero_na_unidade_nem_na_descricao_continua_alertando():
+    """Sem número em NENHUM dos dois lugares, mantém o comportamento
+    anterior (não tem como confirmar, alerta pedindo conferência)."""
+    p = _produto(preco_custo=30.75, itens_por_unidade=500)
+    r = _custo_e_margem(21.69, p, unidade_medida_item="PCTE", descricao_item="Papel sulfite branco")
+    assert r["alerta_unidade"] is True
 
 
 def test_validacao_tecnica_fita_adesiva_largura_divergente_nao_passa_silenciosa():
