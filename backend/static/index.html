@@ -4453,6 +4453,7 @@ async function _corpoCotacaoEdital(id){
   const linhas = selecionados.map(it=>{
     const desc = it.descricao||'';
     const descCurta = desc.length>100 ? desc.slice(0,100)+'…' : desc;
+    const linkItem = linkSeguro(it.produto ? it.produto.fornecedor_site : null);
     return `<tr>
       <td><input type="checkbox" class="chk-cotacao-item" value="${it.numero}" checked onchange="_marcarSelecaoCotacao('${it.numero}',this.checked)"></td>
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
@@ -4460,6 +4461,7 @@ async function _corpoCotacaoEdital(id){
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
       <td><input type="number" step="0.01" class="cot-frete-saida-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
+      <td>${linkItem ? `<a href="${esc(linkItem)}" target="_blank" rel="noopener">Abrir</a>` : '<span class="muted">—</span>'}</td>
     </tr>`;
   }).join('');
   return `<p class="muted" style="margin-top:0">Itens adicionados à cotação na aba "Itens / margem" — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos. Desmarcar aqui remove o item da cotação (mesmo efeito de clicar em "remover" na aba Itens / margem).</p>
@@ -4469,10 +4471,16 @@ async function _corpoCotacaoEdital(id){
         <th>Item</th><th>Descrição</th><th>Produto do catálogo</th>
         <th>Frete entrada (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Fornecedor → você, valor total pra esse item (pode ser de um fornecedor diferente dos outros itens). Fica em branco = sem custo de frete de entrada.</span></span></th>
         <th>Frete saída (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Você → órgão, valor total pra esse item. Fica em branco = sem custo de frete de saída.</span></span></th>
+        <th>Link <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Página do produto no fornecedor (campo "Site do fornecedor / página do item" no Catálogo). Sem link cadastrado pro produto, fica em branco.</span></span></th>
       </tr></thead>
       <tbody>${linhas}</tbody>
     </table></div>
 
+    <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:13px">
+      <input type="checkbox" id="chk-cotacao-incluir-custo" checked>
+      Incluir valor mínimo (custo) na planilha baixada
+      <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Desmarque pra gerar a planilha sem as colunas de custo/margem — útil se ela vai ser compartilhada com alguém que não deve ver esse valor (ex. o fornecedor).</span></span>
+    </label>
     <div style="margin-top:12px" id="cotacao-acoes">${_corpoCotacaoAcoes(analisado)}</div>`;
 }
 
@@ -4629,6 +4637,8 @@ function baixarCotacao(){
   });
   const params = new URLSearchParams({itens: selecionados.join(',')});
   if(Object.keys(fretes).length) params.set('fretes', JSON.stringify(fretes));
+  const chkCusto = $('#chk-cotacao-incluir-custo');
+  if(chkCusto && !chkCusto.checked) params.set('incluir_custo', 'false');
   window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?${params.toString()}`, '_blank');
 }
 
