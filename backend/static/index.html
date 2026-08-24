@@ -3474,6 +3474,12 @@ function _statusDocInfo(item){
   if(item.status==='valido') return ['var(--forte)', 'válido'];
   if(item.status==='vence_em_breve') return ['var(--medio)', `vence em ${item.dias_para_vencer} d`];
   if(item.status==='vencido') return ['var(--destructive)', `vencido há ${Math.abs(item.dias_para_vencer)} d`];
+  // declaração: não é "cadastrada" (não é um arquivo reutilizável, é texto
+  // novo a cada edital) — o que importa é se o edital já traz o modelo
+  // pronto ou se a empresa precisa redigir o próprio (ver checklist_habilitacao.py).
+  if(item.status==='modelo_orgao') return ['var(--forte)', 'modelo do órgão'];
+  if(item.status==='modelo_proprio') return ['var(--medio)', 'elaborar modelo próprio'];
+  if(item.status==='indefinido') return ['var(--muted-fg,#888)', 'verificar no edital'];
   return ['var(--muted-fg,#888)', 'não cadastrado'];
 }
 function _checklistDocsHTML(checklist){
@@ -3488,7 +3494,8 @@ function _checklistDocsHTML(checklist){
   return porCategoria.map(g=>`<div style="margin-top:10px"><strong>${esc(g.categoria)}</strong>
     <ul style="margin:4px 0 0;padding-left:18px">${g.itens.map(item=>{
       const [cor,txt] = _statusDocInfo(item);
-      const detalhe = item.nome_cadastrado ? ` <span class="muted" style="font-size:11px">(${esc(item.nome_cadastrado)})</span>` : '';
+      const notaExtra = item.nome_cadastrado || item.detalhe;
+      const detalhe = notaExtra ? ` <span class="muted" style="font-size:11px">(${esc(notaExtra)})</span>` : '';
       const acao = item.status==='nao_cadastrado'
         ? ` <button class="btn ghost" style="font-size:11px;padding:1px 6px;margin-left:4px" onclick="cadastrarDocumentoChecklist(${item.idx})">+ cadastrar</button>` : '';
       return `<li style="margin:2px 0">${esc(item.exigido)}${detalhe}

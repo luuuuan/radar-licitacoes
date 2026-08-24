@@ -36,7 +36,7 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 6
+VERSAO_PROMPT = 7
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -48,7 +48,10 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "fiscal_trabalhista": regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
   - "tecnica": qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
   - "economico_financeira": qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
-  - "declaracoes": declarações exigidas (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta).
+  - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Cada objeto:
+    - "nome": string. A declaração, como aparece no edital.
+    - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false se a exigência é só de CONTEÚDO/COMPROMISSO e não há modelo pronto no edital — a empresa precisa redigir seu próprio texto. null se não der pra saber pelo texto disponível.
+    - "detalhe": string curta (opcional). Ex.: "modelo no Anexo IV do edital", "sem modelo — declarar conforme exigência do item 8.2". "" se não houver nada relevante a acrescentar.
 
 - "requisitos_tecnicos": array de strings. Especificações TÉCNICAS que o produto/serviço contratado (o objeto em si) precisa atender: normas/certificações do produto, garantia mínima do produto, assistência técnica, nível de serviço (SLA), embalagem. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
 
@@ -600,6 +603,30 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     def s(x):
         return str(x or "")
 
+    # declarações não são "certidão com validade" — o edital ou fornece um
+    # modelo pronto (a empresa só preenche/assina) ou exige que a empresa
+    # redija o próprio texto; nenhum dos dois casos tem o que "cadastrar"
+    # como documento reutilizável (ver checklist_habilitacao.py). Por isso,
+    # ao contrário das outras 4 categorias, cada declaração vem com esse
+    # veredito da IA em vez de ser só um texto solto.
+    def declaracoes(x):
+        if not isinstance(x, list):
+            return []
+        out = []
+        for item in x:
+            if isinstance(item, dict) and item.get("nome"):
+                mo = item.get("modelo_orgao")
+                out.append({
+                    "nome": str(item["nome"]),
+                    "modelo_orgao": mo if isinstance(mo, bool) else None,
+                    "detalhe": s(item.get("detalhe")),
+                })
+            elif isinstance(item, str) and item.strip():
+                # tolerância: se a IA ainda mandar string simples (formato
+                # antigo), entra sem veredito em vez de descartar a declaração.
+                out.append({"nome": item, "modelo_orgao": None, "detalhe": ""})
+        return out
+
     def documentos_habilitacao(x):
         x = x if isinstance(x, dict) else {}
         return {
@@ -607,7 +634,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
             "fiscal_trabalhista": lista(x.get("fiscal_trabalhista")),
             "tecnica": lista(x.get("tecnica")),
             "economico_financeira": lista(x.get("economico_financeira")),
-            "declaracoes": lista(x.get("declaracoes")),
+            "declaracoes": declaracoes(x.get("declaracoes")),
         }
 
     def dados_orgao(x):
@@ -693,9 +720,15 @@ def _formatar_requisitos(requisitos_tecnicos: list, documentos_habilitacao: dict
     for r in (requisitos_tecnicos or []):
         linhas.append(f"- {r}")
     docs = documentos_habilitacao or {}
-    for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira", "declaracoes"):
+    for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira"):
         for d in (docs.get(categoria) or []):
             linhas.append(f"- {d}")
+    # declaracoes vem como lista de objetos {nome, modelo_orgao, detalhe}
+    # (ver documentos_habilitacao() acima), não strings soltas como as outras.
+    for d in (docs.get("declaracoes") or []):
+        nome = d.get("nome") if isinstance(d, dict) else d
+        if nome:
+            linhas.append(f"- {nome}")
     return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
 
 

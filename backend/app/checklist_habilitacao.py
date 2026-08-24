@@ -76,12 +76,38 @@ def _status_validade(dias: int) -> str:
     return "valido"
 
 
+def _item_declaracao(d) -> dict:
+    """Declaração NÃO é "certidão com validade" — não faz sentido cruzar
+    contra os documentos cadastrados nem oferecer "+ cadastrar" (é um texto
+    novo a cada edital, não um arquivo reutilizável). O que importa aqui é
+    saber se o EDITAL já traz o modelo pronto (só preencher/assinar) ou se
+    a empresa precisa redigir o próprio texto — vem da análise por IA."""
+    nome = d.get("nome") if isinstance(d, dict) else d
+    modelo_orgao = d.get("modelo_orgao") if isinstance(d, dict) else None
+    detalhe = (d.get("detalhe") if isinstance(d, dict) else "") or ""
+    if modelo_orgao is True:
+        status = "modelo_orgao"
+    elif modelo_orgao is False:
+        status = "modelo_proprio"
+    else:
+        status = "indefinido"
+    return {
+        "categoria": _CATEGORIAS["declaracoes"], "exigido": nome, "status": status,
+        "documento_id": None, "nome_cadastrado": None,
+        "data_validade": None, "dias_para_vencer": None,
+        "relevancia": 0.0, "detalhe": detalhe,
+    }
+
+
 def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list[dict]:
     """documentos_usuario: lista de dicts com pelo menos id/nome/data_validade
     (mesmo formato de GET /api/documentos, só que sempre com data_validade
     como `date`, não string). Retorna uma lista achatada, pronta pro front:
     [{categoria, exigido, status, documento_id, nome_cadastrado,
-      data_validade, dias_para_vencer, relevancia}, ...]
+      data_validade, dias_para_vencer, relevancia, detalhe}, ...]
+
+    "declaracoes" é tratada à parte (ver _item_declaracao) — as outras 4
+    categorias continuam cruzadas por nome (fuzzy) contra documentos_usuario.
     """
     hoje = date.today()
     candidatos = [
@@ -91,6 +117,9 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
 
     resultado = []
     for chave, rotulo in _CATEGORIAS.items():
+        if chave == "declaracoes":
+            resultado.extend(_item_declaracao(d) for d in (documentos_habilitacao or {}).get(chave) or [])
+            continue
         for exigido in (documentos_habilitacao or {}).get(chave) or []:
             alvo = _normalizar_doc(exigido)
             melhor, melhor_score = None, 0.0
@@ -105,12 +134,12 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
                     "status": _status_validade(dias),
                     "documento_id": melhor["id"], "nome_cadastrado": melhor["nome"],
                     "data_validade": melhor["data_validade"].isoformat(),
-                    "dias_para_vencer": dias, "relevancia": round(melhor_score, 2),
+                    "dias_para_vencer": dias, "relevancia": round(melhor_score, 2), "detalhe": "",
                 })
             else:
                 resultado.append({
                     "categoria": rotulo, "exigido": exigido, "status": "nao_cadastrado",
                     "documento_id": None, "nome_cadastrado": None,
-                    "data_validade": None, "dias_para_vencer": None, "relevancia": 0.0,
+                    "data_validade": None, "dias_para_vencer": None, "relevancia": 0.0, "detalhe": "",
                 })
     return resultado
