@@ -5068,14 +5068,23 @@ async function salvarPerfil(){
 
 // ---- Portão de sessão: exige login para usar o dashboard ----
 let USUARIO = null;
+// leva a página atual (ex.: /edital/123) pro login via "next" -- assim, ao
+// autenticar, login.html manda o usuário direto pra onde ele tentava
+// chegar, em vez de sempre cair no painel Início. Cenário real que motivou
+// isso: link "Abrir edital" de notificação do Telegram abre no navegador
+// embutido do app, que não compartilha sessão com o navegador normal --
+// então o usuário quase sempre chega aqui deslogado.
+function _loginComNext(){
+  location.href = '/login?next=' + encodeURIComponent(location.pathname);
+}
 async function exigirLogin(){
   try{
     const r = await fetch('/api/auth/me');
-    if(r.status===401 || r.status===403){ location.href='/login'; return false; }
+    if(r.status===401 || r.status===403){ _loginComNext(); return false; }
     USUARIO = await r.json();
     document.querySelectorAll('#user-nome, .nav-user-nome').forEach(el=>el.textContent=USUARIO.nome);
     return true;
-  }catch(e){ location.href='/login'; return false; }
+  }catch(e){ _loginComNext(); return false; }
 }
 async function sair(){
   await fetch('/api/auth/logout', {method:'POST'});

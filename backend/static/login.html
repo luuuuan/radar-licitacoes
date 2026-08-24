@@ -445,6 +445,17 @@ function alternarSenha(id, btn){
   btn.innerHTML = mostrando ? OLHO_ABERTO : OLHO_FECHADO;
   btn.setAttribute('aria-label', mostrando ? 'Mostrar senha' : 'Ocultar senha');
 }
+// Pra onde mandar depois de autenticar: "?next=/edital/123" (index.html
+// manda pra cá com isso quando a sessão expirou/nunca existiu tentando
+// acessar uma página específica -- ver _loginComNext em index.html).
+// Só aceita caminho relativo começando com "/" e não "//" -- nunca um host
+// externo (senão vira um redirecionador aberto: um link malicioso com
+// "?next=https://site-falso.com" mandaria o usuário pra fora do app logo
+// depois dele digitar a senha).
+function _proximaUrl(){
+  const next = new URLSearchParams(location.search).get('next');
+  return (next && next.startsWith('/') && !next.startsWith('//')) ? next : '/';
+}
 async function post(url, body){
   const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   let j={}; try{ j=await r.json(); }catch(e){}
@@ -456,8 +467,9 @@ async function entrar(e){
   const btn=$('#l-submit'); btn.disabled=true;
   const r=await post('/api/auth/login',{email:$('#l-email').value, senha:$('#l-senha').value});
   btn.disabled=false;
-  // "/" já abre no painel "Início" por padrão (ver index.html)
-  if(r.ok){ location.href='/'; }
+  // sem "next" na URL, _proximaUrl() cai em "/", que já abre no painel
+  // "Início" por padrão (ver index.html)
+  if(r.ok){ location.href=_proximaUrl(); }
   else msg(r.data.detail || 'Não foi possível entrar.');
   return false;
 }
@@ -506,7 +518,7 @@ async function cadastrar(e){
       _wizardLogoBase64 = '';
       $('#logo-preview').innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>';
       wizardIrPara(0, true);
-    } else { location.href='/'; }
+    } else { location.href=_proximaUrl(); }
   } else {
     msg(r.data.detail || 'Não foi possível criar a conta.');
   }
@@ -559,7 +571,7 @@ async function redefinirSenha(e){
   if(location.pathname==='/login'){
     try{
       const r = await fetch('/api/auth/me');
-      if(r.ok){ location.href='/'; return; }
+      if(r.ok){ location.href=_proximaUrl(); return; }
     }catch(e){}
   }
   if(location.pathname==='/verificar' && params.get('token')){
