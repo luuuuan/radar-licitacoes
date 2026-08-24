@@ -2763,13 +2763,12 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     — valor TOTAL do frete daquele item (fornecedor→você e você→órgão),
     informado na hora da cotação; dividido pela quantidade do item pra virar
     custo por unidade. Não fica salvo em lugar nenhum.
-    `incluir_custo`: quando falso, tira as colunas de valor mínimo (custo) da
-    planilha — pra quando ela vai ser compartilhada com alguém que não deve
-    ver a margem, ex. o próprio fornecedor. Default true (comportamento de
-    sempre)."""
+    `incluir_custo`: quando falso, as colunas de valor mínimo (custo) saem em
+    branco na planilha (a coluna continua lá, só sem os valores) — pra quando
+    ela vai ser compartilhada com alguém que não deve ver a margem, ex. o
+    próprio fornecedor. Default true (comportamento de sempre)."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
-    from openpyxl.utils import get_column_letter
     import json as _json
 
     ed = db.get(Edital, edital_id)
@@ -2839,18 +2838,17 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     ws["A1"].font = negrito
     ws.append([_linha_cabecalho_cotacao(ed, analise)])
     ws.append([])
-    # colunas de custo (mínimo) são opcionais (incluir_custo) — as demais
-    # colunas mudam de posição conforme elas entram ou não, por isso o resto
-    # da planilha usa índice de coluna calculado (col_link etc.) em vez de
-    # letra fixa como antes.
-    cabec = ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL"]
-    if incluir_custo:
-        cabec += ["VALOR MÍNIMO UNI.", "VALOR MÍNIMO TOTAL"]
-    cabec += ["FABRICANTE", "MARCA", "MODELO", "LINK"]
+    # colunas sempre na mesma posição (independente de incluir_custo) — só o
+    # CONTEÚDO das colunas de custo fica em branco quando desmarcado, pra
+    # planilha ficar com a mesma estrutura em qualquer um dos dois casos
+    # (mais fácil de comparar/colar entre downloads diferentes).
+    cabec = ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL",
+             "VALOR MÍNIMO UNI.", "VALOR MÍNIMO TOTAL",
+             "FABRICANTE", "MARCA", "MODELO", "LINK"]
     ws.append(cabec)
     for c in ws[4]:
         c.font = negrito
-    col_link = len(cabec)  # última coluna
+    col_link = len(cabec)  # última coluna (K)
 
     linha = 5
     for it, prod in linhas:
@@ -2858,24 +2856,23 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         frete_item = fretes_por_item.get(it.numero, {})
         frete_unit = ((frete_item.get("entrada", 0.0) + frete_item.get("saida", 0.0)) / qtd) if qtd else 0.0
         custo_com_frete = round((prod.preco_custo or 0.0) + frete_unit, 4)
-        linha_valores = [it.numero, it.descricao, it.quantidade,
-                          it.valor_unitario, f"=D{linha}*C{linha}"]
-        cols_moeda = ["D", "E"]
-        if incluir_custo:
-            col_min_uni = get_column_letter(len(linha_valores) + 1)
-            linha_valores += [custo_com_frete, f"={col_min_uni}{linha}*C{linha}"]
-            cols_moeda += [col_min_uni, get_column_letter(len(linha_valores))]
         # link do ITEM no fornecedor — campo "Site do fornecedor / página do
         # item" do Catálogo (Produto.fornecedor_site), não o link do edital
         # no PNCP: cada item pode ter vindo de um fornecedor diferente.
         link_item = (prod.fornecedor_site or "").strip()
-        linha_valores += [prod.fabricante, prod.marca, prod.modelo, link_item]
-        ws.append(linha_valores)
+        ws.append([
+            it.numero, it.descricao, it.quantidade,
+            it.valor_unitario, f"=D{linha}*C{linha}",
+            custo_com_frete if incluir_custo else None,
+            f"=F{linha}*C{linha}" if incluir_custo else None,
+            prod.fabricante, prod.marca, prod.modelo, link_item,
+        ])
         ws.cell(row=linha, column=2).alignment = quebra
         # achado real: valores saíam sem formatação nenhuma (número cru tipo
         # "253.37" em vez de "R$ 253,37") — aplica formato de moeda nas
         # colunas de valor (com fórmula também: number_format afeta só a
         # exibição do resultado calculado, não o cálculo em si).
+        cols_moeda = ["D", "E"] + (["F", "G"] if incluir_custo else [])
         for col in cols_moeda:
             ws[f"{col}{linha}"].number_format = 'R$ #,##0.00'
         if link_item.startswith(("http://", "https://")):
@@ -2909,15 +2906,10 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         cel.alignment = quebra
         linha += 2
 
-    # larguras por CABEÇALHO (não por letra fixa) — a posição das colunas
-    # muda conforme incluir_custo, então a largura tem que acompanhar.
-    larguras_por_nome = {
-        "ITEM": 8, "DESCRIÇÃO": 50, "QTD.": 8, "VALOR UNI.": 12, "VALOR TOTAL": 12,
-        "VALOR MÍNIMO UNI.": 14, "VALOR MÍNIMO TOTAL": 14,
-        "FABRICANTE": 16, "MARCA": 16, "MODELO": 16, "LINK": 30,
-    }
-    for i, nome in enumerate(cabec, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = larguras_por_nome.get(nome, 14)
+    larguras = {"A": 8, "B": 50, "C": 8, "D": 12, "E": 12,
+               "F": 14, "G": 14, "H": 16, "I": 16, "J": 16, "K": 30}
+    for col, larg in larguras.items():
+        ws.column_dimensions[col].width = larg
 
     numero = _numero_processo_pncp(ed).replace("/", "-")
     nome_arquivo = f"Cotacao_{numero}.xlsx" if numero else f"Cotacao_edital_{edital_id}.xlsx"

@@ -116,7 +116,7 @@ def test_cotacao_xlsx_sem_link_de_fornecedor_cadastrado_fica_em_branco():
     assert ws["K5"].hyperlink is None
 
 
-def test_cotacao_xlsx_incluir_custo_false_remove_colunas_de_custo():
+def test_cotacao_xlsx_incluir_custo_false_mantem_coluna_mas_deixa_valor_em_branco():
     db = _sessao()
     u = _usuario(db)
     ed, prod = _edital_com_item_e_match(db, u)
@@ -125,14 +125,17 @@ def test_cotacao_xlsx_incluir_custo_false_remove_colunas_de_custo():
     wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
     ws = wb.active
 
+    # a coluna continua na planilha (mesma estrutura de sempre) — só o
+    # VALOR fica em branco, pra quem recebe a planilha não ver a margem.
     cabecalho = [c.value for c in ws[4]]
-    assert "VALOR MÍNIMO UNI." not in cabecalho
-    assert "VALOR MÍNIMO TOTAL" not in cabecalho
     assert cabecalho == ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL",
+                          "VALOR MÍNIMO UNI.", "VALOR MÍNIMO TOTAL",
                           "FABRICANTE", "MARCA", "MODELO", "LINK"]
-    # link agora fica na coluna I (9ª), já que as 2 colunas de custo saíram
-    assert ws["I4"].value == "LINK"
-    assert ws["I5"].value == prod.fornecedor_site
+    assert not ws["F5"].value
+    assert not ws["G5"].value
+    # link não é afetado — continua na mesma coluna de sempre (K)
+    assert ws["K4"].value == "LINK"
+    assert ws["K5"].value == prod.fornecedor_site
 
 
 def test_cotacao_xlsx_incluir_custo_true_mantem_comportamento_padrao():
