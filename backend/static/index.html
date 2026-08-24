@@ -4168,9 +4168,10 @@ function _corpoItensEdital(d){
       bloco=`<div class="precos">
           <div class="preco-box"><div class="v">${vo}</div><div class="l">valor do órgão (unit.)${ajuda('Preço unitário que o órgão estima pagar por este item, conforme o edital.')}</div></div>
           <div class="preco-box"><div class="v">${cu}</div><div class="l">${cuLabel}</div></div>
-          <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", ajuste a unidade do produto no Catálogo.')}</div></div>
+          <div class="preco-box"><div class="v ${cls}">${mg}</div><div class="l">margem potencial${ajuda('Diferença entre o que o órgão paga e o seu custo, na mesma unidade. Positiva = lucro; negativa = prejuízo. Se aparecer "conferir", veja o aviso abaixo.')}</div></div>
         </div>
-        ${it.alerta_unidade?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`:''}
+        ${it.alerta_embalagem?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`
+          :(it.alerta_margem_extrema?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ Margem muito fora do normal. Confira se o preço de custo cadastrado deste produto está certo — ou pode ser que este item realmente não valha a pena disputar.</div>`:'')}
         <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
       if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
         const siteForn = linkSeguro(f.fornecedor_site);
