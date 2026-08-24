@@ -125,18 +125,30 @@ def _migrar_colunas_novas() -> None:
     para Alembic é o próximo passo natural."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     with engine.connect() as conn:
-        if not eh_sqlite:
-            # ALTER TABLE pede lock exclusivo, mesmo com IF NOT EXISTS -- sem
-            # limite de espera, um job longo (coleta, completar-descrição)
-            # com transação aberta na tabela travava o startup inteiro
-            # (visto em produção: deploy nunca saía de "Waiting for
-            # application startup" enquanto a coleta rodava). Com timeout,
-            # aquela coluna/índice específico só fica pra tentar de novo no
-            # próximo start -- não derruba o deploy.
-            conn.execute(text("SET lock_timeout = '5s'"))
         for tabela, colunas in _COLUNAS_NOVAS.items():
             for nome, tipo in colunas:
                 try:
+                    if not eh_sqlite:
+                        # ALTER TABLE pede lock exclusivo, mesmo com IF NOT
+                        # EXISTS -- sem limite de espera, um job longo
+                        # (coleta, completar-descrição) com transação
+                        # aberta na tabela travava o startup inteiro (visto
+                        # em produção: deploy nunca saía de "Waiting for
+                        # application startup" enquanto a coleta rodava).
+                        # SET LOCAL (NÃO "SET" puro) de propósito: "SET"
+                        # sem LOCAL vale pra sessão inteira, não só pra
+                        # transação atual -- e como esta conexão volta pro
+                        # pool depois (SQLAlchemy não dá RESET ao devolver),
+                        # o limite de 5s vazava pra qualquer requisição
+                        # futura que pegasse essa MESMA conexão emprestada.
+                        # Achado real em produção: horas depois de um
+                        # deploy, um SELECT trivial em /usuarios (sem
+                        # relação nenhuma com migração) começou a morrer
+                        # com "canceling statement due to lock timeout".
+                        # SET LOCAL reseta sozinho a cada commit/rollback,
+                        # então precisa ser reemitido a cada iteração
+                        # (antes de CADA ALTER), não uma vez só.
+                        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
                     if eh_sqlite:
                         conn.execute(text(f'ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}'))
                     else:
@@ -161,6 +173,7 @@ def _migrar_colunas_novas() -> None:
                 "UNIQUE (usuario_id, edital_id)",
             ):
                 try:
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
                     conn.execute(text(sql))
                     conn.commit()
                 except Exception as e:
@@ -187,10 +200,17 @@ def _migrar_indices_novos() -> None:
         "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
     ]
     with engine.connect() as conn:
-        if not eh_sqlite:
-            conn.execute(text("SET lock_timeout = '5s'"))
         for sql in indices:
             try:
+                if not eh_sqlite:
+                    # SET LOCAL (não "SET" puro) -- só vale até o próximo
+                    # commit/rollback desta transação. "SET" sem LOCAL é
+                    # por SESSÃO inteira, e como esta conexão volta pro
+                    # pool depois (SQLAlchemy não dá RESET ao devolver), o
+                    # limite vazava pra qualquer requisição futura que
+                    # pegasse essa mesma conexão emprestada -- ver o mesmo
+                    # achado, com mais detalhe, em _migrar_colunas_novas.
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
                 conn.execute(text(sql))
                 conn.commit()
             except Exception as e:
@@ -206,6 +226,7 @@ def _migrar_indices_novos() -> None:
             try:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
                 conn.commit()
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
                 conn.execute(text(
                     "CREATE INDEX IF NOT EXISTS ix_itens_edital_descricao_trgm "
                     "ON itens_edital USING gin (lower(descricao) gin_trgm_ops)"
