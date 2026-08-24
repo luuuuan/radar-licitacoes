@@ -3648,8 +3648,14 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
 async function adicionarItemIaNaCotacao(numero, produtoId, btn){
   if(btn) btn.disabled = true;
   try{
+    // manda os candidatos que a comparação por IA achou pra este item (só
+    // quando há mais de 1 — 1 candidato sozinho não dá pra "trocar" nada),
+    // senão a aba Itens/margem nunca ganha a opção de trocar produto aqui
+    // (o motor de matching normal nunca viu esse item pra preencher isso).
+    const todosCandidatos = ((_comparacaoCatalogoItensAtual[numero]||{}).candidatos||[]).map(c=>c.produto_id);
+    const candidatos = todosCandidatos.length>1 ? todosCandidatos : undefined;
     await api(`/api/editais/${_paginaEditalId}/itens/${numero}/confirmar`,
-      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({produto_id: produtoId})});
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({produto_id: produtoId, candidatos})});
     _marcarSelecaoCotacao(numero, true);
     _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
     if(btn){ btn.innerHTML = ICN.check+' na cotação'; btn.style.cssText = _estiloBotaoCotacao(true); }

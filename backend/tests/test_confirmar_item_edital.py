@@ -179,3 +179,73 @@ def test_confirma_com_produto_id_none_marca_nenhuma_destas():
     item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
     assert item["produto_id"] is None
     assert item["confirmado_manualmente"] is True
+
+
+def test_confirma_item_da_analise_ia_com_2_candidatos_grava_pra_permitir_trocar_depois():
+    """Achado real: item confirmado pela comparação de catálogo por IA (aba
+    Análise por IA, que pode sugerir até 2 produtos) entrava em
+    match.detalhe com candidatos=[] (linha que cria o item do zero, pra
+    quem o motor de matching nunca tinha visto) — o botão "trocar produto"
+    da aba Itens/margem só aparece quando existem candidatos, então esses
+    itens nunca ganhavam a opção de trocar. Passando os ids que a IA achou,
+    eles ficam disponíveis pra trocar depois."""
+    db = _sessao()
+    u = _usuario(db)
+    p1 = _produto(db, u, descricao="Grampeador de mesa 26/6")
+    p2 = _produto(db, u, descricao="Grampeador de mesa 24/6")
+    ed = _edital(db, itens_numeros=(1,))
+    # nenhum Match ainda — item nunca foi visto pelo motor de matching
+
+    confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=p1.id, candidatos=[p1.id, p2.id]),
+                          user=u, db=db)
+
+    match = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    assert item["produto_id"] == p1.id
+    ids_candidatos = {c["produto_id"] for c in item["candidatos"]}
+    assert ids_candidatos == {p1.id, p2.id}
+
+
+def test_confirma_item_ignora_candidato_de_outro_usuario():
+    """candidatos vem do client — não confia cegamente, confere posse antes
+    de gravar (mesmo padrão de _produto_do_usuario pro produto_id principal)."""
+    db = _sessao()
+    u = _usuario(db)
+    outro = Usuario(nome="Outro", email="outro@t.com", senha_hash="x")
+    db.add(outro)
+    db.commit()
+    p_meu = _produto(db, u, descricao="Meu produto")
+    p_de_outro = _produto(db, outro, descricao="Produto de outro usuário")
+    ed = _edital(db, itens_numeros=(1,))
+
+    confirmar_item_edital(ed.id, 1,
+                          ConfirmarItemIn(produto_id=p_meu.id, candidatos=[p_meu.id, p_de_outro.id]),
+                          user=u, db=db)
+
+    match = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    ids_candidatos = {c["produto_id"] for c in item["candidatos"]}
+    assert ids_candidatos == {p_meu.id}
+
+
+def test_confirma_item_sem_candidatos_nao_apaga_os_que_ja_existiam():
+    """Confirmar de novo sem mandar `candidatos` (ex.: pelo fluxo normal da
+    aba Itens/margem, que não conhece esse campo) não pode apagar os
+    candidatos que já estavam salvos ali."""
+    db = _sessao()
+    u = _usuario(db)
+    p1 = _produto(db, u, descricao="Produto 1")
+    p2 = _produto(db, u, descricao="Produto 2")
+    ed = _edital(db, itens_numeros=(1,))
+    match = Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                  detalhe={"itens": [{"item": 1, "produto_id": p1.id, "confianca": "media",
+                                       "candidatos": [{"produto_id": p1.id}, {"produto_id": p2.id}]}]})
+    db.add(match)
+    db.commit()
+
+    confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=p1.id), user=u, db=db)
+
+    db.refresh(match)
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    ids_candidatos = {c["produto_id"] for c in item["candidatos"]}
+    assert ids_candidatos == {p1.id, p2.id}

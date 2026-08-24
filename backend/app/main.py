@@ -1668,6 +1668,14 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
 
 class ConfirmarItemIn(BaseModel):
     produto_id: int | None = None
+    # ids dos produtos que a comparação de catálogo por IA (aba Análise por
+    # IA) considerou candidatos genuínos pra este item (até 2, ver
+    # comparar_catalogo_usuario) — opcional, só quando o item está sendo
+    # confirmado a partir DAQUELA tela. Sem isso, um item confirmado por lá
+    # nunca ganhava "trocar produto" na aba Itens/margem, porque o motor de
+    # matching (que é quem normalmente povoa "candidatos") nunca tinha visto
+    # esse item.
+    candidatos: list[int] | None = None
 
 
 @app.post("/api/editais/{edital_id}/itens/{numero}/confirmar")
@@ -1723,6 +1731,11 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     item["produto_id"] = produto.id if produto else None
     item["produto"] = produto.descricao if produto else None
     item["confirmado_manualmente"] = True
+    if body.candidatos:
+        ids_validos = set(db.execute(
+            select(Produto.id).where(Produto.usuario_id == user.id,
+                                     Produto.id.in_(body.candidatos))).scalars())
+        item["candidatos"] = [{"produto_id": pid} for pid in body.candidatos if pid in ids_validos]
     itens[idx] = item
     match.detalhe = {"itens": itens}
     db.commit()
