@@ -2805,6 +2805,8 @@ async function delProduto(id){
   loadProdutos(); loadResumo();
 }
 
+let _catmatAbortController = null;
+
 function abrirCatalogoOficial(tipo){
   const termoInicial = ($('#p-desc').value || '').trim();
   const campoDestino = tipo==='material' ? 'p-catmat' : 'p-catser';
@@ -2835,9 +2837,16 @@ async function buscarCatalogoOficial(tipo, campoDestino){
   const alvo = $('#catmat-resultado');
   if(!alvo) return;   // modal foi fechado enquanto buscava
   if(termo.length<2){ alvo.innerHTML='<p class="muted">Digite ao menos 2 caracteres.</p>'; return; }
-  alvo.innerHTML='<p class="muted">Buscando no catálogo oficial…</p>';
+  // busca anterior ainda pendente (ex.: usuário editou o termo e buscou de
+  // novo antes da 1ª resposta chegar) — aborta pra não correr o risco da
+  // resposta antiga sobrescrever a mais nova.
+  if(_catmatAbortController) _catmatAbortController.abort();
+  const controller = new AbortController();
+  _catmatAbortController = controller;
+  alvo.innerHTML = '<p class="muted">Buscando no catálogo oficial… '
+    + '<button class="btn discreto" style="padding:2px 8px;font-size:12px" onclick="cancelarBuscaCatalogoOficial()">Cancelar</button></p>';
   try{
-    const r = await api(`/api/catmat?tipo=${tipo}&descricao=${encodeURIComponent(termo)}`);
+    const r = await api(`/api/catmat?tipo=${tipo}&descricao=${encodeURIComponent(termo)}`, {signal: controller.signal});
     if(!$('#catmat-resultado')) return;   // fechou o modal antes da resposta chegar
     if(!r.resultados || !r.resultados.length){
       $('#catmat-resultado').innerHTML='<p class="muted">Nenhum resultado. Tente um termo mais genérico (ex.: "papel" em vez de "papel A4 branco 75g").</p>';
@@ -2851,8 +2860,18 @@ async function buscarCatalogoOficial(tipo, campoDestino){
         <td style="vertical-align:top"><button class="btn ghost" onclick="usarCodigoCatalogo('${campoDestino}',${it.codigo})">usar ${esc(it.codigo)}</button></td>
       </tr>`).join('')}</tbody></table>`;
   }catch(e){
-    if($('#catmat-resultado')) $('#catmat-resultado').innerHTML='<p class="muted">Erro ao consultar o catálogo oficial. Tente novamente em instantes.</p>';
+    if(e && e.name === 'AbortError'){
+      if($('#catmat-resultado')) $('#catmat-resultado').innerHTML='<p class="muted">Busca cancelada.</p>';
+    } else if($('#catmat-resultado')){
+      $('#catmat-resultado').innerHTML='<p class="muted">Erro ao consultar o catálogo oficial. Tente novamente em instantes.</p>';
+    }
+  }finally{
+    _catmatAbortController = null;
   }
+}
+
+function cancelarBuscaCatalogoOficial(){
+  if(_catmatAbortController) _catmatAbortController.abort();
 }
 
 function usarCodigoCatalogo(campoDestino, codigo){
