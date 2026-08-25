@@ -69,14 +69,23 @@
       background-color .25s ease,color .25s ease,border-color .25s ease}
   header .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);
     padding:2px 8px;border-radius:20px}
-  /* status da coleta + tema + Recalcular: um bloco só, reparentado por JS
+  /* status da coleta + Recalcular: um bloco só, reparentado por JS
      (_reposicionarHeaderExtra) entre o cabeçalho (desktop/tablet, aqui) e a
      gaveta lateral (celular, ver #slot-header-extra-mobile) — mesma técnica
      já usada pro campo de busca (_reposicionarBuscaItem), pra manter um
      único elemento com estado (id="coleta-status" etc.) em vez de duplicar
-     e arriscar desincronizar. */
+     e arriscar desincronizar. O botão de tema NÃO entra mais aqui — é fixo
+     no canto da tela, ver #btn-tema logo abaixo. */
   #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px}
-  /* Envolve menu compacto + status/tema/Recalcular. Existiu uma versão com
+  /* botão de tema: fixo no canto inferior direito em qualquer tamanho de
+     tela (pedido explícito -- antes vivia dentro do cabeçalho e ia pra
+     gaveta no mobile, ver comentário no HTML). z-index abaixo de .modal
+     (5000) de propósito: um modal aberto cobre o botão, não o contrário. */
+  #btn-tema{position:fixed;right:20px;bottom:20px;z-index:3000;
+    width:46px;height:46px;padding:0;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  /* Envolve menu compacto + status/Recalcular. Existiu uma versão com
      overflow-x:auto aqui (proteger Coletar agora/Conta/Sair de sumir da tela
      quando o texto de status ficava mais comprido que o normal) — REVERTIDO:
      um container só pode ter overflow-x diferente de "visible" sem também
@@ -490,30 +499,29 @@
     header h1{font-size:16px}
     /* cabeçalho do celular fica só com hambúrguer + logo + a ação principal
        ("Coletar agora", numa 2ª linha própria) — achado real: o resto (status
-       da coleta, tema, Recalcular, conta) espremido na mesma barra quebrava
+       da coleta, Recalcular, conta) espremido na mesma barra quebrava
        em 3 linhas bagunçadas, com botões de tamanhos/alinhamentos diferentes
-       colados uns nos outros. Status/tema/Recalcular somem daqui (reparentados
+       colados uns nos outros. Status/Recalcular somem daqui (reparentados
        pra dentro da gaveta, ver #slot-header-extra-mobile); conta/sair já tem
-       casa própria em .nav-footer, então a cópia daqui só é escondida. */
+       casa própria em .nav-footer, então a cópia daqui só é escondida.
+       btn-tema NÃO participa desse reparenting -- é fixo no canto da tela em
+       qualquer tamanho, ver regra própria dele mais acima. */
     #slot-header-extra-desktop{display:none}
     .header-conta-desktop{display:none}
     #btn-coletar{width:100%;justify-content:center;order:3}
-    /* bloco de status/tema/Recalcular dentro da gaveta — visualmente separado
+    /* bloco de status/Recalcular dentro da gaveta — visualmente separado
        da lista de abas (fundo + borda), com toque de sobra (44px+) já que
-       aqui viram itens de lista, não ícones apertados do cabeçalho */
+       aqui vira item de lista, não ícone apertado do cabeçalho */
     #slot-header-extra-mobile{display:flex}
     #slot-header-extra-mobile #slot-header-extra{flex-wrap:wrap;gap:8px;
       width:100%;padding:10px 10px 14px;margin-bottom:6px;
       border-bottom:1px solid var(--line)}
     #slot-header-extra-mobile #coleta-status{flex:1 1 100%;font-size:12.5px;padding:6px 10px}
     /* "nav button" (regra geral da gaveta, mais acima) força width:100% e
-       zera o fundo — sem sobrescrever aqui, tema/Recalcular caíam cada um
-       sozinho numa linha (largura:100% vira a base do flex-wrap) em vez de
-       ficarem lado a lado */
-    #slot-header-extra-mobile #btn-tema,#slot-header-extra-mobile #btn-recalcular{
-      width:auto;text-align:center;background:var(--accent);border-color:var(--accent)}
-    #slot-header-extra-mobile #btn-tema{min-width:44px;min-height:44px;padding:10px;flex:0 0 auto}
-    #slot-header-extra-mobile #btn-recalcular{flex:1;min-height:44px}
+       zera o fundo -- sobrescreve aqui pra manter o visual de botão cheio */
+    #slot-header-extra-mobile #btn-recalcular{
+      width:auto;text-align:center;background:var(--accent);border-color:var(--accent);
+      flex:1 1 100%;min-height:44px}
     .wrap{padding:12px}
     .kpis-prop{grid-template-columns:repeat(2,1fr);gap:8px}
     .kpi{padding:11px}
@@ -640,7 +648,9 @@
 
      O limiar de 1500px (não 1200px, que era o valor original) foi medido
      com Playwright: nessa linha única cabem 5 abas + 2 dropdowns + status da
-     coleta + tema + Recalcular + Coletar agora + nome da empresa + Sair, e
+     coleta + Recalcular + Coletar agora + nome da empresa + Sair (o botão de
+     tema saiu do cabeçalho, ver #btn-tema — a folga real hoje é um pouco
+     maior que o medido, então o limiar continua seguro), e
      esse conteúdo (com nowrap, ver abaixo) só cabe de verdade a partir de
      ~1385px de largura — abaixo disso os botões/badges QUEBRAVAM o texto em
      2 linhas (a altura real do cabeçalho passava a exceder os 72px fixos do
@@ -844,7 +854,7 @@
   <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
        Mantenha os itens em sincronia com o <nav id="nav"> logo abaixo. -->
-  <!-- .header-meio: só esta faixa (menu compacto + status/tema/Recalcular)
+  <!-- .header-meio: só esta faixa (menu compacto + status/Recalcular)
        ganha scroll horizontal próprio quando não cabe -- Coletar agora/Conta/
        Sair ficam FORA dela, com flex-shrink:0 (ver CSS), pra nunca serem
        empurrados pra fora da tela por um nome de empresa ou texto de status
@@ -889,7 +899,6 @@
     <div id="slot-header-extra-desktop">
       <div id="slot-header-extra">
         <span id="coleta-status" class="badge">—</span>
-        <button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
         <button class="btn ghost" id="btn-recalcular" onclick="abrirRecalcular()" title="Reavalia os editais já coletados contra o catálogo atual">Recalcular</button>
       </div>
     </div>
@@ -900,6 +909,12 @@
     <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
   </span>
 </header>
+
+<!-- fixo no canto inferior direito, fora do fluxo do cabeçalho -- não faz
+     mais parte do reparenting desktop/mobile de #slot-header-extra (ver
+     _reposicionarHeaderExtra), fica sempre no mesmo lugar em qualquer
+     tamanho de tela e mesmo com a página rolada. -->
+<button class="btn ghost" id="btn-tema" onclick="alternarTema()" title="Alternar tema claro/escuro" aria-label="Tema"></button>
 
 <div class="nav-overlay" id="nav-overlay" onclick="toggleMenu()"></div>
 <nav id="nav">
@@ -2360,10 +2375,11 @@ function _reposicionarBuscaItem(){
   else el.classList.remove('colapsada');   // celular: sempre aberto
 }
 // Mesma técnica do campo de busca (acima): move o bloco de status da coleta
-// + tema + Recalcular entre o cabeçalho (desktop/tablet) e a gaveta lateral
+// + Recalcular entre o cabeçalho (desktop/tablet) e a gaveta lateral
 // (celular) sem duplicar os elementos — eles têm estado dinâmico (texto/
 // ícone trocam durante uma coleta/recálculo em andamento) então duplicar a
-// id quebraria os `$('#id')` que atualizam isso.
+// id quebraria os `$('#id')` que atualizam isso. btn-tema não faz mais
+// parte desse bloco — é fixo no canto da tela (ver #btn-tema no CSS/HTML).
 function _headerExtraEhDesktop(){ return window.matchMedia('(min-width:681px)').matches; }
 function _reposicionarHeaderExtra(){
   const el = document.getElementById('slot-header-extra');
