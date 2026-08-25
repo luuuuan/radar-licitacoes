@@ -49,6 +49,10 @@ def _criar(db, user, **kwargs):
     kwargs.setdefault("data_validade", date(2099, 1, 1))
     kwargs.setdefault("link", None)
     kwargs.setdefault("observacao", None)
+    # chamada direta (sem HTTP) não passa pela resolução de Form() do FastAPI
+    # -- sem isso explícito, o parâmetro fica com o objeto Form(False) em vez
+    # do bool, que é truthy e quebraria a lógica de "sem_validade".
+    kwargs.setdefault("sem_validade", False)
     kwargs.setdefault("arquivo", _upload())
     return asyncio.run(criar_documento(user=user, db=db, **kwargs))
 
@@ -79,7 +83,7 @@ def test_usuario_nao_edita_documento_de_outro_usuario():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(atualizar_documento(
             criado["id"], nome="Nome trocado pelo invasor", orgao_emissor=None,
-            data_validade=date(2030, 1, 1), link=None, observacao=None, arquivo=None,
+            data_validade=date(2030, 1, 1), link=None, observacao=None, sem_validade=False, arquivo=None,
             user=invasor, db=db))
     assert exc.value.status_code == 404
 
@@ -147,7 +151,7 @@ def test_editar_documento_sem_novo_arquivo_mantem_o_arquivo_anterior():
     criado = _criar(db, u, arquivo=_upload(b"arquivo original"))
     asyncio.run(atualizar_documento(
         criado["id"], nome="CND Federal (renovada)", orgao_emissor=None,
-        data_validade=date(2030, 1, 1), link=None, observacao=None, arquivo=None,
+        data_validade=date(2030, 1, 1), link=None, observacao=None, sem_validade=False, arquivo=None,
         user=u, db=db))
     resp = baixar_arquivo_documento(criado["id"], user=u, db=db)
     assert resp.body == b"arquivo original"
@@ -159,7 +163,7 @@ def test_editar_documento_com_novo_arquivo_substitui_o_anterior():
     criado = _criar(db, u, arquivo=_upload(b"arquivo velho"))
     asyncio.run(atualizar_documento(
         criado["id"], nome="CND Federal", orgao_emissor=None,
-        data_validade=date(2030, 1, 1), link=None, observacao=None,
+        data_validade=date(2030, 1, 1), link=None, observacao=None, sem_validade=False,
         arquivo=_upload(b"arquivo novo"), user=u, db=db))
     resp = baixar_arquivo_documento(criado["id"], user=u, db=db)
     assert resp.body == b"arquivo novo"
@@ -204,6 +208,65 @@ def test_criar_sem_validade_ia_nao_identifica_pede_manual(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         _criar(db, u, data_validade=None)
     assert exc.value.status_code == 422
+
+
+def test_criar_com_sem_validade_nao_chama_ia_nem_pede_data(monkeypatch):
+    """Documento sem vencimento (ex.: contrato social) -- não tenta extrair
+    validade por IA nem exige data nenhuma, mesmo sem chave Gemini."""
+    chamou = []
+    monkeypatch.setattr(analise_edital, "extrair_texto_upload", lambda *a, **k: "texto")
+    monkeypatch.setattr(analise_edital, "extrair_validade_documento",
+                        lambda *a, **k: chamou.append(1) or date(2020, 1, 1))
+    db = _sessao()
+    u = _usuario(db)   # sem gemini_key_cifrada -- não pode ser o motivo de funcionar
+
+    criado = _criar(db, u, data_validade=None, sem_validade=True)
+    assert criado["data_validade"] is None
+    assert chamou == []
+    d = db.get(Documento, criado["id"])
+    assert d.data_validade is None
+
+
+def test_criar_com_sem_validade_ignora_data_digitada_junto():
+    """Se por algum motivo vier data E sem_validade=true no mesmo request,
+    sem_validade vence -- o documento fica mesmo sem vencimento."""
+    db = _sessao()
+    u = _usuario(db)
+    criado = _criar(db, u, data_validade=date(2030, 1, 1), sem_validade=True)
+    assert criado["data_validade"] is None
+
+
+def test_editar_com_sem_validade_zera_a_data():
+    db = _sessao()
+    u = _usuario(db)
+    criado = _criar(db, u, data_validade=date(2030, 1, 1))
+    asyncio.run(atualizar_documento(
+        criado["id"], nome="CND Federal", orgao_emissor=None,
+        data_validade=None, link=None, observacao=None, sem_validade=True,
+        arquivo=None, user=u, db=db))
+    d = db.get(Documento, criado["id"])
+    assert d.data_validade is None
+
+
+def test_editar_sem_data_e_sem_marcar_sem_validade_da_erro():
+    db = _sessao()
+    u = _usuario(db)
+    criado = _criar(db, u)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(atualizar_documento(
+            criado["id"], nome="CND Federal", orgao_emissor=None,
+            data_validade=None, link=None, observacao=None, sem_validade=False,
+            arquivo=None, user=u, db=db))
+    assert exc.value.status_code == 400
+
+
+def test_listar_documentos_sem_validade_nao_quebra_e_retorna_none():
+    db = _sessao()
+    u = _usuario(db)
+    _criar(db, u, data_validade=None, sem_validade=True)
+    docs = listar_documentos(user=u, db=db)
+    assert docs[0]["data_validade"] is None
+    assert docs[0]["dias_para_vencer"] is None
 
 
 def test_criar_com_validade_digitada_nao_chama_ia(monkeypatch):

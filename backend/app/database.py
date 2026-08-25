@@ -181,6 +181,18 @@ def _migrar_colunas_novas() -> None:
                     if "exist" not in str(e).lower() and "duplicate" not in str(e).lower():
                         log.warning("Migração de constraint de matches: %s", e)
 
+            # documentos.data_validade era NOT NULL -- agora documento "sem
+            # vencimento" (ex.: contrato social) grava NULL ali. Bancos
+            # criados antes dessa mudança ainda têm a restrição antiga.
+            # DROP NOT NULL é no-op se já estiver solta (não dá erro).
+            try:
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text("ALTER TABLE documentos ALTER COLUMN data_validade DROP NOT NULL"))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.warning("Migração documentos.data_validade (DROP NOT NULL): %s", e)
+
 
 def _migrar_indices_novos() -> None:
     """Índices adicionados após a 1ª versão (mesma lógica de _migrar_colunas_novas,

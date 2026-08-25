@@ -128,12 +128,15 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
                 if score > melhor_score:
                     melhor, melhor_score = c, score
             if melhor and melhor_score >= _LIMIAR_MATCH:
-                dias = (melhor["data_validade"] - hoje).days
+                # documento sem vencimento (ex.: contrato social) -- sempre
+                # válido, não tem contagem de dias pra fazer.
+                sem_validade = melhor["data_validade"] is None
+                dias = None if sem_validade else (melhor["data_validade"] - hoje).days
                 resultado.append({
                     "categoria": rotulo, "exigido": exigido,
-                    "status": _status_validade(dias),
+                    "status": "valido" if sem_validade else _status_validade(dias),
                     "documento_id": melhor["id"], "nome_cadastrado": melhor["nome"],
-                    "data_validade": melhor["data_validade"].isoformat(),
+                    "data_validade": None if sem_validade else melhor["data_validade"].isoformat(),
                     "dias_para_vencer": dias, "relevancia": round(melhor_score, 2), "detalhe": "",
                 })
             else:

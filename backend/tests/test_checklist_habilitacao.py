@@ -11,6 +11,10 @@ def _doc(nome, dias_para_vencer=365):
     return {"id": 1, "nome": nome, "data_validade": date.today() + timedelta(days=dias_para_vencer), "ativo": True}
 
 
+def _doc_sem_validade(nome):
+    return {"id": 1, "nome": nome, "data_validade": None, "ativo": True}
+
+
 def test_nao_cruza_declaracao_com_certidao_nao_relacionada():
     """Caso real que motivou tirar declarações do cruzamento por nome de
     vez: 4 declarações (não emprego de trabalho degradante, reserva de
@@ -63,6 +67,19 @@ def test_declaracao_sem_modelo_do_orgao_pede_elaborar_proprio():
                                 "modelo_orgao": False, "detalhe": ""}]}
     resultado = montar(exigidos, [])
     assert resultado[0]["status"] == "modelo_proprio"
+
+
+def test_documento_sem_vencimento_cruza_como_valido_sem_quebrar():
+    """Documento cadastrado como "sem vencimento" (ex.: contrato social) não
+    tem data pra subtrair -- tem que virar "válido" direto, sem tentar
+    calcular dias_para_vencer (isso quebraria com data_validade=None)."""
+    exigidos = {"juridica": ["Contrato social"], "fiscal_trabalhista": [], "tecnica": [],
+               "economico_financeira": [], "declaracoes": []}
+    usuario = [_doc_sem_validade("Contrato Social e Alterações")]
+    resultado = montar(exigidos, usuario)
+    assert resultado[0]["status"] == "valido"
+    assert resultado[0]["dias_para_vencer"] is None
+    assert resultado[0]["data_validade"] is None
 
 
 def test_declaracao_formato_antigo_string_simples_nao_quebra():

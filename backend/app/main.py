@@ -3442,8 +3442,8 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
     hoje = date.today()
     return [{
         "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
-        "data_validade": d.data_validade.isoformat(),
-        "dias_para_vencer": (d.data_validade - hoje).days,
+        "data_validade": d.data_validade.isoformat() if d.data_validade else None,
+        "dias_para_vencer": (d.data_validade - hoje).days if d.data_validade else None,
         "observacao": d.observacao, "link": d.link, "ativo": d.ativo,
         "tem_arquivo": bool(d.arquivo_cifrado),
     } for d in docs]
@@ -3477,7 +3477,7 @@ def _nome_arquivo_seguro(nome: str) -> str:
 @app.post("/api/documentos")
 async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = Form(None),
                           data_validade: date | None = Form(None), link: str | None = Form(None),
-                          observacao: str | None = Form(None),
+                          observacao: str | None = Form(None), sem_validade: bool = Form(False),
                           arquivo: UploadFile = File(...),
                           user: Usuario = Depends(_auth.get_current_user),
                           db: Session = Depends(get_session)):
@@ -3489,8 +3489,11 @@ async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = For
     # digitou uma -- nenhum julgamento de "atende exigência X" ou apto/
     # inapto acontece aqui (isso é outra funcionalidade, verificar_documentos
     # _usuario, que fica intocada). Sem data segura, não inventa: 422 pede
-    # pro usuário confirmar manualmente.
-    if data_validade is None:
+    # pro usuário confirmar manualmente. sem_validade pula tudo isso -- o
+    # documento genuinamente não vence (ex.: contrato social).
+    if sem_validade:
+        data_validade = None
+    elif data_validade is None:
         chave = _auth.decifrar(user.gemini_key_cifrada)
         data_validade = ia.extrair_validade_documento(texto or "", api_key=chave)
         if data_validade is None:
@@ -3505,7 +3508,7 @@ async def criar_documento(nome: str = Form(...), orgao_emissor: str | None = For
     db.add(d)
     user.versao_documentos += 1
     db.commit()
-    return {"id": d.id, "data_validade": d.data_validade.isoformat()}
+    return {"id": d.id, "data_validade": d.data_validade.isoformat() if d.data_validade else None}
 
 
 def _documento_do_usuario(db, doc_id, user) -> Documento:
@@ -3529,14 +3532,19 @@ def baixar_arquivo_documento(doc_id: int, user: Usuario = Depends(_auth.get_curr
 
 @app.put("/api/documentos/{doc_id}")
 async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor: str | None = Form(None),
-                              data_validade: date = Form(...), link: str | None = Form(None),
-                              observacao: str | None = Form(None),
+                              data_validade: date | None = Form(None), link: str | None = Form(None),
+                              observacao: str | None = Form(None), sem_validade: bool = Form(False),
                               arquivo: UploadFile | None = File(None),
                               user: Usuario = Depends(_auth.get_current_user),
                               db: Session = Depends(get_session)):
+    # validade é obrigatória ao editar, a menos que o documento seja
+    # marcado como sem vencimento (não há re-extração por IA nessa hora).
+    if not sem_validade and data_validade is None:
+        raise HTTPException(400, "Informe a validade, ou marque \"não possui data de vencimento\".")
     d = _documento_do_usuario(db, doc_id, user)
     d.nome, d.orgao_emissor = nome, orgao_emissor or None
-    d.data_validade, d.link, d.observacao = data_validade, link or None, observacao or None
+    d.data_validade = None if sem_validade else data_validade
+    d.link, d.observacao = link or None, observacao or None
     # arquivo é OPCIONAL na edição: só substitui o arquivo/texto salvos se o
     # usuário mandar um novo; sem arquivo, mantém o que já estava guardado
     # (editar validade/observação não pode apagar o upload anterior).

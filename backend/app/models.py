@@ -307,7 +307,10 @@ class Documento(Base):
     usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), index=True, nullable=True)
     nome: Mapped[str] = mapped_column(String(160))           # ex.: "Certidão Negativa FGTS"
     orgao_emissor: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    data_validade: Mapped[date] = mapped_column(Date)
+    # None = documento sem vencimento (ex.: contrato social) -- não entra em
+    # nenhum aviso de prazo (ver lembretes.py/telegram_menu.py) nem no
+    # calendário de compromissos (o filtro por intervalo já exclui NULL).
+    data_validade: Mapped[date | None] = mapped_column(Date, nullable=True)
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)  # onde está o documento
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -1309,7 +1309,11 @@
           <input id="d-orgao" style="width:100%" placeholder="ex: Caixa Econômica"></div>
         <div class="field"><label id="d-validade-label">Validade
           <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Deixe em branco pra IA tentar identificar a validade automaticamente a partir do arquivo enviado. Se não conseguir, você digita manualmente.</span></span></label>
-          <input id="d-validade" type="date" style="width:100%"></div>
+          <input id="d-validade" type="date" style="width:100%">
+          <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;font-weight:400">
+            <input type="checkbox" id="d-sem-validade" onchange="_alternarSemValidade()">
+            Não possui data de vencimento
+          </label></div>
       </div>
       <div class="field"><label>Link do documento (opcional)
         <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Endereço onde o documento está guardado (Google Drive, site do órgão, etc.). Vem junto no aviso de vencimento para você abrir rápido.</span></span></label>
@@ -2070,6 +2074,7 @@ function _compromissosHTML(r){
 }
 
 function _statusDocumento(d){
+  if(d.data_validade==null) return {cor:'var(--forte)', bg:'rgba(34,197,94,.14)', rotulo:'sem vencimento'};
   const dias = d.dias_para_vencer;
   if(dias<0) return {cor:'var(--destructive)', bg:'rgba(239,68,68,.14)', rotulo:'vencido'};
   if(dias===0) return {cor:'var(--destructive)', bg:'rgba(239,68,68,.14)', rotulo:'vence hoje'};
@@ -2087,7 +2092,7 @@ async function loadDocumentosResumo(){
   try{ docs = (await api('/api/documentos'))||[]; }catch(e){}
   docs = docs.filter(d=>d.ativo);
   const visiveis = docs.slice(0,3);
-  const vencendo = docs.filter(d=>d.dias_para_vencer<=7).length;
+  const vencendo = docs.filter(d=>d.dias_para_vencer!=null && d.dias_para_vencer<=7).length;
   const linhas = visiveis.length ? visiveis.map(d=>{
     const st = _statusDocumento(d);
     return `<div class="doc">
@@ -2953,13 +2958,17 @@ async function loadDocumentos(){
   _documentos = ds;
   if(!ds.length){ $('#lista-documentos').innerHTML='<tr><td colspan=5 class="muted">Nenhum documento cadastrado.</td></tr>'; return; }
   $('#lista-documentos').innerHTML=ds.map(d=>{
-    let cor='var(--forte)', txt=`${d.dias_para_vencer} dias`;
-    if(d.dias_para_vencer<0){ cor='var(--destructive)'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
-    else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    let cor='var(--forte)', txt='sem vencimento', validadeTxt='—';
+    if(d.data_validade!=null){
+      validadeTxt = d.data_validade.split('-').reverse().join('/');
+      txt = `${d.dias_para_vencer} dias`;
+      if(d.dias_para_vencer<0){ cor='var(--destructive)'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+      else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
+    }
     const link = linkSeguro(d.link);
     return `<tr>
       <td>${esc(d.nome)}${d.tem_arquivo?' <span title="Arquivo anexado — usado na verificação por IA" style="font-size:11px">📎</span>':''}</td><td class="muted">${esc(d.orgao_emissor||'—')}</td>
-      <td>${d.data_validade.split('-').reverse().join('/')}</td>
+      <td>${validadeTxt}</td>
       <td style="color:${cor};font-weight:600">${txt}</td>
       <td style="white-space:nowrap">
         ${link?`<a class="btn ghost" href="${esc(link)}" target="_blank">abrir ↗</a>`:''}
@@ -2981,13 +2990,15 @@ function fecharFormDocumento(){
 
 async function salvarDocumento(){
   const nome=$('#d-nome').value.trim(), data_validade=$('#d-validade').value;
+  const semValidade = $('#d-sem-validade').checked;
   const arquivo = $('#d-arquivo').files[0];
-  // Validade é obrigatória ao editar (não há re-extração por IA nessa hora);
-  // ao cadastrar, pode ficar em branco -- o servidor tenta extrair da IA e,
-  // se não conseguir, devolve erro pedindo pra digitar (tratado abaixo).
-  if(!nome || (editandoDocId && !data_validade) || (!editandoDocId && !arquivo)){
+  // Validade é obrigatória ao editar (não há re-extração por IA nessa hora),
+  // a menos que o documento seja marcado como sem vencimento; ao cadastrar,
+  // pode ficar em branco -- o servidor tenta extrair da IA e, se não
+  // conseguir, devolve erro pedindo pra digitar (tratado abaixo).
+  if(!nome || (editandoDocId && !semValidade && !data_validade) || (!editandoDocId && !arquivo)){
     const msg = !nome ? 'Informe o nome'
-      : (editandoDocId && !data_validade) ? 'Informe a validade'
+      : (editandoDocId && !semValidade && !data_validade) ? 'Informe a validade, ou marque "não possui data de vencimento"'
       : 'Envie o arquivo do documento';
     toast(msg, 'erro');
     return;
@@ -2995,7 +3006,8 @@ async function salvarDocumento(){
   const fd = new FormData();
   fd.append('nome', nome);
   fd.append('orgao_emissor', $('#d-orgao').value.trim());
-  if(data_validade) fd.append('data_validade', data_validade);
+  if(semValidade) fd.append('sem_validade', 'true');
+  else if(data_validade) fd.append('data_validade', data_validade);
   fd.append('link', $('#d-link').value.trim());
   fd.append('observacao', $('#d-obs').value.trim());
   if(arquivo) fd.append('arquivo', arquivo);
@@ -3006,18 +3018,28 @@ async function salvarDocumento(){
     toast(err.detail || 'Não foi possível salvar o documento.', 'erro');
     return;
   }
-  if(!editandoDocId && !data_validade){
+  if(!editandoDocId && !semValidade && !data_validade){
     const salvo = await resp.json().catch(()=>({}));
     if(salvo.data_validade) toast(`Documento salvo — validade identificada automaticamente: ${salvo.data_validade.split('-').reverse().join('/')}`);
   }
   fecharFormDocumento(); loadDocumentos();
 }
 
+// desmarcar não limpa a data digitada (só reabilita o campo) -- marcar
+// esconde/desabilita e limpa, pra não mandar uma data junto de sem_validade.
+function _alternarSemValidade(){
+  const sem = $('#d-sem-validade').checked;
+  $('#d-validade').disabled = sem;
+  if(sem) $('#d-validade').value = '';
+}
+
 function editarDocumento(id){
   const d = _documentos.find(x=>x.id===id);
   if(!d) return;
   $('#d-nome').value=d.nome; $('#d-orgao').value=d.orgao_emissor||'';
-  $('#d-validade').value=d.data_validade; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
+  $('#d-validade').value=d.data_validade||''; $('#d-link').value=d.link||''; $('#d-obs').value=d.observacao||'';
+  $('#d-sem-validade').checked = d.data_validade==null;
+  _alternarSemValidade();
   $('#d-arquivo-atual').textContent = d.tem_arquivo ? '📎 já tem um arquivo anexado — escolher outro substitui o atual.' : '';
   editandoDocId=d.id;
   $('#doc-form-titulo').textContent='Editar documento';
@@ -3028,6 +3050,8 @@ function editarDocumento(id){
 function cancelarEdicaoDoc(){
   editandoDocId=null;
   ['d-nome','d-orgao','d-validade','d-link','d-obs','d-arquivo'].forEach(i=>$('#'+i).value='');
+  $('#d-sem-validade').checked = false;
+  _alternarSemValidade();
   $('#d-arquivo-atual').textContent='';
   $('#doc-form-titulo').textContent='Cadastrar documento / certidão';
   $('#btn-salvar-doc').textContent='Salvar documento';
