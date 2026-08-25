@@ -18,7 +18,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import main as app_main
-from app.main import completar_descricao_itens, _completar_descricao_locks, _completar_descricao_status
+from app.main import (
+    completar_descricao_itens, completar_descricao_cancelar,
+    _completar_descricao_locks, _completar_descricao_status, _completar_descricao_cancelar,
+)
 from app.models import Base, Edital, ItemEdital
 
 
@@ -39,9 +42,11 @@ def _limpa_estado_global():
     depois de cada teste pra um teste não vazar estado pro outro."""
     _completar_descricao_locks.clear()
     _completar_descricao_status.clear()
+    _completar_descricao_cancelar.clear()
     yield
     _completar_descricao_locks.clear()
     _completar_descricao_status.clear()
+    _completar_descricao_cancelar.clear()
 
 
 def test_edital_nao_existe_da_404():
@@ -289,3 +294,85 @@ def test_bg_ja_travado_nao_roda_de_novo_nem_mexe_no_status():
         assert _completar_descricao_status[edital_id] == {"rodando": True, "erro": None}
     finally:
         lock.release()
+
+
+def test_endpoint_cancelar_seta_a_flag_por_edital():
+    r = completar_descricao_cancelar(77, user=_usuario())
+    assert r["ok"] is True
+    assert _completar_descricao_cancelar[77] is True
+
+
+def test_bg_cancelado_antes_da_etapa_cara_nao_chama_a_ia_e_marca_status(monkeypatch):
+    """Cooperativo, mesmo espírito de _analise_cancelar: se o cancelamento
+    chegou (por uma requisição concorrente de /cancelar) antes da etapa cara
+    (documento + IA) começar, pula ela inteira -- nunca gasta a chamada à
+    toa. O cancelamento chega DURANTE a etapa rápida (_listar_arquivos_pncp)
+    pra simular fielmente a janela real: o pop defensivo do início já
+    aconteceu, então só um cancelamento que chega DEPOIS dele conta."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(app_main, "SessionLocal", Session)
+
+    db_setup = Session()
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="Aquisicao", uf="SP")
+    db_setup.add(ed)
+    db_setup.commit()
+    db_setup.add(ItemEdital(edital_id=ed.id, numero=24, descricao="PAPEL A4 210 X 297 75G/M"))
+    db_setup.commit()
+    edital_id = ed.id
+    db_setup.close()
+
+    monkeypatch.setattr(app_main.settings, "DEEPINFRA_API_KEY", "fake-key")
+
+    def _listar_e_cancelar_concorrentemente(ed):
+        _completar_descricao_cancelar[edital_id] = True
+        return {"status": "ok", "arquivos": [{"titulo": "edital", "url": "http://x"}]}
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp", _listar_e_cancelar_concorrentemente)
+
+    from app import itens_pdf
+    chamou_ia = []
+    monkeypatch.setattr(itens_pdf, "extrair_itens_completos",
+                        lambda *a, **k: chamou_ia.append(1) or {"status": "ok", "itens": []})
+
+    app_main._rodar_completar_descricao_bg(edital_id)
+
+    assert chamou_ia == []
+    assert _completar_descricao_status[edital_id] == {
+        "rodando": False, "erro": None, "status": "cancelado", "atualizados": 0}
+    assert not app_main._lock_completar_descricao(edital_id).locked()
+
+
+def test_bg_nao_herda_cancelamento_de_uma_rodada_anterior(monkeypatch):
+    """Mesmo padrão defensivo de _analise_cancelar.pop: uma flag de
+    cancelamento deixada de uma rodada anterior (já resolvida) não pode
+    fazer a PRÓXIMA rodada ser pulada silenciosamente."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(app_main, "SessionLocal", Session)
+
+    db_setup = Session()
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao", objeto="Aquisicao", uf="SP")
+    db_setup.add(ed)
+    db_setup.commit()
+    db_setup.add(ItemEdital(edital_id=ed.id, numero=24, descricao="PAPEL A4 210 X 297 75G/M"))
+    db_setup.commit()
+    edital_id = ed.id
+    db_setup.close()
+
+    monkeypatch.setattr(app_main.settings, "DEEPINFRA_API_KEY", "fake-key")
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed: {"status": "ok", "arquivos": [{"titulo": "edital", "url": "http://x"}]})
+
+    from app import itens_pdf
+    monkeypatch.setattr(itens_pdf, "extrair_itens_completos", lambda *a, **k: {
+        "status": "ok",
+        "itens": [{"numero": 24, "descricao_completa": "PAPEL A4, CAIXA COM 10 RESMAS DE 500 FOLHAS CADA"}],
+    })
+
+    _completar_descricao_cancelar[edital_id] = True   # deixado de uma rodada anterior já resolvida
+    app_main._rodar_completar_descricao_bg(edital_id)
+
+    st = _completar_descricao_status[edital_id]
+    assert st == {"rodando": False, "erro": None, "status": "ok", "detalhe": None, "atualizados": 1}

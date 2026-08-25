@@ -4070,7 +4070,35 @@ async function abaEdital(nome, forcar){
 // espera, pra não parecer que o clique não fez nada.
 async function _completarDescricaoItens(id, ativo, avisar, btn){
   const textoOriginal = btn ? btn.textContent : null;
-  if(btn){ btn.disabled = true; btn.textContent = 'buscando…'; }
+  // objeto simples (não AbortController) porque a "espera" aqui é um loop de
+  // polling (a cada 3s), não uma única requisição em voo — o botão Cancelar
+  // marca essa flag pro loop desistir de agir sobre o que vier depois.
+  const cancelamento = {pedido: false};
+  let btnCancelar = null;
+  // idempotente (pode rodar 2x: no clique de Cancelar E no finally) — só
+  // mexe no que ainda estiver de verdade na página (a aba pode ter sido
+  // re-renderizada enquanto esperava).
+  const restaurarBotoes = () => {
+    if(btn && document.body.contains(btn)){ btn.disabled = false; btn.textContent = textoOriginal; }
+    if(btnCancelar && document.body.contains(btnCancelar)){ btnCancelar.remove(); btnCancelar = null; }
+  };
+  if(btn){
+    btn.disabled = true; btn.textContent = 'buscando…';
+    btnCancelar = document.createElement('button');
+    btnCancelar.type = 'button';
+    btnCancelar.className = 'btn discreto';
+    btnCancelar.style.cssText = 'padding:2px 8px;font-size:11px;margin-left:6px';
+    btnCancelar.textContent = 'Cancelar';
+    // feedback instantâneo (não espera o próximo tick do polling, que só
+    // roda a cada 3s) — mesmo espírito de cancelarAnalise().
+    btnCancelar.onclick = () => {
+      cancelamento.pedido = true;
+      fetch(`/api/editais/${id}/itens/completar-descricao/cancelar`, {method: 'POST'}).catch(()=>{});
+      restaurarBotoes();
+      if(avisar) toast('Busca cancelada.', 'aviso');
+    };
+    btn.insertAdjacentElement('afterend', btnCancelar);
+  }
   try{
     let r;
     try{
@@ -4083,11 +4111,9 @@ async function _completarDescricaoItens(id, ativo, avisar, btn){
       if(avisar) toast(r.mensagem || 'Já tem uma busca de descrição em andamento pra este edital.', 'aviso');
       return;
     }
-    await _acompanharCompletarDescricao(id, ativo, avisar);
+    await _acompanharCompletarDescricao(id, ativo, avisar, cancelamento);
   } finally {
-    // o botão pode ter sido substituído (aba re-renderizada enquanto
-    // esperava) — só mexe nele se ainda estiver de verdade na página.
-    if(btn && document.body.contains(btn)){ btn.disabled = false; btn.textContent = textoOriginal; }
+    restaurarBotoes();
   }
 }
 
@@ -4114,14 +4140,22 @@ function _selecaoDeSugestaoPendente(){
 // depois. Se mesmo assim estourar 10 min, desiste de esperar (o servidor
 // continua e termina sozinho; reabrir a aba ou clicar de novo mais tarde
 // mostra o resultado já pronto).
-async function _acompanharCompletarDescricao(id, ativo, avisar){
+async function _acompanharCompletarDescricao(id, ativo, avisar, cancelamento){
   for(let tentativa=0; tentativa<200; tentativa++){
     await new Promise(res=>setTimeout(res, 3000));
+    // o toast e a restauração dos botões já aconteceram na hora do clique
+    // em Cancelar (feedback instantâneo) -- aqui só desiste de continuar
+    // esperando/agindo sobre o que vier depois.
+    if(cancelamento && cancelamento.pedido) return;
     if(!ativo() || _paginaEditalId !== id) return;
     let st;
     try{ st = await api(`/api/editais/${id}/itens/completar-descricao/status`); }
     catch(e){ continue; }
+    // o cancelamento pode ter sido pedido enquanto a checagem de status
+    // acima estava em voo — não age numa resposta que já não interessa mais.
+    if(cancelamento && cancelamento.pedido) return;
     if(st.rodando) continue;
+    if(st.status === 'cancelado') return;
     if(st.erro){
       if(avisar) toast('Não foi possível completar as descrições agora. Tente de novo.', 'erro');
       return;

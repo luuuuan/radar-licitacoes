@@ -2624,6 +2624,10 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
 # vê este edital, então a trava também é.
 _completar_descricao_locks: dict[int, threading.Lock] = {}
 _completar_descricao_status: dict[int, dict] = {}
+# Cooperativo, mesmo espírito de _analise_cancelar: só evita COMEÇAR a etapa
+# cara (leitura de documento + IA) se ela ainda não tiver começado — nunca
+# interrompe uma chamada já em andamento.
+_completar_descricao_cancelar: dict[int, bool] = {}
 
 
 def _lock_completar_descricao(edital_id: int) -> threading.Lock:
@@ -2636,6 +2640,7 @@ def _rodar_completar_descricao_bg(edital_id: int):
     lock = _lock_completar_descricao(edital_id)
     if not lock.acquire(blocking=False):
         return
+    _completar_descricao_cancelar.pop(edital_id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
     db = SessionLocal()
     try:
         ed = db.get(Edital, edital_id)
@@ -2650,6 +2655,10 @@ def _rodar_completar_descricao_bg(edital_id: int):
         itens_edital = db.execute(
             select(ItemEdital).where(ItemEdital.edital_id == edital_id)).scalars().all()
         docs = _listar_arquivos_pncp(ed)
+        if _completar_descricao_cancelar.get(edital_id):
+            _completar_descricao_status[edital_id] = {
+                "rodando": False, "erro": None, "status": "cancelado", "atualizados": 0}
+            return
         resultado = itens_pdf.extrair_itens_completos(
             ed.objeto or "", docs.get("arquivos") or [],
             [{"numero": it.numero, "descricao": it.descricao} for it in itens_edital],
@@ -2717,6 +2726,15 @@ def completar_descricao_itens(edital_id: int, bg: BackgroundTasks,
 @app.get("/api/editais/{edital_id}/itens/completar-descricao/status")
 def completar_descricao_status(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
     return _completar_descricao_status.get(edital_id, {"rodando": False, "erro": None})
+
+
+@app.post("/api/editais/{edital_id}/itens/completar-descricao/cancelar")
+def completar_descricao_cancelar(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
+    """Pede pra parar a busca de descrição completa deste edital. Cooperativo,
+    mesmo padrão de /analise/cancelar: só tem efeito se a etapa cara (ler o
+    documento + chamar a IA) ainda não tiver começado."""
+    _completar_descricao_cancelar[edital_id] = True
+    return {"ok": True, "mensagem": "Cancelamento solicitado — a busca vai parar assim que possível."}
 
 
 # --------------------------- Cotação (planilha) ------------------------ #
