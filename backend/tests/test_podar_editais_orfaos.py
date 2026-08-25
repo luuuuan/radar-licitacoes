@@ -1,9 +1,18 @@
 """
 service.podar_editais_orfaos() -- remove itens_edital + editais que nunca
 tiveram nenhum engajamento de usuário (Match/Proposta/Análise por IA) e já
-encerraram. Achado real: itens_edital sozinha passou de 400MB no plano
-free do banco (teto de 500MB), quase todo esse espaço eram editais que
-nunca bateram com catálogo nenhum, coletados 2x/dia sem nenhuma limpeza.
+encerraram DE VERDADE (data_encerramento no passado -- fim do recebimento
+de propostas, não só o início da janela). Achado real: itens_edital sozinha
+passou de 400MB no plano free do banco (teto de 500MB), quase todo esse
+espaço eram editais que nunca bateram com catálogo nenhum, coletados 2x/dia
+sem nenhuma limpeza.
+
+Achado real #2: a poda usava data_abertura (início da janela de propostas)
+em vez de data_encerramento (fim) -- um edital com data_abertura no passado
+pode ainda estar com a janela de propostas aberta (data_encerramento no
+futuro), e apagá-lo destruiria uma oportunidade ainda válida. Corrigido pra
+usar data_encerramento; sem essa data cadastrada, não arrisca apagar.
+
 Banco sqlite em memória, sem HTTP. Rode com:  cd backend && pytest
 """
 import datetime
@@ -31,9 +40,10 @@ def _usuario(db):
     return u
 
 
-def _edital_com_itens(db, id_externo, data_abertura, n_itens=2):
+def _edital_com_itens(db, id_externo, data_encerramento, n_itens=2, data_abertura=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
-               objeto="Aquisicao", uf="SP", data_abertura=data_abertura)
+               objeto="Aquisicao", uf="SP", data_abertura=data_abertura,
+               data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     for numero in range(1, n_itens + 1):
@@ -69,10 +79,24 @@ def test_mantem_edital_ainda_ativo_mesmo_sem_engajamento():
     assert db.query(Edital).count() == 1
 
 
-def test_mantem_edital_sem_data_abertura():
-    """Sem data_abertura não dá pra saber se já encerrou -- não arrisca apagar."""
+def test_mantem_edital_sem_data_encerramento():
+    """Sem data_encerramento não dá pra saber se já encerrou -- não arrisca
+    apagar, mesmo com data_abertura no passado."""
     db = _sessao()
     _edital_com_itens(db, "ed1", None)
+
+    r = service.podar_editais_orfaos(db)
+
+    assert r == {"editais_removidos": 0, "itens_removidos": 0}
+    assert db.query(Edital).count() == 1
+
+
+def test_mantem_edital_com_janela_de_propostas_ainda_aberta():
+    """Achado real: data_abertura no passado não significa que encerrou --
+    é só o INÍCIO da janela. Um edital com data_abertura ontem mas
+    data_encerramento amanhã ainda está aceitando propostas agora."""
+    db = _sessao()
+    _edital_com_itens(db, "ed1", AMANHA, data_abertura=ONTEM)
 
     r = service.podar_editais_orfaos(db)
 

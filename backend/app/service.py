@@ -62,6 +62,15 @@ def podar_editais_orfaos(db: Session) -> dict:
     500MB) -- a esmagadora maioria de editais que nunca bateram com
     catálogo nenhum, coletados 2x/dia sem parar.
 
+    "Já encerrou" usa data_encerramento (dataEncerramentoProposta no PNCP --
+    fim do recebimento de propostas), NÃO data_abertura (dataAberturaProposta
+    -- só o INÍCIO da janela). Achado real: um edital com data_abertura no
+    passado pode ter data_encerramento no futuro -- a janela de propostas
+    ainda está aberta, aceitando envios agora; apagar um edital assim (só por
+    zero engajamento até aqui) destruiria uma oportunidade ainda válida caso
+    o catálogo de alguém mude depois. Sem data_encerramento cadastrada, não
+    dá pra saber se encerrou -- não arrisca apagar (deixa o edital de lado).
+
     Chamada ao fim de toda coleta (ver processar_coleta) — mantém a base do
     tamanho de novo sozinha, em vez de precisar de faxina manual."""
     hoje = date.today()
@@ -72,7 +81,7 @@ def podar_editais_orfaos(db: Session) -> dict:
     )
     ids = db.execute(
         select(Edital.id)
-        .where(Edital.data_abertura.is_not(None), Edital.data_abertura < hoje)
+        .where(Edital.data_encerramento.is_not(None), Edital.data_encerramento < hoje)
         .where(sem_engajamento)
     ).scalars().all()
 
