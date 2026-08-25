@@ -2,10 +2,12 @@
 Achado real: um edital com item https://app.minhalicitacao.com/edital/56743
 dava "sem_texto" ("publicado como imagem/escaneado") — mas o arquivo
 publicado no PNCP era um Word .doc antigo (assinatura OLE2), não uma imagem
-escaneada. O sistema só sabia ler PDF (e .zip contendo PDFs); nunca teve
-suporte a Word. Esses testes cobrem a detecção do formato e o despacho pro
-conversor via LibreOffice — sem depender do binário 'soffice' de verdade
-estar instalado (mockado). Rode com:  cd backend && pytest
+escaneada. Depois, outro edital (24772188000154/2026/130) veio em .rtf —
+mesmo sintoma, causa diferente (pypdf tentando ler RTF como PDF). O sistema
+só sabia ler PDF (e .zip contendo PDFs); nunca teve suporte a Word/RTF.
+Esses testes cobrem a detecção de cada formato e o despacho pro conversor
+via LibreOffice — sem depender do binário 'soffice' de verdade estar
+instalado (mockado). Rode com:  cd backend && pytest
 """
 import io
 import os
@@ -92,6 +94,24 @@ def test_baixar_texto_detecta_docx_via_zip_e_usa_conversor_word(monkeypatch):
 
     assert chamadas == [".docx"]
     assert r == "texto do docx"
+
+
+def test_baixar_texto_detecta_rtf_e_usa_conversor_word(monkeypatch):
+    """Achado real (edital PNCP 24772188000154/2026/130): o "Edital" veio
+    publicado em .rtf (Content-Type application/octet-stream, não avisa o
+    formato real) — pypdf tentava ler como PDF e falhava ("invalid pdf
+    header"). RTF é texto puro começando com "{\\rtf", detectável sem
+    precisar abrir como zip/OLE2; reaproveita o mesmo conversor do Word."""
+    conteudo = ia._MAGIC_RTF + b"1\\adeflang1025\\ansi resto do arquivo rtf aqui"
+    monkeypatch.setattr(ia.requests, "get", lambda *a, **k: _RespostaFake(conteudo))
+    chamadas = []
+    monkeypatch.setattr(ia, "_texto_de_word_bytes",
+                        lambda conteudo, ext, max_chars: chamadas.append(ext) or "texto do rtf")
+
+    r = ia._baixar_texto_pdf("http://exemplo/arquivo")
+
+    assert chamadas == [".rtf"]
+    assert r == "texto do rtf"
 
 
 def test_baixar_texto_zip_de_pdfs_continua_no_caminho_antigo(monkeypatch):

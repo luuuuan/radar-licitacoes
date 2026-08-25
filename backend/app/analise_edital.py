@@ -114,6 +114,15 @@ def _e_zip(conteudo: bytes) -> bool:
 # de arquivo que nunca foi lido, nem tentado.
 _MAGIC_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
+# RTF é texto puro (não binário) começando com "{\rtf" — achado real
+# (edital PNCP 24772188000154/2026/130): o órgão publicou o "Edital" nesse
+# formato, com Content-Type application/octet-stream (não avisa o formato
+# real) e nome de arquivo terminando em .rtf. pypdf tentava ler como PDF e
+# falhava ("invalid pdf header") — sem suporte nenhum, cada NCM zerado
+# nesse arquivo. LibreOffice já é usado pra .doc/.docx (_texto_de_word_bytes,
+# abaixo) e lê RTF nativamente, sem precisar de conversor novo nenhum.
+_MAGIC_RTF = b"{\\rtf"
+
 
 def _e_docx(conteudo: bytes) -> bool:
     """.docx é um .zip por dentro (padrão OOXML) — diferencia do caso já
@@ -127,14 +136,15 @@ def _e_docx(conteudo: bytes) -> bool:
 
 
 def _texto_de_word_bytes(conteudo: bytes, extensao: str, max_chars: int) -> str:
-    """Converte .doc/.docx pra texto via LibreOffice headless (binário
+    """Converte .doc/.docx/.rtf pra texto via LibreOffice headless (binário
     'soffice', instalado no Dockerfile — pacote libreoffice-writer). Não dá
-    pra ler o .doc antigo com um parser caseiro: é um formato binário
-    complexo o bastante pra existirem ferramentas dedicadas só pra isso: é
-    por isso que se usa o LibreOffice em vez de tentar decodificar os bytes
-    na mão. Se o binário não estiver instalado (ex.: dev local sem o
-    Dockerfile), volta "" silenciosamente — mesmo espírito do OCR opcional
-    (ver settings.OCR_ATIVO)."""
+    pra ler o .doc antigo (nem confiar em decodificar RTF na mão — tem
+    controle de formatação misturado no meio do texto) com um parser
+    caseiro: são formatos complexos o bastante pra existirem ferramentas
+    dedicadas só pra isso; é por isso que se usa o LibreOffice em vez de
+    tentar decodificar os bytes na mão. Se o binário não estiver instalado
+    (ex.: dev local sem o Dockerfile), volta "" silenciosamente — mesmo
+    espírito do OCR opcional (ver settings.OCR_ATIVO)."""
     if not shutil.which("soffice"):
         return ""
     try:
@@ -246,6 +256,8 @@ def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_ch
         return ""
     if r.content[:8] == _MAGIC_OLE2:
         return _texto_de_word_bytes(r.content, ".doc", max_chars)
+    if r.content[:5] == _MAGIC_RTF:
+        return _texto_de_word_bytes(r.content, ".rtf", max_chars)
     if _e_zip(r.content):
         if _e_docx(r.content):
             return _texto_de_word_bytes(r.content, ".docx", max_chars)
