@@ -1792,19 +1792,54 @@ _coleta_iniciada_em: datetime | None = None
 _coleta_fase: str | None = None
 _coleta_fase_feitos = 0
 _coleta_fase_total: int | None = None
-# Mesmo limiar do indicador "Última coleta não finalizou" (/api/coleta/status)
-# — uma coleta de verdade sempre termina bem antes disso (histórico real:
+# Limiar pra considerar a trava de coleta "presa" (ver _coleta_travada) —
+# uma coleta de verdade sempre termina bem antes disso (histórico real:
 # 50min a ~2h). Achado real: uma coleta manual travou (sem nunca liberar a
 # trava — crash ou hang numa chamada de rede sem timeout) e bloqueou TODAS
 # as coletas automáticas do cron silenciosamente por horas — o disparo do
 # GitHub Actions continuava recebendo 200 (o pedido é só agendado em
 # segundo plano), sem nenhum jeito de saber que nada rodou de verdade.
+# ver _forcar_liberacao_coleta_travada() pra como isso é solto sozinho.
 _LIMITE_COLETA_TRAVADA = timedelta(hours=3)
 
 
 def _coleta_travada() -> bool:
     return (_coleta_lock.locked() and _coleta_iniciada_em is not None
            and (_utcnow_main() - _coleta_iniciada_em) > _LIMITE_COLETA_TRAVADA)
+
+
+def _forcar_liberacao_coleta_travada(db: Session | None = None) -> bool:
+    """Libera a trava de coleta se ela estiver presa há mais tempo que
+    qualquer coleta legítima levaria (ver _coleta_travada) -- quase certo
+    que o processo anterior morreu ou travou (crash, redeploy, hang numa
+    chamada sem timeout, ou o dyno gratuito do Render hibernando no meio de
+    uma coleta em segundo plano) sem nunca chegar no finally que libera.
+
+    Achado real: antes só era chamada DENTRO de uma tentativa nova de
+    coleta -- então, se ninguém tentasse coletar de novo, o indicador do
+    dashboard ficava preso em "Última coleta não finalizou" indefinidamente,
+    mesmo a trava já estando havia muito tempo além do limite (o usuário
+    tinha que saber que precisava tentar coletar de novo pra ela se
+    autocurar). Chamada também a partir do próprio /api/coleta/status
+    (consultado a cada ~30s pelo dashboard) pra a trava se soltar sozinha
+    assim que o limite é cruzado, sem depender de um novo disparo.
+    `db`, se informado, também fecha o LogColeta órfão daquela rodada morta
+    (só faz sentido chamar com uma sessão quando a trava estava mesmo presa
+    -- nesse ponto, qualquer LogColeta ainda aberto é dessa mesma rodada)."""
+    global _coleta_iniciada_em
+    if not _coleta_travada():
+        return False
+    import logging
+    logging.getLogger("coleta").warning(
+        "Trava de coleta presa há mais de %s — forçando liberação.", _LIMITE_COLETA_TRAVADA)
+    try:
+        _coleta_lock.release()
+    except RuntimeError:
+        pass   # outra chamada concorrente já liberou entre a checagem e agora
+    _coleta_iniciada_em = None
+    if db is not None:
+        _limpar_logs_coleta_orfaos(db)
+    return True
 
 
 def _limpar_logs_coleta_orfaos(db: Session):
@@ -1837,18 +1872,7 @@ def _atualizar_fase_coleta(fase: str, feitos: int, total: int) -> None:
 def _rodar_coleta_bg(usuario_id: int | None = None):
     global _coleta_cancelar, _coleta_iniciada_em, _coleta_fase, _coleta_fase_feitos, _coleta_fase_total
     import logging
-    if _coleta_travada():
-        # a trava está presa há mais tempo que qualquer coleta legítima
-        # levaria — quase certo que o processo anterior morreu (crash, ou
-        # hang numa chamada sem timeout) sem nunca chegar no finally que
-        # libera. Força a liberação pra não bloquear coletas pra sempre.
-        logging.getLogger("coleta").warning(
-            "Trava de coleta presa há mais de %s — forçando liberação.", _LIMITE_COLETA_TRAVADA)
-        try:
-            _coleta_lock.release()
-        except RuntimeError:
-            pass   # alguém liberou entre a checagem e agora — segue o jogo
-        _coleta_iniciada_em = None
+    _forcar_liberacao_coleta_travada()
     # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
     if not _coleta_lock.acquire(blocking=False):
         logging.getLogger("coleta").info(
@@ -2993,14 +3017,20 @@ def coleta_status(user: Usuario = Depends(_auth.get_current_user),
     pronto). Achado real: antes disso, o indicador só dizia "coleta em
     andamento" do início ao fim — parecia uma trava mesmo quando a busca no
     PNCP já tinha terminado fazia tempo e só faltava processar usuários."""
+    # se a trava estiver presa (ver _forcar_liberacao_coleta_travada), solta
+    # sozinha aqui -- sem isso, o indicador ficava preso em "não finalizou"
+    # até alguém tentar rodar uma coleta nova (o único outro lugar que
+    # verificava isso antes). Fecha o LogColeta órfão com erro também, então
+    # a partir daqui "travado" nunca mais é observado como True: em vez
+    # disso, essa rodada morta aparece como "erro na última coleta" -- mais
+    # preciso (ela realmente não terminou) do que fingir que ainda está rodando.
+    _forcar_liberacao_coleta_travada(db)
     agora = _utcnow_main()
     em_andamento = _coleta_lock.locked()
     travado = False
     iniciada_ha_seg = None
     if em_andamento and _coleta_iniciada_em is not None:
         iniciada_ha_seg = int((agora - _coleta_iniciada_em).total_seconds())
-        if _coleta_travada():
-            em_andamento, travado = False, True
 
     # última coleta concluída DESTE usuário
     ultima_ok = db.execute(

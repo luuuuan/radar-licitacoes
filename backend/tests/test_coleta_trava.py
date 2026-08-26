@@ -46,6 +46,36 @@ def test_coleta_travada_true_quando_passou_do_limiar():
         _limpar_estado_trava()
 
 
+def test_forcar_liberacao_nao_faz_nada_quando_nao_esta_travada():
+    _limpar_estado_trava()
+    assert m._forcar_liberacao_coleta_travada() is False
+
+
+def test_forcar_liberacao_libera_e_retorna_true_quando_travada():
+    _limpar_estado_trava()
+    m._coleta_lock.acquire()
+    m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(minutes=1)
+    assert m._forcar_liberacao_coleta_travada() is True
+    assert m._coleta_lock.locked() is False
+    assert m._coleta_iniciada_em is None
+
+
+def test_forcar_liberacao_fecha_logs_orfaos_quando_db_informado():
+    _limpar_estado_trava()
+    db = _sessao()
+    db.add(LogColeta(usuario_id=1, fonte="coleta", origem="manual",
+                     iniciado_em=m._utcnow_main() - timedelta(hours=4)))
+    db.commit()
+    m._coleta_lock.acquire()
+    m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(minutes=1)
+
+    assert m._forcar_liberacao_coleta_travada(db) is True
+
+    orfao = db.execute(select(LogColeta)).scalar_one()
+    assert orfao.finalizado_em is not None
+    assert orfao.erro == "interrompida (processo reiniciado antes de terminar)"
+
+
 def test_rodar_coleta_bg_forca_liberacao_de_trava_presa_e_roda_normalmente(monkeypatch):
     """Simula uma coleta travada há 4h segurando a trava (processo anterior
     morreu sem passar pelo finally) — um novo disparo tem que detectar isso,
@@ -191,7 +221,13 @@ def test_coleta_status_em_andamento_mesmo_sem_log_proprio_do_usuario():
         _limpar_estado_trava()
 
 
-def test_coleta_status_travado_quando_trava_global_presa_ha_muito_tempo():
+def test_coleta_status_libera_trava_presa_sozinho_em_vez_de_reportar_travado():
+    """Achado real: antes disso, 'travado' ficava preso indefinidamente até
+    alguém tentar rodar uma coleta nova (o único outro lugar que verificava
+    o limite) — agora o próprio /api/coleta/status (consultado a cada ~30s
+    pelo dashboard) solta a trava sozinho assim que detecta que passou do
+    limite, sem depender de um novo disparo. 'travado' não é mais um estado
+    observável a partir daqui."""
     _limpar_estado_trava()
     db = _sessao()
     u = _usuario(db)
@@ -199,7 +235,31 @@ def test_coleta_status_travado_quando_trava_global_presa_ha_muito_tempo():
     m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(minutes=1)
     try:
         r = m.coleta_status(user=u, db=db)
-        assert r["estado"] == "travado"
+        assert r["estado"] != "travado"
+        assert m._coleta_lock.locked() is False
+        assert m._coleta_iniciada_em is None
+    finally:
+        _limpar_estado_trava()
+
+
+def test_coleta_status_travado_fecha_orfao_e_mostra_erro_na_ultima_coleta():
+    """Quando existe um LogColeta órfão (rodada que morreu no meio) desta
+    conta, liberar a trava presa deixa esse registro visível como "erro na
+    última coleta" -- mais preciso do que sumir silenciosamente ou fingir
+    "nunca coletou"."""
+    _limpar_estado_trava()
+    db = _sessao()
+    u = _usuario(db)
+    db.add(LogColeta(usuario_id=u.id, fonte="coleta", origem="manual",
+                     iniciado_em=m._utcnow_main() - timedelta(hours=4)))
+    db.commit()
+    m._coleta_lock.acquire()
+    m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(minutes=1)
+    try:
+        r = m.coleta_status(user=u, db=db)
+        assert r["estado"] == "ocioso"
+        assert r["erro"] == "interrompida (processo reiniciado antes de terminar)"
+        assert m._coleta_lock.locked() is False
     finally:
         _limpar_estado_trava()
 
