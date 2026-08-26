@@ -85,11 +85,20 @@ class TransparenciaConnector(BaseConnector):
         """Converte um registro da API no formato comum. Defensivo: campos podem
         variar, então usa .get em tudo e nunca quebra."""
         try:
-            lic = reg.get("licitacao", reg) if isinstance(reg, dict) else {}
+            # Achado real (auditoria do agente debugger): `.get(chave, {})`
+            # só usa o "{}" de fallback quando a CHAVE não existe -- se a API
+            # mandar a chave presente com valor `null` (JSON null vira None
+            # aqui), o `.get` devolve None mesmo, e o `.get(...)` seguinte
+            # quebra com AttributeError. O try/except deste método evitava
+            # crash, mas descartava o registro inteiro em silêncio, mesmo
+            # tendo um fallback bom logo ao lado que nunca chegava a rodar.
+            # `... or {}`/`... or reg` cobre "chave ausente" E "chave com null".
+            lic = (reg.get("licitacao") or reg) if isinstance(reg, dict) else {}
             ident = str(reg.get("id") or lic.get("numero") or reg.get("numero") or "")
             if not ident:
                 return None
-            orgao = (reg.get("unidadeGestora") or {}).get("orgaoVinculado", {}).get("nome") \
+            orgao_vinculado = (reg.get("unidadeGestora") or {}).get("orgaoVinculado") or {}
+            orgao = orgao_vinculado.get("nome") \
                 or (reg.get("orgao") or {}).get("nome") or reg.get("nomeOrgao")
             objeto = reg.get("objeto") or lic.get("objeto") or ""
             modalidade = reg.get("modalidadeLicitacao") or reg.get("modalidade") or ""
