@@ -41,9 +41,24 @@ MODALIDADE_NOME = {
 def _parse_data(valor: str | None) -> date | None:
     if not valor:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S.%f"):
+    # Achado real (auditoria do agente debugger): o `if/else` dentro do
+    # `[:...]` tinha um bug de precedência de operador -- `A if C else B`
+    # é mais "solto" que `+`, então o slice virava
+    # `valor[:(len(fmt)+6) if "%f" in fmt else len(valor)]`. Pros formatos
+    # SEM %f, o "else" sempre disparava e fatiava pro tamanho do próprio
+    # valor (ou seja, sem cortar nada) -- só funcionava quando o valor já
+    # vinha com o tamanho exato do formato, sem sufixo de fuso ou frações
+    # de segundo. Na prática mascarado pelo fallback (fromisoformat) logo
+    # abaixo, que pega a maioria dos formatos reais do PNCP -- mas a
+    # intenção do loop (cada formato com seu corte certo) nunca rodava de
+    # verdade. Comprimentos explícitos, sem fórmula, pra não repetir o erro.
+    for fmt, comprimento in (
+        ("%Y-%m-%dT%H:%M:%S", 19),
+        ("%Y-%m-%d", 10),
+        ("%Y-%m-%dT%H:%M:%S.%f", 26),
+    ):
         try:
-            return datetime.strptime(valor[:len(fmt) + 6 if "%f" in fmt else len(valor)], fmt).date()
+            return datetime.strptime(valor[:comprimento], fmt).date()
         except (ValueError, TypeError):
             continue
     try:
@@ -185,8 +200,20 @@ class PNCPConnector(BaseConnector):
                 if ed and ed.id_externo not in acc:
                     acc[ed.id_externo] = ed
 
-            total_paginas = payload.get("totalPaginas") or 1
-            if pagina >= total_paginas or not registros:
+            if not registros:
+                break
+            # Achado real (auditoria do agente debugger): confiar cego em
+            # "totalPaginas" -- se a API mandar esse campo ausente/zero num
+            # dia ruim, `or 1` tratava como "só tem 1 página" mesmo com um
+            # lote CHEIO de volta, descartando o resto em silêncio (sem
+            # erro, indistinguível de "não tem edital novo"). Só para de
+            # paginar por "totalPaginas" quando ele realmente veio; sem
+            # isso (ou com ele mentindo), usa um sinal que não depende da
+            # API contar certo: a página não veio cheia, não tem próxima.
+            total_paginas = payload.get("totalPaginas") or 0
+            pagina_cheia = len(registros) >= self.tam_pagina
+            ultima_pagina = (total_paginas and pagina >= total_paginas) or (not total_paginas and not pagina_cheia)
+            if ultima_pagina:
                 break
             pagina += 1
             time.sleep(self.delay)
@@ -231,33 +258,50 @@ class PNCPConnector(BaseConnector):
             return f"https://pncp.gov.br/app/editais/{cnpj}/{ano}/{seq}"
         return reg.get("linkSistemaOrigem")
 
+    # limite de segurança contra um loop sem fim (a API sempre devolvendo uma
+    # página cheia) -- bem acima de qualquer edital real, só uma rede de segurança.
+    _MAX_PAGINAS_ITENS = 20
+
     def _coletar_itens(self, cnpj: str | None, ano, sequencial) -> list[ItemColetado]:
-        """Busca os itens detalhados da contratação (best-effort)."""
+        """Busca os itens detalhados da contratação (best-effort), paginando
+        até acabar. Achado real (auditoria do agente debugger): buscava só a
+        1ª página (100 itens) e nunca ia atrás do resto -- editais com mais
+        de 100 itens (comuns em compra de material/uniforme/TI) perdiam os
+        itens 101+ em silêncio, sem erro nenhum. Como esse é o dado usado
+        pra comparar com o catálogo do usuário, isso escondia matches reais."""
         if not (cnpj and ano and sequencial):
             return []
         url = f"{self.itens_base}/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
-        try:
-            resp = self._get_com_retry(url, {"pagina": 1, "tamanhoPagina": 100}, timeout=30)
-            if resp is None or resp.status_code != 200:
-                return []
-            dados = resp.json()
-            # o endpoint pode devolver uma lista direta ou {"data": [...]}
-            if isinstance(dados, dict):
-                dados = dados.get("data") or []
-        except (requests.RequestException, ValueError):
-            return []
+        tam_pagina = 100
+        itens: list[ItemColetado] = []
+        for pagina in range(1, self._MAX_PAGINAS_ITENS + 1):
+            try:
+                resp = self._get_com_retry(url, {"pagina": pagina, "tamanhoPagina": tam_pagina}, timeout=30)
+                if resp is None or resp.status_code != 200:
+                    break
+                dados = resp.json()
+                # o endpoint pode devolver uma lista direta ou {"data": [...]}
+                registros = dados.get("data") if isinstance(dados, dict) else dados
+                registros = registros or []
+            except (requests.RequestException, ValueError):
+                break
 
-        itens = []
-        for it in dados:
-            itens.append(ItemColetado(
-                numero=it.get("numeroItem"),
-                descricao=it.get("descricao") or "",
-                material_ou_servico=it.get("materialOuServicoNome") or it.get("materialOuServico"),
-                ncm=it.get("ncmNbsCodigo"),
-                catalogo_codigo=str(it.get("codigoItemCatalogo") or it.get("catalogoCodigoItem") or ""),
-                quantidade=it.get("quantidade"),
-                valor_unitario=it.get("valorUnitarioEstimado"),
-                unidade_medida=it.get("unidadeMedida"),
-            ))
+            for it in registros:
+                itens.append(ItemColetado(
+                    numero=it.get("numeroItem"),
+                    descricao=it.get("descricao") or "",
+                    material_ou_servico=it.get("materialOuServicoNome") or it.get("materialOuServico"),
+                    ncm=it.get("ncmNbsCodigo"),
+                    catalogo_codigo=str(it.get("codigoItemCatalogo") or it.get("catalogoCodigoItem") or ""),
+                    quantidade=it.get("quantidade"),
+                    valor_unitario=it.get("valorUnitarioEstimado"),
+                    unidade_medida=it.get("unidadeMedida"),
+                ))
+            # não confia em nenhum campo de "total de páginas" do lado dos
+            # itens (nem toda resposta observada até hoje traz um) -- página
+            # que não veio cheia é o sinal de que acabou.
+            if len(registros) < tam_pagina:
+                break
+            time.sleep(self.delay)
         time.sleep(self.delay)
         return itens
