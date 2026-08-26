@@ -207,10 +207,28 @@ def _migrar_indices_novos() -> None:
     toda tela de edital (detalhe, cotação, comparação por IA) e é o coração
     da busca por item (GET /api/editais?busca_item=...), que fazia um EXISTS
     correlacionado nessa tabela sem nenhum índice de apoio: varredura
-    completa da tabela a cada consulta."""
+    completa da tabela a cada consulta.
+
+    Achado real #2 (auditoria do agente debugger): todo `usuario_id` que
+    virou "index=True" no modelo DEPOIS que a tabela já existia (ver
+    _COLUNAS_NOVAS acima -- produtos/matches/documentos/regras_exclusao/
+    propostas ganharam usuario_id assim, junto de produtos.fornecedor_id e
+    usuarios.telegram_codigo/telegram_codigo_2) tem o mesmo problema:
+    create_all() só cria índice pra tabela NOVA, então um banco que já
+    tinha essas tabelas antes da coluna existir nunca ganhou o índice
+    sozinho -- toda consulta por usuário nessas tabelas (a MAIORIA das
+    consultas do app) varre a tabela inteira em vez de usar um índice."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     indices = [
         "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
+        "CREATE INDEX IF NOT EXISTS ix_produtos_usuario_id ON produtos (usuario_id)",
+        "CREATE INDEX IF NOT EXISTS ix_produtos_fornecedor_id ON produtos (fornecedor_id)",
+        "CREATE INDEX IF NOT EXISTS ix_matches_usuario_id ON matches (usuario_id)",
+        "CREATE INDEX IF NOT EXISTS ix_documentos_usuario_id ON documentos (usuario_id)",
+        "CREATE INDEX IF NOT EXISTS ix_regras_exclusao_usuario_id ON regras_exclusao (usuario_id)",
+        "CREATE INDEX IF NOT EXISTS ix_propostas_usuario_id ON propostas (usuario_id)",
+        "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo ON usuarios (telegram_codigo)",
+        "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo_2 ON usuarios (telegram_codigo_2)",
     ]
     with engine.connect() as conn:
         for sql in indices:
