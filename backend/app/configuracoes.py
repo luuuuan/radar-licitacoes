@@ -18,8 +18,15 @@ _FALLBACK = {
 
 
 def obter(db: Session, chave: str) -> str:
+    # Achado real (auditoria do agente debugger): tratava "linha existe mas
+    # valor é vazio" igual a "nunca configurado" -- pra chaves onde vazio é
+    # um valor válido de verdade (PNCP_UFS/PNCP_MODALIDADES: "vazio = todas",
+    # ver connectors/pncp.py), um usuário que limpasse o campo no painel pra
+    # voltar a "todas" tinha a escolha revertida pro padrão de ambiente na
+    # leitura seguinte -- nunca conseguia deixar vazio de propósito. Só cai
+    # no fallback quando a linha realmente NUNCA foi definida.
     row = db.get(Configuracao, chave)
-    if row is not None and row.valor != "":
+    if row is not None:
         return row.valor
     fb = _FALLBACK.get(chave)
     return fb() if fb else ""
