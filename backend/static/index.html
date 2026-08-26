@@ -1155,8 +1155,8 @@
           <span id="bulk-produtos-count" class="muted" style="font-size:13px"></span>
           <button class="btn ghost discreto" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
         </div>
-        <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="filtrarProdutos()">
-        <select id="filtro-fornecedor" onchange="filtrarProdutos()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
+        <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="_filtroProdutosMudou()">
+        <select id="filtro-fornecedor" onchange="_filtroProdutosMudou()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
           <option value="">Todos os fornecedores</option>
         </select>
         <button class="btn ghost" style="margin-left:auto" onclick="window.open('/api/produtos/exportar.xlsx','_blank')">Exportar catálogo (.xlsx)</button>
@@ -1233,6 +1233,7 @@
     <table><thead><tr><th style="width:24px"><input type="checkbox" id="chk-todos-produtos" onchange="toggleTodosProdutos(this)" title="Selecionar todos"></th><th>Descrição</th><th>NCM</th><th>CATMAT/CATSER</th>
       <th>Palavras-chave</th><th></th></tr></thead>
       <tbody id="lista-produtos"></tbody></table>
+    <div id="pag-produtos"></div>
   </section>
 
   <!-- FORNECEDORES -->
@@ -2312,14 +2313,14 @@ function cardEdital(e){
   </div>`;
 }
 
-function navPaginacao(r, fnPagina, paginaAtual){
+function navPaginacao(r, fnPagina, paginaAtual, rotulo='edital(is)'){
   const ini = (r.pagina-1)*r.por_pagina + 1;
   const fim = Math.min(r.pagina*r.por_pagina, r.total);
   const btns = r.paginas>1 ? `
       <button class="btn ghost" ${paginaAtual<=1?'disabled':''} onclick="${fnPagina}(-1)">‹ anterior</button>
       <button class="btn ghost" ${paginaAtual>=r.paginas?'disabled':''} onclick="${fnPagina}(1)">próxima ›</button>` : '';
   return `<div class="toolbar" style="justify-content:center;align-items:center;margin-top:10px;gap:10px">
-      <span class="muted">mostrando ${ini}–${fim} de ${r.total} edital(is)${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
+      <span class="muted">mostrando ${ini}–${fim} de ${r.total} ${rotulo}${r.paginas>1?` · página ${r.pagina}/${r.paginas}`:''}</span>
       ${btns}
     </div>`;
 }
@@ -2673,9 +2674,25 @@ async function importarPlanilha(input){
 
 let _produtos=[];
 async function loadProdutos(){
-  const r=await api('/api/produtos?por_pagina=500');
-  _produtos=r.resultados||[];
+  // achado real: um único ?por_pagina=500 truncava o catálogo em silêncio
+  // pra quem tem mais de 500 produtos -- "selecionar todos" só selecionava
+  // os 500 primeiros, e o resto nem aparecia na lista. Busca TODAS as
+  // páginas (o endpoint já pagina de verdade, só o front nunca tinha ido
+  // atrás da 2ª em diante) -- a lista renderizada continua paginada (ver
+  // filtrarProdutos), só o que fica em memória no navegador que é completo.
+  const primeira = await api('/api/produtos?por_pagina=500&pagina=1');
+  let resultados = primeira.resultados||[];
+  for(let p=2; p<=(primeira.paginas||1); p++){
+    const r = await api(`/api/produtos?por_pagina=500&pagina=${p}`);
+    resultados = resultados.concat(r.resultados||[]);
+  }
+  _produtos=resultados;
   atualizarFiltroFornecedor();
+  _paginaProdutosAtual = 1;
+  filtrarProdutos();
+}
+function _filtroProdutosMudou(){
+  _paginaProdutosAtual = 1;
   filtrarProdutos();
 }
 function atualizarFiltroFornecedor(){
@@ -2693,15 +2710,22 @@ function atualizarFiltroFornecedor(){
 }
 let _produtosVisiveis = [];
 let _produtosSelecionados = new Set();
+let _paginaProdutosAtual = 1;
+const TAM_PAGINA_PRODUTOS = 100;
 function filtrarProdutos(){
   const q=($('#busca-produto')?.value||'').toLowerCase().trim();
   const forn=$('#filtro-fornecedor')?.value||'';
   let ps=_produtos;
   if(forn) ps=ps.filter(p=>(p.fornecedor_nome||'')===forn);
   if(q) ps=ps.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q));
-  _produtosVisiveis = ps;
-  $('#lista-produtos').innerHTML = ps.length
-    ? ps.map(p=>`<tr>
+  _produtosVisiveis = ps;   // todos os que batem no filtro (não só a página) -- "selecionar todos" usa esta lista
+  const totalPaginas = Math.max(1, Math.ceil(ps.length / TAM_PAGINA_PRODUTOS));
+  if(_paginaProdutosAtual > totalPaginas) _paginaProdutosAtual = totalPaginas;
+  if(_paginaProdutosAtual < 1) _paginaProdutosAtual = 1;
+  const inicio = (_paginaProdutosAtual - 1) * TAM_PAGINA_PRODUTOS;
+  const pagina = ps.slice(inicio, inicio + TAM_PAGINA_PRODUTOS);
+  $('#lista-produtos').innerHTML = pagina.length
+    ? pagina.map(p=>`<tr>
     <td><input type="checkbox" class="chk-produto" onchange="toggleProdutoSelecionado(${p.id},this.checked)" ${_produtosSelecionados.has(p.id)?'checked':''}></td>
     <td>${esc(p.descricao)}</td><td>${esc(p.ncm||'—')}</td>
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
@@ -2710,9 +2734,17 @@ function filtrarProdutos(){
       <button class="btn ghost discreto" onclick="delProduto(${p.id})">excluir</button>
     </td></tr>`).join('')
     : `<tr><td colspan=6 class="muted">${(q||forn) ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
+  const pagMount = $('#pag-produtos');
+  if(pagMount) pagMount.innerHTML = ps.length ? navPaginacao(
+    {pagina:_paginaProdutosAtual, por_pagina:TAM_PAGINA_PRODUTOS, paginas:totalPaginas, total:ps.length},
+    'mudarPaginaProdutos', _paginaProdutosAtual, 'produto(s)') : '';
   const chkTodos = $('#chk-todos-produtos');
   if(chkTodos) chkTodos.checked = ps.length>0 && ps.every(p=>_produtosSelecionados.has(p.id));
   atualizarBarraSelecaoProdutos();
+}
+function mudarPaginaProdutos(delta){
+  _paginaProdutosAtual += delta;
+  filtrarProdutos();
 }
 function toggleProdutoSelecionado(id, marcado){
   if(marcado) _produtosSelecionados.add(id); else _produtosSelecionados.delete(id);
