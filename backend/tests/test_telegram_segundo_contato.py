@@ -145,7 +145,7 @@ def test_mostrar_categoria_manda_pro_chat_id_informado_nao_pro_fixo():
 
     chamadas = []
     with patch("app.telegram_menu._tg.enviar_para_chat",
-              side_effect=lambda chat_id, *a, **k: chamadas.append(chat_id)):
+              side_effect=lambda chat_id, *a, **k: chamadas.append(chat_id) or True):
         n = telegram_menu.mostrar_categoria(db, u, "forte", "chat2")
 
     assert n == 1

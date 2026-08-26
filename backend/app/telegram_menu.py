@@ -150,23 +150,38 @@ def mostrar_categoria(db: Session, usuario: Usuario, categoria: str, chat_id: st
         return 0
 
     titulo_msg = f"{emoji} {label}"
+    enviados = 0
     if tipo == "match":
         for m, ed in pendentes:
             nivel = "forte" if categoria == "forte" else m.nivel
             it = formato.item_edital(ed, nivel=nivel)
             tit, corpo, link = formato.telegram_item(titulo_msg, it)
-            _tg.enviar_para_chat(chat_id, tit, corpo, botao_url=link)
-            _marcar_visto(categoria, m)
+            # só marca como visto se o envio realmente deu certo -- achado
+            # real: uma falha passageira do Telegram (rate limit, rede,
+            # usuário bloqueou o bot) marcava o item como notificado do
+            # mesmo jeito, e ele nunca mais era oferecido de novo (não tem
+            # retry) mesmo sem ter sido entregue de verdade.
+            if _tg.enviar_para_chat(chat_id, tit, corpo, botao_url=link):
+                _marcar_visto(categoria, m)
+                enviados += 1
     else:  # documento
         hoje = date.today()
         for d in pendentes:
             dias = (d.data_validade - hoje).days
             situacao = f"VENCIDO há {abs(dias)} dia(s)" if dias < 0 else f"vence em {dias} dia(s)"
-            corpo = (f"Emissor: {d.orgao_emissor or '-'}\nValidade: {d.data_validade} ({situacao})"
-                    + (f"\nObs.: {d.observacao}" if d.observacao else ""))
-            _tg.enviar_para_chat(chat_id, f"{emoji} {d.nome}", corpo,
-                                 botao_url=d.link or None, botao_texto="Abrir documento")
-            _marcar_visto(categoria, d)
+            # _esc (mesmo escape usado na formatação de match, formato.py) --
+            # achado real: esse ramo montava o corpo em HTML (enviar_para_chat
+            # usa parse_mode="HTML") sem escapar nome/emissor/observação, que
+            # são texto livre digitado pelo usuário -- um "<"/">"/"&" aí
+            # quebra o parse do Telegram (400), e o envio falha mesmo sendo
+            # um erro nosso, não do Telegram.
+            corpo = (f"Emissor: {formato._esc(d.orgao_emissor) or '-'}\n"
+                    f"Validade: {d.data_validade} ({situacao})"
+                    + (f"\nObs.: {formato._esc(d.observacao)}" if d.observacao else ""))
+            if _tg.enviar_para_chat(chat_id, f"{emoji} {formato._esc(d.nome)}", corpo,
+                                    botao_url=d.link or None, botao_texto="Abrir documento"):
+                _marcar_visto(categoria, d)
+                enviados += 1
 
     db.commit()
-    return len(pendentes)
+    return enviados
