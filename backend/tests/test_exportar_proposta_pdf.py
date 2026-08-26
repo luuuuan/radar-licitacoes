@@ -123,3 +123,37 @@ def test_pdf_nao_quebra_com_item_sem_numero():
 
     corpo = asyncio.run(_drenar(resp.body_iterator))
     assert corpo[:4] == b"%PDF"
+
+
+def test_pdf_nao_quebra_com_caracteres_fora_do_latin1_em_qualquer_texto_livre():
+    """Achado do agente debugger: o fix acima só cobria UM placeholder
+    hardcoded ("—" pra item sem número) -- qualquer outro texto livre
+    (descrição de item, nome do órgão, observação, dados da empresa) com
+    aspas curvas/travessão/bullet/emoji quebrava do mesmo jeito, sem
+    proteção nenhuma. Um caractere de cada família problemática, espalhado
+    em vários campos diferentes."""
+    from app.models import Proposta
+    db = _sessao()
+    u = Usuario(nome="Empresa Ltda.", email="e4@t.com", senha_hash="x")
+    db.add(u)
+    db.commit()
+    ed = Edital(fonte="PNCP", id_externo="ed4", orgao="Prefeitura de São Paulo — Secretaria",
+               objeto="Aquisição", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(Proposta(edital_id=ed.id, usuario_id=u.id,
+                    observacoes="Entrega em até 5 dias úteis • sem exceção",
+                    itens=[
+                        {"numero": 1, "descricao": "Caneta “gel” azul — ponta 0,7mm",
+                         "quantidade": 2, "custo_unit": 1.0, "preco_unit": 3.5},
+                    ]))
+    db.commit()
+
+    resp = exportar_proposta_pdf(ed.id, user=u, db=db)   # não pode lançar exceção
+
+    corpo = asyncio.run(_drenar(resp.body_iterator))
+    assert corpo[:4] == b"%PDF"
+    texto = _texto_do_pdf(corpo)
+    # o texto sobrevive (sem os caracteres fora do latin-1), não sai em branco
+    assert "gel" in texto
+    assert "ponta" in texto

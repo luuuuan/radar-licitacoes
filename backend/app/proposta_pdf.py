@@ -40,6 +40,28 @@ def _fmt_moeda(v: float) -> str:
     return "R$ " + txt.replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+def _texto_seguro(valor):
+    """A fonte core do fpdf2 (Helvetica) só aceita Latin-1 -- qualquer
+    caractere fora disso (aspas curvas ' ", travessão —, bullet •, emoji...)
+    quebra a exportação INTEIRA com FPDFUnicodeEncodingException. Achado
+    real: já aconteceu com um travessão sozinho (ver
+    test_pdf_nao_quebra_com_item_sem_numero) -- mas esse texto vem de
+    edital do PNCP, descrição de produto do catálogo do usuário e dados de
+    empresa/endereço digitados à mão, nenhum desses garantidamente livre de
+    caracteres assim. Sanitiza tudo que entra no PDF de uma vez (aplicado
+    nos dicts inteiros, não em cada .cell()/.write() individual) em vez de
+    confiar que nunca vai aparecer -- descarta só o(s) caractere(s)
+    problemático(s) (mesmo padrão já usado pra nome de arquivo em main.py),
+    não o texto inteiro."""
+    if isinstance(valor, str):
+        return valor.encode("latin-1", errors="ignore").decode("latin-1")
+    if isinstance(valor, dict):
+        return {k: _texto_seguro(v) for k, v in valor.items()}
+    if isinstance(valor, list):
+        return [_texto_seguro(v) for v in valor]
+    return valor
+
+
 def _decodificar_logo(data_uri: str | None) -> tuple[io.BytesIO, str] | None:
     """data URI ('data:image/png;base64,...') -> (bytes, extensão). None se
     vazio, malformado, ou SVG (fpdf2 não tem suporte confiável a SVG
@@ -140,6 +162,9 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
                   data_encerramento, link}
     payload: mesmo dict de _proposta_payload (main.py) — itens, totais,
     observações."""
+    remetente = _texto_seguro(remetente)
+    edital_info = _texto_seguro(edital_info)
+    payload = _texto_seguro(payload)
     pdf = _PropostaPDF(remetente)
     pdf.add_page()
     pdf.set_margins(15, 15, 15)
