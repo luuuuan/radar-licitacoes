@@ -181,6 +181,32 @@ def test_confirma_com_produto_id_none_marca_nenhuma_destas():
     assert item["confirmado_manualmente"] is True
 
 
+def test_confirma_nenhuma_destas_limpa_motivo_e_confianca_da_sugestao_anterior():
+    """Achado real: um item já sugerido pelo motor (motivo="semelhança (IA)",
+    confianca="media") confirmado como "nenhuma destas" ficava com produto_id
+    nulo mas o motivo/confiança da sugestão ANTIGA intactos -- a lista de
+    editais mostrava "combina com ? (semelhança (IA))", como se faltasse um
+    dado em vez de refletir que o usuário disse explicitamente que não é
+    nenhum destes."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, itens_numeros=(1,))
+    match = Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                  detalhe={"itens": [{"item": 1, "produto_id": 5, "produto": "Grampo X",
+                                     "confianca": "media", "motivo": "semelhança (IA)"}]})
+    db.add(match)
+    db.commit()
+
+    confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=None), user=u, db=db)
+
+    db.refresh(match)
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    assert item["produto_id"] is None
+    assert item["produto"] is None
+    assert item["motivo"] is None
+    assert item["confianca"] is None
+
+
 def test_confirma_item_da_analise_ia_com_2_candidatos_grava_pra_permitir_trocar_depois():
     """Achado real: item confirmado pela comparação de catálogo por IA (aba
     Análise por IA, que pode sugerir até 2 produtos) entrava em

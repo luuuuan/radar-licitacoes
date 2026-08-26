@@ -2251,7 +2251,7 @@ function motivoAmigavel(motivo){
   const m = motivo.replace(/\s*\+\s*IA$/i, '');
   let r = m.match(/^código\s+(\w+)\s+(.+)$/i);
   if(r) return `mesmo código ${r[1].toUpperCase()} do catálogo`;
-  if(/^semelhança IA/i.test(m) || /^similaridade textual/i.test(m)) return 'descrição parecida';
+  if(/^semelhança\s*\(?IA\)?/i.test(m) || /^similaridade textual/i.test(m)) return 'descrição parecida';
   r = m.match(/^palavra-chave '(.+)'$/);
   if(r) return `palavra-chave em comum: "${r[1]}"`;
   r = m.match(/^\d+ palavras-chave \((.+)\)$/);
@@ -2277,8 +2277,14 @@ function cardEdital(e){
     // Itens/margem (compativel = confianca alta OU confirmado manualmente).
     const sugestaoPendente = d.confianca==='media' && !d.confirmado_manualmente;
     const aviso = sugestaoPendente ? ` <span style="color:var(--medio);font-weight:600;font-size:11px">· ⚠ sugestão — confirme no edital</span>` : '';
-    return `• ${esc(d.descricao_item)} combina com <strong>${esc(d.produto||'?')}</strong>`
-      + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'') + selo + aviso;
+    // sem produto (usuário confirmou "nenhuma destas", ou dado antigo sem
+    // sugestão nenhuma) — não faz sentido mostrar "combina com ?" junto de
+    // um motivo que não se aplica mais a nada.
+    const combina = d.produto
+      ? `combina com <strong>${esc(d.produto)}</strong>`
+        + (d.motivo?` <span class="muted">(${esc(motivoAmigavel(d.motivo))})</span>`:'')
+      : `<span class="muted">sem produto compatível no catálogo</span>`;
+    return `• ${esc(d.descricao_item)} ${combina}` + selo + aviso;
   }).join('<br>');
   const linkEdital = linkSeguro(e.link);
   return `<div class="card">

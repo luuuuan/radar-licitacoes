@@ -1731,6 +1731,15 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     item["produto_id"] = produto.id if produto else None
     item["produto"] = produto.descricao if produto else None
     item["confirmado_manualmente"] = True
+    if produto is None:
+        # "Nenhuma destas" — o item pode já ter vindo de uma sugestão real
+        # do motor (motivo/confiança de uma rodada anterior); sem limpar
+        # isso, sobrava um "motivo" ("semelhança (IA)") órfão junto de um
+        # produto nulo, e a lista de editais mostrava "combina com ?
+        # (semelhança (IA))" — confuso, parecia bug de dado faltando, não
+        # a confirmação explícita de "não é nenhum destes".
+        item["motivo"] = None
+        item["confianca"] = None
     if body.candidatos:
         ids_validos = set(db.execute(
             select(Produto.id).where(Produto.usuario_id == user.id,
