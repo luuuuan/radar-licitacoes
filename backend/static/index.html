@@ -3655,8 +3655,13 @@ let _comparacaoCatalogoItensAtual = {};
 // margem (mesma regra de confianca/confirmado_manualmente de sempre).
 function _comparacaoCatalogoIAHTML(c, desatualizada){
   if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
+  // caixa destacada (fundo vermelho suave, mesmo ícone do indicador de
+  // coleta travada) — achado real: isso vinha como texto discreto (.muted,
+  // 12px), fácil de passar batido justo num aviso que costuma pedir uma
+  // ação do usuário (esperar a cota da IA liberar, ou tentar de novo).
+  const _iconeAlerta = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;flex-shrink:0"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
   if(c.status==='erro_ia'){
-    return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
+    return `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
   }
   // achado real: edital com muitos itens (57) fazia a IA responder algo
   // que não dava pra interpretar como JSON — a rota não travava (não vira
@@ -3664,8 +3669,8 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   // simplesmente sumia da tela sem nenhum aviso, e "realizar nova análise"
   // parecia não fazer nada (o usuário reabria e via a mesma tela em branco).
   if(c.status==='resposta_invalida'){
-    return `<div class="muted" style="margin-top:10px;font-size:12px">Não foi possível comparar seu catálogo com este edital agora (a IA respondeu num formato inesperado).
-      <button class="btn ghost" style="margin-left:4px;padding:2px 8px;font-size:11px" onclick="abaEdital('analise',true)">Tentar novamente</button></div>`;
+    return `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (a IA respondeu num formato inesperado).
+      <button class="btn ghost" style="margin-left:4px;padding:2px 8px;font-size:11px;font-weight:400" onclick="abaEdital('analise',true)">Tentar novamente</button></div>`;
   }
   if(c.status!=='ok' || !c.itens) return '';
   if(!c.itens.length){
