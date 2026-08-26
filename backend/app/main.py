@@ -1731,15 +1731,16 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     item["produto_id"] = produto.id if produto else None
     item["produto"] = produto.descricao if produto else None
     item["confirmado_manualmente"] = True
-    if produto is None:
-        # "Nenhuma destas" — o item pode já ter vindo de uma sugestão real
-        # do motor (motivo/confiança de uma rodada anterior); sem limpar
-        # isso, sobrava um "motivo" ("semelhança (IA)") órfão junto de um
-        # produto nulo, e a lista de editais mostrava "combina com ?
-        # (semelhança (IA))" — confuso, parecia bug de dado faltando, não
-        # a confirmação explícita de "não é nenhum destes".
-        item["motivo"] = None
-        item["confianca"] = None
+    # motivo/confiança que estivessem aqui são da sugestão AUTOMÁTICA
+    # anterior (pra um produto que pode nem ser mais este) — uma confirmação
+    # manual é sempre uma decisão do usuário, nunca mais a do motor. Sem
+    # limpar em TODOS os casos (não só "nenhuma destas"), trocar um item já
+    # confirmado por um produto DIFERENTE mantinha o motivo antigo (ex.:
+    # "mesmo código NCM 1234 do catálogo") grudado no produto novo, que foi
+    # escolhido à mão e não tem nenhuma relação com aquele código — a lista
+    # de editais mostrava uma justificativa que nunca aconteceu de verdade.
+    item["motivo"] = None
+    item["confianca"] = None
     if body.candidatos:
         ids_validos = set(db.execute(
             select(Produto.id).where(Produto.usuario_id == user.id,

@@ -207,6 +207,35 @@ def test_confirma_nenhuma_destas_limpa_motivo_e_confianca_da_sugestao_anterior()
     assert item["confianca"] is None
 
 
+def test_confirma_com_produto_diferente_tambem_limpa_motivo_e_confianca_antigos():
+    """Achado real (auditoria do agente debugger): a correção acima só
+    limpava motivo/confiança no caminho "nenhuma destas" (produto_id=None).
+    Só que "trocar produto" na aba Itens/margem confirma um produto
+    DIFERENTE do que o motor tinha sugerido -- sem limpar aqui também, o
+    item ficava com produto_id/produto NOVOS mas motivo/confiança da
+    sugestão ANTIGA (ex.: "código NCM 1234", de um produto que nem é mais
+    este), e a lista de editais mostrava uma justificativa que nunca
+    aconteceu pra esse produto."""
+    db = _sessao()
+    u = _usuario(db)
+    produto_novo = _produto(db, u, descricao="Grampeador Acc de Mesa")
+    ed = _edital(db, itens_numeros=(1,))
+    match = Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                  detalhe={"itens": [{"item": 1, "produto_id": 999, "produto": "Produto Antigo Errado",
+                                     "confianca": "alta", "motivo": "código NCM 1234"}]})
+    db.add(match)
+    db.commit()
+
+    confirmar_item_edital(ed.id, 1, ConfirmarItemIn(produto_id=produto_novo.id), user=u, db=db)
+
+    db.refresh(match)
+    item = next(d for d in match.detalhe["itens"] if d["item"] == 1)
+    assert item["produto_id"] == produto_novo.id
+    assert item["produto"] == produto_novo.descricao
+    assert item["motivo"] is None
+    assert item["confianca"] is None
+
+
 def test_confirma_item_da_analise_ia_com_2_candidatos_grava_pra_permitir_trocar_depois():
     """Achado real: item confirmado pela comparação de catálogo por IA (aba
     Análise por IA, que pode sugerir até 2 produtos) entrava em
