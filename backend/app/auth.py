@@ -41,6 +41,17 @@ def conferir_senha(senha: str, hash_: str) -> bool:
         return False
 
 
+# Hash "fantasma" (senha aleatória fixa, ninguém tem essa senha) -- usado só
+# pra gastar o mesmo tempo de bcrypt.checkpw quando o e-mail nem existe.
+# Achado real (auditoria do agente debugger): sem isso, `if not u or not
+# conferir_senha(...)` no login nunca chamava conferir_senha quando o
+# usuário não existe (o `or` de curto-circuito pula a chamada) -- e-mail
+# desconhecido respondia mensuravelmente mais rápido que e-mail certo com
+# senha errada, dando pra enumerar e-mails cadastrados só pelo tempo de
+# resposta. Computado uma vez (é uma constante do processo, não por request).
+HASH_FANTASMA = hash_senha("nao-e-a-senha-de-ninguem-so-pra-gastar-tempo-de-bcrypt")
+
+
 def validar_forca_senha(senha: str) -> str | None:
     """Retorna uma mensagem de erro se a senha for fraca, ou None se for forte."""
     if len(senha) < 8:
@@ -139,7 +150,16 @@ def get_current_user(request: Request, response: Response,
         if auth.startswith("Bearer "):
             token = auth[7:]
     payload = _payload_do_token(token) if token else None
-    uid = int(payload["sub"]) if payload else None
+    uid = None
+    if payload:
+        # "sub" sempre vem certo pelo emissor atual (criar_token), mas um
+        # payload de origem inesperada (ex.: schema de token mudar um dia)
+        # não pode virar 500 -- trata como não autenticado, não deixa a
+        # exceção subir.
+        try:
+            uid = int(payload.get("sub"))
+        except (TypeError, ValueError):
+            uid = None
     if not uid:
         raise HTTPException(401, "Não autenticado")
     user = db.get(Usuario, uid)

@@ -153,6 +153,29 @@ def test_get_current_user_token_sem_exp_abs_ainda_autentica_essa_chamada():
     assert resultado.id == u.id
 
 
+def test_get_current_user_payload_sem_sub_da_401_em_vez_de_500():
+    """Achado da auditoria do agente debugger: `int(payload["sub"])` sem
+    proteção -- um token validamente assinado mas sem "sub" (não acontece
+    pelo emissor atual, mas seria um 500 em vez de 401 se o formato do
+    token mudar um dia). Endurecido pra sempre virar 401."""
+    db = _sessao()
+    token_sem_sub = jwt.encode({"exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+                               settings.SECRET_KEY, algorithm="HS256")
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_req_com_cookie(token_sem_sub), Response(), db)
+    assert exc.value.status_code == 401
+
+
+def test_get_current_user_payload_com_sub_nao_numerico_da_401():
+    db = _sessao()
+    token_sub_invalido = jwt.encode(
+        {"sub": "nao-e-um-numero", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        settings.SECRET_KEY, algorithm="HS256")
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_req_com_cookie(token_sub_invalido), Response(), db)
+    assert exc.value.status_code == 401
+
+
 def test_get_current_user_usuario_inativo_da_401():
     db = _sessao()
     u = _usuario(db, ativo=False)

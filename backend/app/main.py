@@ -247,6 +247,7 @@ def auth_cadastro(dados: CadastroIn, request: Request, resp: _Resp, bg: Backgrou
         logo_base64=logo,
         email_verificado=not smtp_ok,   # sem SMTP, libera direto; com SMTP, exige verificar
         token_verificacao=_secrets_auth.token_urlsafe(32) if smtp_ok else None,
+        token_verificacao_expira=(_utcnow_main() + timedelta(hours=24)) if smtp_ok else None,
     )
     db.add(u)
     db.flush()
@@ -287,7 +288,13 @@ def auth_login(dados: LoginIn, request: Request, resp: _Resp, db: Session = Depe
     _rl.checar(f"login-ip:{_rl.ip_cliente(request)}", limite=20, janela_seg=300)
     _rl.checar(f"login-email:{email}", limite=6, janela_seg=300)
     u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
-    if not u or not _auth.conferir_senha(dados.senha, u.senha_hash):
+    # roda conferir_senha (bcrypt) mesmo quando o e-mail não existe, contra
+    # um hash fantasma -- sem isso, e-mail desconhecido respondia mais rápido
+    # que e-mail certo com senha errada (o "or" de curto-circuito nunca
+    # chamava bcrypt), dando pra enumerar e-mails cadastrados pelo tempo de
+    # resposta (achado da auditoria do agente debugger).
+    senha_ok = _auth.conferir_senha(dados.senha, u.senha_hash if u else _auth.HASH_FANTASMA)
+    if not u or not senha_ok:
         raise HTTPException(401, "E-mail ou senha incorretos.")
     if not u.ativo:
         raise HTTPException(403, "Conta desativada.")
@@ -324,10 +331,52 @@ def auth_verificar(token: str, db: Session = Depends(get_session)):
     u = db.execute(select(Usuario).where(Usuario.token_verificacao == token)).scalars().first()
     if not u:
         raise HTTPException(400, "Link de verificação inválido ou já usado.")
+    if u.token_verificacao_expira and u.token_verificacao_expira < _utcnow_main():
+        raise HTTPException(400, "Link de verificação expirado. Peça um novo abaixo.")
     u.email_verificado = True
     u.token_verificacao = None
+    u.token_verificacao_expira = None
     db.commit()
     return {"ok": True}
+
+
+class ReenviarVerificacaoIn(BaseModel):
+    email: str
+
+
+@app.post("/api/auth/reenviar-verificacao")
+def auth_reenviar_verificacao(dados: ReenviarVerificacaoIn, request: Request, bg: BackgroundTasks,
+                              db: Session = Depends(get_session)):
+    """Gera um novo link de verificação (o antigo pode ter expirado em 24h)
+    e reenvia por e-mail. Mesma resposta genérica de /esqueci-senha
+    independente de o e-mail existir ou já estar verificado -- não dá pra
+    descobrir por aqui se uma conta existe."""
+    email = (dados.email or "").strip().lower()
+    mensagem = ("Se este e-mail tiver uma conta pendente de confirmação, "
+                "enviamos um novo link de verificação.")
+    _rl.checar(f"reenviar-verif-ip:{_rl.ip_cliente(request)}", limite=10, janela_seg=3600)
+    if email:
+        _rl.checar(f"reenviar-verif-email:{email}", limite=3, janela_seg=3600)
+    if not email or not _email_mod.smtp_configurado():
+        return {"ok": True, "mensagem": mensagem}
+
+    u = db.execute(select(Usuario).where(Usuario.email == email)).scalars().first()
+    if u and u.ativo and not u.email_verificado:
+        u.token_verificacao = _secrets_auth.token_urlsafe(32)
+        u.token_verificacao_expira = _utcnow_main() + timedelta(hours=24)
+        db.commit()
+
+        base = settings.APP_BASE_URL.rstrip("/")
+        link = f"{base}/verificar?token={u.token_verificacao}"
+        corpo = (f"Olá, {u.nome}!\n\nConfirme seu e-mail para ativar a sua conta no "
+                 f"Minha Licitação:\n{link}\n\n"
+                 "Se você não pediu isso, ignore esta mensagem.\n\n"
+                 "— Minha Licitação")
+        html = _email_html_verificacao(u.nome, link)
+        bg.add_task(_email_mod.enviar_para, email,
+                    "Confirme seu cadastro — Minha Licitação", corpo, html)
+
+    return {"ok": True, "mensagem": mensagem}
 
 
 class EsqueciSenhaIn(BaseModel):

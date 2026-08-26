@@ -48,6 +48,8 @@ class Usuario(Base):
     # verificação de e-mail
     email_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
     token_verificacao: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # expira em 24h (ver POST /api/auth/cadastro e /api/auth/reenviar-verificacao)
+    token_verificacao_expira: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # redefinição de senha ("esqueci minha senha")
     token_reset_senha: Mapped[str | None] = mapped_column(String(128), nullable=True)
     token_reset_expira: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

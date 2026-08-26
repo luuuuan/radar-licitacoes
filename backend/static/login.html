@@ -276,6 +276,15 @@
     <button id="r-submit" class="btn" type="submit">Redefinir senha</button>
   </form>
 
+  <!-- REENVIAR LINK DE VERIFICAÇÃO (link antigo expirado ou já usado) -->
+  <form id="form-reenviar-verificacao" class="hidden" novalidate onsubmit="return pedirReenvioVerificacao(event)">
+    <p class="sub" style="margin:0 0 4px">Informe seu e-mail. Se tiver um cadastro pendente de confirmação, enviamos um novo link.</p>
+    <label>E-mail</label>
+    <input id="rv-email" type="email" autocomplete="email" required>
+    <button id="rv-submit" class="btn" type="submit">Reenviar link</button>
+    <button type="button" class="voltar" onclick="mostrar('login')">&larr; Voltar para o login</button>
+  </form>
+
   <div id="msg" class="msg"></div>
 </div>
 
@@ -288,7 +297,8 @@ function mascaraDocLogin(v){
 }
 function mostrar(qual){
   const formularios = {login:'#form-login', cadastro:'#form-cadastro',
-                        esqueci:'#form-esqueci', redefinir:'#form-redefinir'};
+                        esqueci:'#form-esqueci', redefinir:'#form-redefinir',
+                        'reenviar-verificacao':'#form-reenviar-verificacao'};
   for(const [k, sel] of Object.entries(formularios)){
     $(sel).classList.toggle('hidden', k!==qual);
   }
@@ -535,6 +545,17 @@ async function pedirRedefinicao(e){
   $('#form-esqueci').reset();
   return false;
 }
+async function pedirReenvioVerificacao(e){
+  e.preventDefault(); msg('');
+  if(!validarCampos(e.target)) return false;
+  const email=($('#rv-email').value||'').trim();
+  const btn=$('#rv-submit'); btn.disabled=true;
+  const r=await post('/api/auth/reenviar-verificacao',{email});
+  btn.disabled=false;
+  msg(r.data.mensagem || 'Se este e-mail tiver uma conta pendente de confirmação, enviamos um novo link.', 'ok');
+  $('#form-reenviar-verificacao').reset();
+  return false;
+}
 async function redefinirSenha(e){
   e.preventDefault(); msg('');
   if(!validarCampos(e.target)) return false;
@@ -576,8 +597,18 @@ async function redefinirSenha(e){
   }
   if(location.pathname==='/verificar' && params.get('token')){
     const r=await fetch('/api/auth/verificar?token='+encodeURIComponent(params.get('token')));
-    if(r.ok) msg('E-mail confirmado! Agora você já pode entrar.', 'ok');
-    else msg('Link de verificação inválido ou já usado.');
+    if(r.ok){
+      msg('E-mail confirmado! Agora você já pode entrar.', 'ok');
+    } else {
+      // link inválido/já usado ou expirado (24h) -- sem um jeito de pedir
+      // um novo, isso era beco sem saída: a conta nunca mais conseguia
+      // verificar o e-mail (não dá pra entrar sem verificar, e "esqueci
+      // senha" não resolve isso). Mostra direto o formulário de reenvio.
+      let detalhe = 'Link de verificação inválido ou já usado.';
+      try{ detalhe = (await r.json()).detail || detalhe; }catch(e){}
+      mostrar('reenviar-verificacao');
+      msg(detalhe);
+    }
   }
   if(location.pathname==='/cadastro') mostrar('cadastro');
   if(location.pathname==='/redefinir-senha'){
