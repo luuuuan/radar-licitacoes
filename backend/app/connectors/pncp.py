@@ -19,8 +19,10 @@ Eletrônico, 8=Dispensa, 9=Inexigibilidade, etc.
 from __future__ import annotations
 import time
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta, datetime
+from typing import Callable
 
 import requests
 
@@ -72,7 +74,8 @@ class PNCPConnector(BaseConnector):
 
     def __init__(self, session: requests.Session | None = None,
                  ufs: str | None = None, modalidades: str | None = None,
-                 horizonte: int | None = None):
+                 horizonte: int | None = None,
+                 progresso_cb: Callable[[int, int], None] | None = None):
         self.base = settings.PNCP_BASE_URL.rstrip("/")
         self.itens_base = settings.PNCP_ITENS_BASE_URL.rstrip("/")
         self.modalidades = parse_csv_ints(modalidades if modalidades is not None else settings.PNCP_MODALIDADES)
@@ -86,6 +89,13 @@ class PNCPConnector(BaseConnector):
                                   "User-Agent": "RadarLicitacoes/1.0"})
         self._falhas_seguidas = 0
         self._abortado = False
+        # Achado real (auditoria do agente code-reviewer): sem sinal nenhum
+        # de progresso granular durante a coleta, o mecanismo de auto-cura da
+        # trava (main.py:_coleta_travada) não conseguia distinguir "coleta
+        # realmente travada" de "coleta lenta mas viva" -- chamado a cada
+        # combinação modalidade×UF concluída e a cada edital com itens
+        # buscados, dá um sinal de vida real mesmo numa rodada de horas.
+        self.progresso_cb = progresso_cb
 
     def _get_com_retry(self, url: str, params: dict, timeout: int):
         """GET com re-tentativas em falhas transitórias (timeout, 5xx, 429).
@@ -126,17 +136,17 @@ class PNCPConnector(BaseConnector):
     def coletar(self) -> list[EditalColetado]:
         data_final = (date.today() + timedelta(days=self.horizonte)).strftime("%Y%m%d")
         alvos_uf = self.ufs or [None]  # None => não filtra por UF
+        combinacoes = [(m, uf) for m in self.modalidades for uf in alvos_uf]
         editais: dict[str, EditalColetado] = {}
         self._falhas_seguidas = 0
         self._abortado = False
 
-        for modalidade in self.modalidades:
+        for i, (modalidade, uf) in enumerate(combinacoes):
             if self._abortado:
                 break
-            for uf in alvos_uf:
-                if self._abortado:
-                    break
-                self._coletar_modalidade_uf(modalidade, uf, data_final, editais)
+            self._coletar_modalidade_uf(modalidade, uf, data_final, editais)
+            if self.progresso_cb:
+                self.progresso_cb(i + 1, len(combinacoes))
 
         if self._abortado:
             log.warning("PNCP recusou muitas vezes seguidas (429/erro). Coleta "
@@ -153,8 +163,21 @@ class PNCPConnector(BaseConnector):
         que serial). max_workers moderado para não sobrecarregar o portal."""
         alvos = [e for e in editais if e.raw and e.raw.get("_ref_itens")]
         if alvos:
+            total = len(alvos)
+            feitos = 0
+            lock = threading.Lock()
+
+            def _tarefa(ed: EditalColetado) -> None:
+                nonlocal feitos
+                self._preencher_itens(ed)
+                if self.progresso_cb:
+                    with lock:
+                        feitos += 1
+                        atual = feitos
+                    self.progresso_cb(atual, total)
+
             with ThreadPoolExecutor(max_workers=8) as pool:
-                list(pool.map(self._preencher_itens, alvos))
+                list(pool.map(_tarefa, alvos))
         # não persistimos nada do raw (evita inflar o banco)
         for e in editais:
             e.raw = None
@@ -193,9 +216,22 @@ class PNCPConnector(BaseConnector):
                             resp.status_code, modalidade, uf, resp.text[:200])
                 break
 
-            payload = resp.json()
-            registros = payload.get("data") or []
+            # Achado real (auditoria do agente code-reviewer): resposta HTTP
+            # 200 com corpo não-JSON (ex.: página de erro de proxy) ou JSON
+            # que não é um dict (lista, null) explodia sem tratamento aqui,
+            # subindo até o catch genérico do service.py que descarta a
+            # coleta INTEIRA do dia (não só esta página) -- trata como mais
+            # um caso de "não deu pra continuar aqui", igual aos de cima.
+            try:
+                payload = resp.json()
+            except ValueError:
+                log.warning("Resposta não-JSON (mod=%s uf=%s)", modalidade, uf)
+                break
+            registros = payload.get("data") if isinstance(payload, dict) else None
+            registros = registros if isinstance(registros, list) else []
             for reg in registros:
+                if not isinstance(reg, dict):
+                    continue
                 ed = self._mapear_edital(reg, modalidade)
                 if ed and ed.id_externo not in acc:
                     acc[ed.id_externo] = ed
@@ -210,7 +246,8 @@ class PNCPConnector(BaseConnector):
             # paginar por "totalPaginas" quando ele realmente veio; sem
             # isso (ou com ele mentindo), usa um sinal que não depende da
             # API contar certo: a página não veio cheia, não tem próxima.
-            total_paginas = payload.get("totalPaginas") or 0
+            total_paginas = payload.get("totalPaginas") if isinstance(payload, dict) else None
+            total_paginas = total_paginas or 0
             pagina_cheia = len(registros) >= self.tam_pagina
             ultima_pagina = (total_paginas and pagina >= total_paginas) or (not total_paginas and not pagina_cheia)
             if ultima_pagina:
@@ -282,11 +319,20 @@ class PNCPConnector(BaseConnector):
                 dados = resp.json()
                 # o endpoint pode devolver uma lista direta ou {"data": [...]}
                 registros = dados.get("data") if isinstance(dados, dict) else dados
-                registros = registros or []
+                registros = registros if isinstance(registros, list) else []
             except (requests.RequestException, ValueError):
                 break
 
+            # Achado real (auditoria do agente code-reviewer): presumia que
+            # todo elemento de "registros" era sempre um dict bem formado --
+            # se algum item vier malformado (ou "registros" não for mesmo
+            # uma lista, já filtrado acima), `it.get(...)` explode fora do
+            # try/except de cima, subindo sem tratamento e derrubando a
+            # coleta INTEIRA do dia (não só este edital) no catch genérico
+            # do service.py. Pula só o item ruim, mantém os itens já bons.
             for it in registros:
+                if not isinstance(it, dict):
+                    continue
                 itens.append(ItemColetado(
                     numero=it.get("numeroItem"),
                     descricao=it.get("descricao") or "",

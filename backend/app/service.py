@@ -120,11 +120,44 @@ def _carregar_exclusoes(db: Session, usuario_id: int) -> tuple[list[str], list[s
 
 
 def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
-    """Cria o edital se ainda não existe. Retorna o objeto novo, ou None se já existia."""
+    """Cria o edital se ainda não existe. Se já existe, atualiza os campos
+    que podem mudar do lado da fonte (prazo, valor, etc.) em vez de ignorar
+    pra sempre -- achado real (auditoria do agente code-reviewer): antes era
+    insert-only, então um edital cujo prazo foi estendido no PNCP depois da
+    1ª coleta ficava com a data antiga aqui pra sempre (podendo até sumir da
+    aba de ativos, que filtra por data_encerramento); e um edital cuja busca
+    de itens falhou por uma instabilidade transitória na 1ª coleta nunca
+    tinha outra chance -- toda coleta seguinte via o id_externo já existente
+    e desistia sem tentar de novo. Retorna o objeto só quando é CRIADO agora
+    (pra contar como "novo" no resumo da coleta); None quando já existia,
+    mesmo tendo atualizado."""
     existe = db.execute(
         select(Edital).where(Edital.fonte == ec.fonte, Edital.id_externo == ec.id_externo)
     ).scalar_one_or_none()
     if existe:
+        existe.orgao = ec.orgao or existe.orgao
+        existe.cnpj_orgao = ec.cnpj_orgao or existe.cnpj_orgao
+        existe.objeto = ec.objeto or existe.objeto
+        existe.modalidade = ec.modalidade or existe.modalidade
+        existe.uf = ec.uf or existe.uf
+        existe.municipio = ec.municipio or existe.municipio
+        if ec.valor_estimado is not None:
+            existe.valor_estimado = ec.valor_estimado
+        existe.data_publicacao = ec.data_publicacao or existe.data_publicacao
+        existe.data_abertura = ec.data_abertura or existe.data_abertura
+        existe.data_encerramento = ec.data_encerramento or existe.data_encerramento
+        existe.link = ec.link or existe.link
+        # só faz backfill dos itens se ainda não tem NENHUM -- não tenta
+        # mesclar/atualizar item a item (arriscaria descasar confirmações
+        # manuais do usuário já ligadas ao índice de um item existente).
+        if not existe.itens and ec.itens:
+            for it in ec.itens:
+                existe.itens.append(ItemEdital(
+                    numero=it.numero, descricao=it.descricao,
+                    material_ou_servico=it.material_ou_servico, ncm=it.ncm,
+                    catalogo_codigo=it.catalogo_codigo, quantidade=it.quantidade,
+                    valor_unitario=it.valor_unitario, unidade_medida=it.unidade_medida,
+                ))
         return None
 
     ed = Edital(
@@ -577,6 +610,12 @@ def processar_coleta(db: Session, conectores: list[BaseConnector] | None = None,
             ufs=cfg.obter(db, "PNCP_UFS"),
             modalidades=cfg.obter(db, "PNCP_MODALIDADES"),
             horizonte=int(cfg.obter(db, "PNCP_HORIZONTE_DIAS") or settings.PNCP_HORIZONTE_DIAS),
+            # repassa o progresso granular da busca (por combinação
+            # modalidade×UF e por edital com itens buscados) como sinal de
+            # vida real pro mecanismo de auto-cura da trava de coleta (ver
+            # main.py:_coleta_travada) -- sem isso, uma coleta lenta mas viva
+            # (PNCP instável) era indistinguível de uma travada de verdade.
+            progresso_cb=(lambda feitos, total: progresso_fase("buscando", feitos, total)) if progresso_fase else None,
         )]
         # fonte extra opcional: Portal da Transparência (licitações federais)
         from .connectors.transparencia import TransparenciaConnector

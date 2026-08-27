@@ -78,6 +78,17 @@ class TransparenciaConnector(BaseConnector):
                 if ed:
                     coletados.append(ed)
             time.sleep(0.3)
+        else:
+            # Achado real (auditoria do agente code-reviewer): mesma classe
+            # de bug já corrigida no PNCP -- o loop só parava cedo quando o
+            # lote vinha vazio; se houvesse mais licitações do que cabem no
+            # teto de páginas, ele batia no `range` em silêncio, sem
+            # distinguir "acabou de verdade" de "bati no teto arbitrário".
+            log.warning(
+                "Transparência: parou no teto de %s página(s) sem a API "
+                "sinalizar fim (último lote ainda tinha %s registro(s)) — "
+                "pode haver licitações federais não coletadas.",
+                self.max_paginas, len(lote))
         log.info("Transparência: %s licitações federais coletadas.", len(coletados))
         return coletados
 
@@ -102,9 +113,20 @@ class TransparenciaConnector(BaseConnector):
                 or (reg.get("orgao") or {}).get("nome") or reg.get("nomeOrgao")
             objeto = reg.get("objeto") or lic.get("objeto") or ""
             modalidade = reg.get("modalidadeLicitacao") or reg.get("modalidade") or ""
-            valor = reg.get("valor") or reg.get("valorLicitacao")
+            valor = reg.get("valor")
+            if valor is None:
+                valor = reg.get("valorLicitacao")
+            # Achado real (auditoria do agente code-reviewer): a troca de
+            # separador (remove ponto, troca vírgula por ponto) só faz
+            # sentido pra string em formato BR ("1.234,56"). Sem checar o
+            # tipo, um número JSON nativo (ex.: 1234.56) tinha o ponto
+            # decimal removido igual, virando 123456.0 -- ~100x o valor
+            # real quando havia centavos. Só aplica a troca de separador
+            # quando "valor" já veio como texto.
+            if isinstance(valor, str):
+                valor = valor.replace(".", "").replace(",", ".")
             try:
-                valor = float(str(valor).replace(".", "").replace(",", ".")) if valor else None
+                valor = float(valor) if valor is not None else None
             except (ValueError, TypeError):
                 valor = None
             return EditalColetado(

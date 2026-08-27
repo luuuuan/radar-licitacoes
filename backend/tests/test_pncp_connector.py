@@ -21,13 +21,16 @@ from app.connectors.pncp import PNCPConnector, _parse_data
 
 
 class _RespostaFake:
-    def __init__(self, status_code=200, dados=None):
+    def __init__(self, status_code=200, dados=None, json_erro=False):
         self.status_code = status_code
         self._dados = dados
+        self._json_erro = json_erro
         self.text = ""
         self.headers = {}
 
     def json(self):
+        if self._json_erro:
+            raise ValueError("corpo não é JSON válido")
         return self._dados
 
 
@@ -168,3 +171,92 @@ def test_coletar_modalidade_uf_para_quando_registros_vazio_mesmo_sem_totalpagina
     c._coletar_modalidade_uf(6, "SP", "20240101", acc)
     assert acc == {}
     assert len(sessao.chamadas) == 1
+
+
+# --------- achados do agente code-reviewer: robustez contra resposta malformada --------- #
+
+def test_coletar_modalidade_uf_corpo_nao_json_nao_quebra():
+    """HTTP 200 com corpo que não é JSON válido (ex.: página de erro de
+    proxy) não pode propagar exceção -- antes disso, isso derrubava a coleta
+    INTEIRA do dia (capturada só pelo catch genérico do service.py)."""
+    c, sessao = _conector([])
+    sessao._respostas = [_RespostaFake(json_erro=True)]
+    acc: dict = {}
+    c._coletar_modalidade_uf(6, "SP", "20240101", acc)  # não deve lançar
+    assert acc == {}
+
+
+def test_coletar_modalidade_uf_payload_nao_dict_nao_quebra():
+    """JSON válido mas que não é um dict (ex.: lista solta) não pode
+    quebrar com AttributeError em payload.get(...)."""
+    c, sessao = _conector([])
+    sessao._respostas = [_RespostaFake(dados=["nao", "e", "um", "dict"])]
+    acc: dict = {}
+    c._coletar_modalidade_uf(6, "SP", "20240101", acc)  # não deve lançar
+    assert acc == {}
+
+
+def test_coletar_modalidade_uf_ignora_registro_que_nao_e_dict():
+    c, sessao = _conector([])
+    dados = {"data": ["nao é um dict", {"numeroControlePNCP": "a1", "objetoCompra": "x"}]}
+    sessao._respostas = [_RespostaFake(dados=dados)]
+    acc: dict = {}
+    c._coletar_modalidade_uf(6, "SP", "20240101", acc)  # não deve lançar
+    assert len(acc) == 1
+
+
+def test_coletar_itens_ignora_item_que_nao_e_dict_sem_perder_os_bons():
+    """Achado real: o laço que constrói ItemColetado ficava FORA do
+    try/except -- um item malformado no meio da lista derrubava a busca
+    inteira daquele edital (e, sem tratamento acima, a coleta do dia
+    inteiro), em vez de só pular o item ruim."""
+    dados = {"data": [
+        {"numeroItem": 1, "descricao": "Item bom"},
+        "isso não é um dict",
+        {"numeroItem": 2, "descricao": "Outro item bom"},
+    ]}
+    resp = _RespostaFake(dados=dados)
+    c, sessao = _conector([resp])
+    itens = c._coletar_itens("123", 2024, 1)  # não deve lançar
+    assert [it.descricao for it in itens] == ["Item bom", "Outro item bom"]
+
+
+def test_coletar_itens_registros_nao_lista_vira_vazio_sem_quebrar():
+    """Se dados.get("data") vier um dict (não uma lista), tratava como
+    iterável de chaves (strings) -- agora vira lista vazia em vez de
+    explodir."""
+    resp = _RespostaFake(dados={"data": {"chave": "valor"}})
+    c, sessao = _conector([resp])
+    itens = c._coletar_itens("123", 2024, 1)  # não deve lançar
+    assert itens == []
+
+
+# --------- progresso_cb: sinal de vida granular pro auto-cura da trava --------- #
+
+def test_coletar_chama_progresso_cb_por_combinacao_modalidade_uf():
+    chamadas = []
+    c, sessao = _conector([])
+    c.ufs = ["SP", "RJ"]
+    c.modalidades = [6]
+    c.progresso_cb = lambda feitos, total: chamadas.append((feitos, total))
+    sessao._respostas = [
+        _RespostaFake(dados={"data": []}),
+        _RespostaFake(dados={"data": []}),
+    ]
+    c.coletar()
+    assert chamadas == [(1, 2), (2, 2)]
+
+
+def test_coletar_itens_paralelo_chama_progresso_cb_por_edital():
+    from app.connectors.base import EditalColetado
+    chamadas = []
+    c, sessao = _conector([])
+    c.progresso_cb = lambda feitos, total: chamadas.append((feitos, total))
+    editais = [
+        EditalColetado(fonte="PNCP", id_externo=f"e{i}",
+                       raw={"_ref_itens": (None, None, None)})
+        for i in range(3)
+    ]
+    # sem cnpj/ano/sequencial válidos, _coletar_itens devolve [] sem request
+    c._coletar_itens_paralelo(editais)
+    assert sorted(chamadas) == [(1, 3), (2, 3), (3, 3)]

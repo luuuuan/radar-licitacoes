@@ -17,6 +17,7 @@ from app.models import Base, LogColeta, Usuario
 
 def _limpar_estado_trava():
     m._coleta_iniciada_em = None
+    m._coleta_progresso_atualizado_em = None
     if m._coleta_lock.locked():
         m._coleta_lock.release()
 
@@ -44,6 +45,42 @@ def test_coleta_travada_true_quando_passou_do_limiar():
         assert m._coleta_travada() is True
     finally:
         _limpar_estado_trava()
+
+
+def test_coleta_travada_falso_quando_progresso_avancou_recentemente_mesmo_apos_o_limiar_do_inicio():
+    """Achado do agente code-reviewer: usar só o INÍCIO da coleta pra decidir
+    se está travada confundia "coleta lenta mas viva" (PNCP instável,
+    ainda progredindo) com "travada de verdade" -- uma coleta que já passou
+    de 3h desde que começou, mas cujo progresso avançou há pouco, não pode
+    ser considerada presa."""
+    _limpar_estado_trava()
+    m._coleta_lock.acquire()
+    try:
+        m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(hours=1)
+        m._coleta_progresso_atualizado_em = m._utcnow_main()  # progresso avançou agora mesmo
+        assert m._coleta_travada() is False
+    finally:
+        _limpar_estado_trava()
+
+
+def test_coleta_travada_true_quando_progresso_tambem_parou_ha_muito_tempo():
+    _limpar_estado_trava()
+    m._coleta_lock.acquire()
+    try:
+        m._coleta_iniciada_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(hours=2)
+        m._coleta_progresso_atualizado_em = m._utcnow_main() - m._LIMITE_COLETA_TRAVADA - timedelta(minutes=1)
+        assert m._coleta_travada() is True
+    finally:
+        _limpar_estado_trava()
+
+
+def test_atualizar_fase_coleta_registra_o_momento_da_atualizacao():
+    _limpar_estado_trava()
+    antes = m._utcnow_main()
+    m._atualizar_fase_coleta("buscando", 3, 10)
+    assert m._coleta_progresso_atualizado_em is not None
+    assert m._coleta_progresso_atualizado_em >= antes
+    _limpar_estado_trava()
 
 
 def test_forcar_liberacao_nao_faz_nada_quando_nao_esta_travada():

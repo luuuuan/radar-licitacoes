@@ -1851,6 +1851,18 @@ _coleta_iniciada_em: datetime | None = None
 _coleta_fase: str | None = None
 _coleta_fase_feitos = 0
 _coleta_fase_total: int | None = None
+# Última vez que _atualizar_fase_coleta foi chamada de verdade (não só
+# quando o valor muda) -- achado real (auditoria do code-reviewer):
+# _coleta_travada() usava só o tempo desde o INÍCIO da coleta pra decidir
+# se a trava está presa, sem olhar se a coleta ainda está progredindo. Numa
+# instabilidade prolongada do PNCP (rate limit sustentado), uma coleta
+# legítima e ainda viva pode passar de 3h -- forçar a liberação nesse caso
+# solta a trava com o processo original ainda rodando, permitindo duas
+# coletas concorrentes no mesmo processo. Usar a última atualização de
+# progresso (em vez do início) como referência resolve isso sem falso
+# positivo, desde que o progresso seja reportado com granularidade real
+# (ver PNCPConnector.progresso_cb).
+_coleta_progresso_atualizado_em: datetime | None = None
 # Limiar pra considerar a trava de coleta "presa" (ver _coleta_travada) —
 # uma coleta de verdade sempre termina bem antes disso (histórico real:
 # 50min a ~2h). Achado real: uma coleta manual travou (sem nunca liberar a
@@ -1863,8 +1875,10 @@ _LIMITE_COLETA_TRAVADA = timedelta(hours=3)
 
 
 def _coleta_travada() -> bool:
-    return (_coleta_lock.locked() and _coleta_iniciada_em is not None
-           and (_utcnow_main() - _coleta_iniciada_em) > _LIMITE_COLETA_TRAVADA)
+    if not (_coleta_lock.locked() and _coleta_iniciada_em is not None):
+        return False
+    referencia = _coleta_progresso_atualizado_em or _coleta_iniciada_em
+    return (_utcnow_main() - referencia) > _LIMITE_COLETA_TRAVADA
 
 
 def _forcar_liberacao_coleta_travada(db: Session | None = None) -> bool:
@@ -1885,7 +1899,7 @@ def _forcar_liberacao_coleta_travada(db: Session | None = None) -> bool:
     `db`, se informado, também fecha o LogColeta órfão daquela rodada morta
     (só faz sentido chamar com uma sessão quando a trava estava mesmo presa
     -- nesse ponto, qualquer LogColeta ainda aberto é dessa mesma rodada)."""
-    global _coleta_iniciada_em
+    global _coleta_iniciada_em, _coleta_progresso_atualizado_em
     if not _coleta_travada():
         return False
     import logging
@@ -1896,6 +1910,7 @@ def _forcar_liberacao_coleta_travada(db: Session | None = None) -> bool:
     except RuntimeError:
         pass   # outra chamada concorrente já liberou entre a checagem e agora
     _coleta_iniciada_em = None
+    _coleta_progresso_atualizado_em = None
     if db is not None:
         _limpar_logs_coleta_orfaos(db)
     return True
@@ -1924,12 +1939,13 @@ def _limpar_logs_coleta_orfaos(db: Session):
 
 
 def _atualizar_fase_coleta(fase: str, feitos: int, total: int) -> None:
-    global _coleta_fase, _coleta_fase_feitos, _coleta_fase_total
+    global _coleta_fase, _coleta_fase_feitos, _coleta_fase_total, _coleta_progresso_atualizado_em
     _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = fase, feitos, total
+    _coleta_progresso_atualizado_em = _utcnow_main()
 
 
 def _rodar_coleta_bg(usuario_id: int | None = None):
-    global _coleta_cancelar, _coleta_iniciada_em, _coleta_fase, _coleta_fase_feitos, _coleta_fase_total
+    global _coleta_cancelar, _coleta_iniciada_em, _coleta_fase, _coleta_fase_feitos, _coleta_fase_total, _coleta_progresso_atualizado_em
     import logging
     _forcar_liberacao_coleta_travada()
     # se já há uma coleta em andamento, não inicia outra (evita duplicatas)
@@ -1938,6 +1954,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
             "Coleta já em andamento — ignorando novo disparo.")
         return
     _coleta_iniciada_em = _utcnow_main()
+    _coleta_progresso_atualizado_em = None
     _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = None, 0, None
     db = SessionLocal()
     try:
@@ -1970,6 +1987,7 @@ def _rodar_coleta_bg(usuario_id: int | None = None):
         db.close()
         _coleta_cancelar = False
         _coleta_iniciada_em = None
+        _coleta_progresso_atualizado_em = None
         _coleta_fase, _coleta_fase_feitos, _coleta_fase_total = None, 0, None
         # RuntimeError = a trava já tinha sido forçada por outro disparo
         # (ver _coleta_travada) por essa mesma rodada ter passado de 3h —

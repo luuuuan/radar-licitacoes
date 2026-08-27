@@ -61,3 +61,95 @@ def test_mapear_pega_numero_de_dentro_de_licitacao_quando_reg_nao_tem_id():
     ed = c._mapear(reg)
     assert ed is not None
     assert ed.id_externo == "transp-999"
+
+
+# --------- achado do agente code-reviewer: parsing de valor --------- #
+
+def test_mapear_valor_string_formato_br():
+    c = _conector()
+    reg = {"id": "1", "objeto": "x", "valor": "1.234,56"}
+    ed = c._mapear(reg)
+    assert ed.valor_estimado == 1234.56
+
+
+def test_mapear_valor_numero_json_nativo_nao_e_corrompido():
+    """Achado real: a troca de separador (remove ponto, troca vírgula por
+    ponto) só faz sentido pra string BR -- aplicada num número JSON nativo
+    (1234.56), o ponto decimal era removido igual, virando 123456.0 (~100x
+    o valor real)."""
+    c = _conector()
+    reg = {"id": "1", "objeto": "x", "valor": 1234.56}
+    ed = c._mapear(reg)
+    assert ed.valor_estimado == 1234.56
+
+
+def test_mapear_valor_zero_nao_vira_none():
+    c = _conector()
+    reg = {"id": "1", "objeto": "x", "valor": 0}
+    ed = c._mapear(reg)
+    assert ed.valor_estimado == 0.0
+
+
+def test_mapear_valor_ausente_fica_none():
+    c = _conector()
+    reg = {"id": "1", "objeto": "x"}
+    ed = c._mapear(reg)
+    assert ed.valor_estimado is None
+
+
+def test_mapear_valor_invalido_nao_quebra():
+    c = _conector()
+    reg = {"id": "1", "objeto": "x", "valor": "não é um número"}
+    ed = c._mapear(reg)
+    assert ed.valor_estimado is None
+
+
+# --------- achado: teto de páginas sem detectar truncamento --------- #
+
+def test_coletar_avisa_quando_bate_no_teto_sem_a_api_sinalizar_fim(monkeypatch, caplog):
+    import logging
+    from app.connectors import transparencia as mod
+
+    c = TransparenciaConnector(horizonte=30, max_paginas=2)
+    c.token = "fake-token"
+    monkeypatch.setattr(mod.settings, "PORTAL_TRANSPARENCIA_ATIVO", True)
+
+    lote_cheio = [{"id": "1", "objeto": "x"}]
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return lote_cheio
+
+    monkeypatch.setattr(mod.requests, "get", lambda *a, **k: _Resp())
+    with caplog.at_level(logging.WARNING, logger="conectores.transparencia"):
+        resultado = c.coletar()
+
+    assert len(resultado) == 2  # 1 por página, 2 páginas (o teto)
+    assert any("teto" in r.message for r in caplog.records)
+
+
+def test_coletar_nao_avisa_quando_api_sinaliza_fim_antes_do_teto(monkeypatch, caplog):
+    import logging
+    from app.connectors import transparencia as mod
+
+    c = TransparenciaConnector(horizonte=30, max_paginas=10)
+    c.token = "fake-token"
+    monkeypatch.setattr(mod.settings, "PORTAL_TRANSPARENCIA_ATIVO", True)
+
+    respostas = [[{"id": "1", "objeto": "x"}], []]  # 2ª página já vem vazia
+
+    class _Resp:
+        def __init__(self, dados):
+            self.status_code = 200
+            self._dados = dados
+        def json(self):
+            return self._dados
+
+    it = iter(respostas)
+    monkeypatch.setattr(mod.requests, "get", lambda *a, **k: _Resp(next(it)))
+    with caplog.at_level(logging.WARNING, logger="conectores.transparencia"):
+        resultado = c.coletar()
+
+    assert len(resultado) == 1
+    assert not any("teto" in r.message for r in caplog.records)
