@@ -309,6 +309,44 @@ def test_comparar_catalogo_poucos_itens_continua_1_chamada_so(monkeypatch):
     assert "lotes_com_falha" not in r
 
 
+def test_formatar_catalogo_inclui_produto_alem_do_antigo_teto_de_400():
+    """Achado real: catálogo de 852 produtos, o cliente com a IA validando
+    zero itens porque o produto certo (\"Papel Chamex A4...\") estava na
+    posição 697 -- muito depois do teto antigo de 400, cortado antes mesmo
+    de chegar no prompt da IA. Teto subiu pra 2000 exatamente pra isso."""
+    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 851)]
+    catalogo.append({"id": 851, "descricao": "Papel Chamex A4 75G 210x297 5x500f"})
+    texto = ia._formatar_catalogo(catalogo)
+    assert "Papel Chamex A4 75G 210x297 5x500f" in texto
+
+
+def test_formatar_catalogo_ainda_corta_alem_de_2000_produtos():
+    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 2100)]
+    catalogo.append({"id": 9999, "descricao": "produto so alcancavel se o teto nao existisse"})
+    texto = ia._formatar_catalogo(catalogo)
+    assert "produto so alcancavel se o teto nao existisse" not in texto
+    assert texto.count("- ID ") == 2000
+
+
+def test_comparar_catalogo_manda_produto_alem_do_antigo_teto_de_400_pra_ia(monkeypatch):
+    """Mesmo achado do teste acima, agora fim-a-fim: o produto na posição
+    697 precisa aparecer de fato no prompt que comparar_catalogo_usuario
+    manda pra IA, não só no helper de formatação isolado."""
+    capturado = {}
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        capturado["prompt"] = prompt
+        return json.dumps({"itens": []}), "ok"
+
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 851)]
+    catalogo.append({"id": 851, "descricao": "Papel Chamex A4 75G 210x297 5x500f"})
+    ia.comparar_catalogo_usuario("Objeto", [{"numero": 1, "descricao": "Papel A4"}],
+                                 catalogo, api_key="fake-key")
+
+    assert "Papel Chamex A4 75G 210x297 5x500f" in capturado["prompt"]
+
+
 def test_comparar_catalogo_divide_em_lotes_e_junta_o_resultado(monkeypatch):
     """60 itens, lote de 25 -> 3 chamadas; cada uma devolve o item numero_item
     igual ao número do 1º item do próprio lote, só pra confirmar que o

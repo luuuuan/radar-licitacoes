@@ -828,7 +828,7 @@ def _formatar_itens_edital(itens: list[dict]) -> str:
     return "\n".join(linhas) if linhas else "(nenhum item)"
 
 
-def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 400) -> str:
+def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 2000) -> str:
     linhas = [f"- ID {p.get('id')}: {p.get('descricao') or ''}" for p in catalogo[:max_produtos]]
     return "\n".join(linhas) if linhas else "(catálogo vazio)"
 
@@ -912,8 +912,12 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
 
     # Teto generoso de propósito: o contexto de entrada do Gemini aguenta
     # muito mais que isso (na casa do milhão de tokens) — calculado 1x fora
-    # do loop, o catálogo é o mesmo pra todos os lotes.
-    catalogo_txt = _formatar_catalogo(catalogo)[:60000]
+    # do loop, o catálogo é o mesmo pra todos os lotes. 300000 chars cobre
+    # os 2000 produtos de _formatar_catalogo mesmo com descrições bem acima
+    # da média (~47 chars/produto num catálogo real de 852 itens) — sem
+    # esse teto acompanhar o de lá, um catálogo grande cortava no meio da
+    # lista de produtos de qualquer forma, só que em texto em vez de contagem.
+    catalogo_txt = _formatar_catalogo(catalogo)[:300000]
     lotes = [itens_edital[i:i + _TAMANHO_LOTE_COMPARACAO]
              for i in range(0, len(itens_edital), _TAMANHO_LOTE_COMPARACAO)]
 
