@@ -338,6 +338,7 @@
   .hidden{display:none}
   .det{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
   label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
   .field{margin-bottom:10px}
 
@@ -530,7 +531,14 @@
     .hero .n{font-size:30px}
     .hero .breakdown{gap:14px}
     .grid2{grid-template-columns:1fr}
+    .grid3{grid-template-columns:1fr}
     .precos{grid-template-columns:1fr}
+    /* achado real (auditoria de responsividade): tabela da aba Proposta
+       tem 8 colunas com largura mínima somada bem maior que qualquer tela
+       de celular -- encolhe a coluna mais larga (descrição) pra reduzir o
+       quanto precisa rolar pra ver Total/Margem recalculando. */
+    #prop-tabela input[style*="min-width:160px"]{min-width:110px !important}
+    #prop-tabela td,#prop-tabela th{padding:6px}
     /* menu lateral (gaveta) no mobile */
     .hamburger{display:inline-flex;align-items:center}
     .nav-overlay.open{display:block;position:fixed;inset:0;background:var(--overlay);z-index:5500}
@@ -564,8 +572,13 @@
     .toolbar{gap:8px}
     .toolbar input,.toolbar select{flex:1 1 auto;min-width:0}
     .toolbar .btn,.toolbar a.btn{flex:1 1 auto;text-align:center}
-    /* tabelas rolam na horizontal em vez de estourar a tela */
-    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+    /* tabelas rolam na horizontal em vez de estourar a tela -- achado real
+       (auditoria de responsividade): o nowrap GERAL aqui achatava até
+       colunas de texto livre longo (descrição, justificativa) numa única
+       linha gigante. As colunas curtas (nº, data, valor) já marcam
+       white-space:nowrap individualmente onde precisam -- não precisa
+       forçar isso globalmente. */
+    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
     .modal{padding:14px 8px}
     .modal-card{padding:16px;max-width:100%}
     .acoes .btn,.acoes .status-sel{flex:1 1 auto}
@@ -829,6 +842,14 @@
   /* ---- Ajuda (?): área de toque maior em telas de toque, sem mudar o visual no desktop ---- */
   @media (pointer:coarse){
     .ajuda{width:22px;height:22px;font-size:12px}
+    /* achado real (auditoria de responsividade): botões de ação dentro de
+       tabela (editar/excluir/detalhes) ficavam com ~20-24px de altura em
+       telas de toque -- bem abaixo dos 44px recomendados, justo onde o
+       erro (ex.: excluir sem querer) custa mais caro. */
+    table .btn{min-height:36px;padding-top:8px;padding-bottom:8px}
+    /* remover item da proposta é destrutivo e irreversível -- esse ganha o
+       alvo de toque cheio, não só o meio-termo acima. */
+    #prop-tabela .btn{min-width:44px;min-height:44px}
   }
 </style>
 </head>
@@ -1182,7 +1203,7 @@
         <div class="field"><label>Palavras-chave (separadas por vírgula) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Termos que o sistema procura nos editais para casar com este produto. Quanto mais específicas, melhor (ex.: "papel a4, sulfite" em vez de só "papel").</span></span></label>
           <input id="p-kw" style="width:100%" placeholder="papel a4, sulfite, resma"></div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="grid3">
           <div class="field"><label>Fabricante</label>
             <input id="p-fabricante" style="width:100%" placeholder="ex: Maxprint"></div>
           <div class="field"><label>Marca</label>
