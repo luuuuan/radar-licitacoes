@@ -161,6 +161,22 @@ def test_caracteristica_oposto_por_substring_de_presente_continua_oposto():
     assert estado_caracteristica("duplex", "impressora com duplex manual") == "oposto"
 
 
+def test_inox_com_peca_acessoria_plastica_fica_ausente_nao_oposto():
+    """Achado real (auditoria do agente code-reviewer): 'plástico'/'plástica'
+    como oposto genérico de inox era frágil demais -- um produto de inox de
+    verdade com QUALQUER peça acessória plástica (base, pé) descrita no
+    texto virava 'oposto' (reprovação automática crítica em validacao.py).
+    Sem repetir 'inox' no texto, isso agora fica só 'ausente' (pendência
+    não-crítica), nunca reprovação automática."""
+    texto = "grampeador de mesa, base antiderrapante plástica, 20 folhas"
+    assert estado_caracteristica("inox", texto) == "ausente"
+
+
+def test_inox_mencionado_continua_presente_mesmo_com_peca_plastica():
+    texto = "grampeador em aço inoxidável, base antiderrapante plástica"
+    assert estado_caracteristica("inox", texto) == "presente"
+
+
 def test_validacao_reprova_capacidade_insuficiente():
     item = "impressora com bandeja para no mínimo 250 folhas"
     produto = "impressora com bandeja para 150 folhas"

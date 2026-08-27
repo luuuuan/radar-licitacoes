@@ -208,6 +208,33 @@ def test_codigo_exato_com_texto_relacionado_e_confianca_alta(monkeypatch):
     assert r.detalhe[0]["produto_id"] == 1
 
 
+def test_codigo_exato_com_dois_produtos_do_mesmo_codigo_escolhe_o_de_maior_score(monkeypatch):
+    """Achado real (auditoria do agente code-reviewer): quando mais de um
+    produto do catálogo compartilha o mesmo NCM (comum -- é uma classificação
+    fiscal ampla), só o primeiro inserido era checado -- mesmo que o
+    reranker apontasse claramente outro como o produto certo."""
+    catalogo = [
+        ProdutoCat(id=1, descricao="Desinfetante 5 litros Lavanda", ncm="48025590"),
+        ProdutoCat(id=2, descricao="Papel sulfite A4 75g resma branca", ncm="48025590"),
+    ]
+    # produto 1 (índice 0) só passa raspando o piso; produto 2 (índice 1) é
+    # claramente o candidato certo -- o motor tem que escolher o índice 1,
+    # não o primeiro da lista que compartilha o código.
+    eng = _engine(catalogo, monkeypatch, {0: 0.5, 1: 0.95})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel branco", ncm="4802.55.90")])
+    assert r.detalhe[0]["produto_id"] == 2
+
+
+def test_codigo_exato_com_dois_produtos_do_mesmo_codigo_nenhum_corrobora(monkeypatch):
+    catalogo = [
+        ProdutoCat(id=1, descricao="Desinfetante 5 litros Lavanda", ncm="48025590"),
+        ProdutoCat(id=2, descricao="Algo completamente sem relação", ncm="48025590"),
+    ]
+    eng = _engine(catalogo, monkeypatch, {0: 0.01, 1: 0.02})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel branco", ncm="4802.55.90")])
+    assert r.detalhe == []
+
+
 def test_codigo_exato_sem_relacao_textual_nao_vira_candidato_nenhum(monkeypatch):
     """Caso real de produção — RECORRENTE: item "Álcool Etílico ... gel ...
     70% v/v" batia por NCM idêntico com "Desinfetante 5 litros Lavanda" —

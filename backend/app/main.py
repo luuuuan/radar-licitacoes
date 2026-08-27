@@ -1080,15 +1080,30 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                 for campo, valor in dados.items():
                     if valor is not None:           # só sobrescreve o que veio preenchido
                         setattr(existente, campo, valor)
-                atualizados += 1
             else:
                 db.add(Produto(**dados, usuario_id=user.id))
+            # Achado real (auditoria do agente code-reviewer): db.add()/
+            # setattr() só ENFILEIRAM a mudança -- o INSERT/UPDATE de
+            # verdade só acontece no autoflush da PRÓXIMA linha (fora deste
+            # try) ou no commit final, então um erro de banco causado por
+            # esta linha (valor fora do tipo/tamanho da coluna, etc.)
+            # explodia sem tratamento bem depois de onde foi "capturado",
+            # derrubando a importação INTEIRA (nada commitado, nem as linhas
+            # boas). O flush força o erro de banco a aparecer AQUI DENTRO do
+            # try, e o commit por linha garante que uma falha nesta linha só
+            # descarta ela mesma (rollback), sem perder as anteriores.
+            db.flush()
+            db.commit()
+            if existente:
+                atualizados += 1
+            else:
                 criados += 1
         except Exception as e:
+            db.rollback()
             erros.append(f"linha {n}: {e}")
     if criados or atualizados:
         user.versao_catalogo += 1
-    db.commit()
+        db.commit()
     return {"status": "ok", "criados": criados, "atualizados": atualizados,
             "ignorados": ignorados, "erros": erros[:20]}
 
@@ -3667,6 +3682,7 @@ async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor:
     if not sem_validade and data_validade is None:
         raise HTTPException(400, "Informe a validade, ou marque \"não possui data de vencimento\".")
     d = _documento_do_usuario(db, doc_id, user)
+    validade_antiga = d.data_validade
     d.nome, d.orgao_emissor = nome, orgao_emissor or None
     d.data_validade = None if sem_validade else data_validade
     d.link, d.observacao = link or None, observacao or None
@@ -3679,7 +3695,12 @@ async def atualizar_documento(doc_id: int, nome: str = Form(...), orgao_emissor:
         d.texto_extraido = ia.extrair_texto_upload(arquivo.filename, conteudo, arquivo.content_type) or None
         d.arquivo_cifrado = _auth.cifrar(base64.b64encode(conteudo).decode("ascii"))
         d.arquivo_nome, d.arquivo_tipo = arquivo.filename, arquivo.content_type
-    d.avisado_para = None  # validade mudou -> permite avisar de novo
+    # Achado real (auditoria do agente code-reviewer): resetava incondicional,
+    # mesmo quando só nome/observação/link mudavam -- reenviava um aviso de
+    # vencimento que já tinha sido disparado, só por causa de uma edição sem
+    # relação com o prazo. Só permite avisar de novo quando a validade MUDOU.
+    if d.data_validade != validade_antiga:
+        d.avisado_para = None
     user.versao_documentos += 1
     db.commit()
     return {"ok": True}

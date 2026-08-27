@@ -212,7 +212,15 @@ class MatchingEngine:
         item_cat = so_digitos(item.catalogo_codigo)
         for chave, valor in (("ncm", item_ncm), ("catmat", item_cat), ("catser", item_cat)):
             if valor and f"{chave}:{valor}" in self._idx_codigo:
-                idx = self._idx_codigo[f"{chave}:{valor}"][0]
+                indices = self._idx_codigo[f"{chave}:{valor}"]
+                # Achado real (auditoria do agente code-reviewer): quando MAIS
+                # DE UM produto do catálogo compartilha o mesmo código (comum
+                # -- código fiscal é uma classificação ampla, o próprio caso
+                # Álcool Etílico x Desinfetante do topo deste arquivo), só o
+                # primeiro da lista era checado. Entre todos que compartilham
+                # o código, escolhe o que o reranker pontuou mais alto, não
+                # sempre o primeiro inserido no catálogo.
+                idx = max(indices, key=lambda i: scores[i]) if scores else indices[0]
                 corroboracao = scores[idx] if scores else 0.0
                 if corroboracao >= self._PISO_RERANKER_CODIGO_EXATO:
                     return 1.0, self.produtos[idx], f"código {chave.upper()} {valor}"

@@ -169,6 +169,48 @@ def test_editar_documento_com_novo_arquivo_substitui_o_anterior():
     assert resp.body == b"arquivo novo"
 
 
+# --------------------------- Aviso de vencimento (avisado_para) --------- #
+
+def test_editar_sem_mudar_validade_nao_reseta_aviso_ja_enviado():
+    """Achado real (auditoria do agente code-reviewer): resetava
+    avisado_para incondicionalmente em toda edição -- um documento cujo
+    aviso de vencimento já tinha sido enviado voltava a ficar elegível e
+    disparava um aviso duplicado, só por causa de uma edição de nome/
+    observação sem relação com o prazo."""
+    db = _sessao()
+    u = _usuario(db)
+    validade = date(2030, 1, 1)
+    criado = _criar(db, u, data_validade=validade)
+    d = db.get(Documento, criado["id"])
+    d.avisado_para = validade   # simula aviso já enviado pra essa validade
+    db.commit()
+
+    asyncio.run(atualizar_documento(
+        criado["id"], nome="CND Federal (nome corrigido)", orgao_emissor=None,
+        data_validade=validade, link=None, observacao="nova observação",
+        sem_validade=False, arquivo=None, user=u, db=db))
+
+    db.refresh(d)
+    assert d.avisado_para == validade
+
+
+def test_editar_mudando_a_validade_reseta_o_aviso():
+    db = _sessao()
+    u = _usuario(db)
+    criado = _criar(db, u, data_validade=date(2030, 1, 1))
+    d = db.get(Documento, criado["id"])
+    d.avisado_para = date(2030, 1, 1)
+    db.commit()
+
+    asyncio.run(atualizar_documento(
+        criado["id"], nome="CND Federal", orgao_emissor=None,
+        data_validade=date(2031, 6, 15), link=None, observacao=None,
+        sem_validade=False, arquivo=None, user=u, db=db))
+
+    db.refresh(d)
+    assert d.avisado_para is None
+
+
 # --------------------------- Extração de validade por IA ---------------- #
 
 def test_criar_sem_validade_usa_ia_pra_extrair(monkeypatch):

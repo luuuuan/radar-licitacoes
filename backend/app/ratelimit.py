@@ -38,9 +38,19 @@ def ip_cliente(request: Request) -> str:
     # Cloudflare também): o IP real do visitante vem em X-Forwarded-For,
     # não em request.client -- sem isso, todo mundo cairia na mesma chave
     # (o IP do proxy) e o limite por IP nunca faria sentido.
+    #
+    # Achado real (auditoria do agente code-reviewer): pegava o PRIMEIRO
+    # valor da cadeia -- por convenção, cada proxy confiável ANEXA o IP que
+    # observou ao FINAL da cadeia, então o primeiro valor é o que o próprio
+    # cliente mandou na requisição original, livremente forjável (um
+    # atacante manda um X-Forwarded-For diferente a cada tentativa e
+    # aparenta ser sempre um IP novo, esvaziando o limite por IP). O ÚLTIMO
+    # valor é o que o proxy mais próximo da nossa infraestrutura de fato
+    # observou na conexão -- não é algo que o cliente consiga sobrescrever,
+    # só empurrar pra mais longe na cadeia.
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
+        return xff.split(",")[-1].strip()
     return request.client.host if request.client else "desconhecido"
 
 

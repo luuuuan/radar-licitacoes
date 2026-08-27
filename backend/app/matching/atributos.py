@@ -398,9 +398,18 @@ _CARACTERISTICAS: dict[str, dict[str, list[str]]] = {
         "presente": ["sem fio", "wireless", "wi-fi", "wifi"],
         "oposto": ["com fio", "cabeado"],
     },
+    # Achado real (auditoria do agente code-reviewer): "plástico"/"plástica"
+    # como oposto de inox era frágil demais -- um produto genuinamente de
+    # inox com QUALQUER peça acessória plástica mencionada na descrição
+    # (base antiderrapante, pé de borracha/plástico, tampa) e sem repetir
+    # literalmente "inox" perto o bastante virava "oposto", que validacao.py
+    # trata como reprovação automática CRÍTICA. Sem um par de oposto
+    # confiável pra material (ao contrário de "sem_fio" vs "com fio", que
+    # são termos específicos de conectividade), fica só como "ausente"
+    # (pendência não-crítica, exige confirmação manual) quando não
+    # menciona inox — mais seguro que rejeitar sozinho.
     "inox": {
         "presente": ["inox", "aco inoxidavel"],
-        "oposto": ["plastico", "plastica"],
     },
 }
 

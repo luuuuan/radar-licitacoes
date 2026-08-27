@@ -78,10 +78,26 @@ def test_limpar_reseta_contador():
     rl.checar("k5", limite=3, janela_seg=60)   # não deve levantar
 
 
-def test_ip_cliente_usa_x_forwarded_for_quando_presente():
+def test_ip_cliente_usa_o_ultimo_valor_de_x_forwarded_for():
+    """Achado real (auditoria do agente code-reviewer): usava o PRIMEIRO
+    valor da cadeia, que é exatamente o que o próprio cliente manda e pode
+    forjar -- cada proxy confiável ANEXA o IP que observou ao final da
+    cadeia, então o último valor é o único que o cliente não controla."""
     req = Request({"type": "http", "headers": [(b"x-forwarded-for", b"9.9.9.9, 10.0.0.1")],
                    "client": ("127.0.0.1", 1)})
-    assert rl.ip_cliente(req) == "9.9.9.9"
+    assert rl.ip_cliente(req) == "10.0.0.1"
+
+
+def test_ip_cliente_nao_e_enganado_por_cliente_forjando_o_inicio_da_cadeia():
+    """Um atacante mandando um X-Forwarded-For diferente a cada tentativa
+    (só o valor que ele mesmo controla, no início da cadeia) não pode
+    aparentar ser um IP novo a cada vez -- o proxy confiável sempre ANEXA o
+    IP real observado no final, então isso é o que importa pro rate limit."""
+    req1 = Request({"type": "http", "headers": [(b"x-forwarded-for", b"1.1.1.1, 10.0.0.1")],
+                    "client": ("127.0.0.1", 1)})
+    req2 = Request({"type": "http", "headers": [(b"x-forwarded-for", b"2.2.2.2, 10.0.0.1")],
+                    "client": ("127.0.0.1", 1)})
+    assert rl.ip_cliente(req1) == rl.ip_cliente(req2) == "10.0.0.1"
 
 
 def test_ip_cliente_cai_pro_ip_da_conexao_sem_o_header():

@@ -204,12 +204,33 @@ def _mesclar_confirmacoes_manuais(detalhe_novo: list[dict], detalhe_antigo: list
     resultado = list(detalhe_novo)
     for numero, item_confirmado in confirmados.items():
         if numero in indice_por_numero:
-            resultado[indice_por_numero[numero]] = item_confirmado
+            # Achado real (auditoria do agente code-reviewer): substituía a
+            # entrada pelo dict INTEIRO como estava no momento da
+            # confirmação -- descricao_item e candidatos ficavam congelados
+            # pra sempre, mesmo que a descrição do item fosse completada
+            # depois ou o catálogo mudasse. Mantém o item FRESCO desta
+            # rodada como base, só sobrescrevendo os campos que representam
+            # a escolha do usuário (produto confirmado + o fato de ter sido
+            # manual) — motivo/confiança zerados é o mesmo padrão já usado
+            # em confirmar_item_edital (main.py): ambos representam o
+            # raciocínio do motor AUTOMÁTICO, invalidado por uma escolha manual.
+            i = indice_por_numero[numero]
+            item_fresco = dict(resultado[i])
+            item_fresco["produto_id"] = item_confirmado.get("produto_id")
+            item_fresco["produto"] = item_confirmado.get("produto")
+            item_fresco["confirmado_manualmente"] = True
+            item_fresco["motivo"] = None
+            item_fresco["confianca"] = None
+            resultado[i] = item_fresco
         else:
             # o motor não achou mais candidata nenhuma pra esse item (ex.:
             # catálogo mudou bastante) — mesmo assim, o que o usuário
             # confirmou continua valendo até ele mudar de ideia.
             resultado.append(item_confirmado)
+    # reordena por score, mesmo critério de engine.py:avaliar() -- sem isso,
+    # um item confirmado que teve que ser reanexado no final (ramo acima)
+    # ficava fora de ordem na exibição.
+    resultado.sort(key=lambda it: it.get("score_item") or 0, reverse=True)
     return resultado
 
 

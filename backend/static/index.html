@@ -2282,10 +2282,15 @@ function motivoAmigavel(motivo){
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
 
+function fmtPrazoEdital(dias){
+  if(dias<0) return 'encerrado';
+  if(dias===0) return 'abre hoje';
+  return `faltam ${dias} dia(s)`;
+}
+
 function cardEdital(e){
   const urg = e.dias_restantes!=null && e.dias_restantes<=5;
-  const prazo = e.dias_restantes==null?'prazo n/d':
-    (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes);
   const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>{
     const vt = d.validacao_tecnica;
     // selo compacto (sem lista de pendências, isso já tem espaço só na
@@ -2556,8 +2561,7 @@ async function loadEditais(resetPagina=true){
 // edital", que abre a página normal (compatível com match=None desde a
 // correção de /detalhe pra esse caso).
 function cardEditalSemMatch(e){
-  const prazo = e.dias_restantes==null?'prazo n/d':
-    (e.dias_restantes<0?'encerrado':`faltam ${e.dias_restantes} dia(s)`);
+  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes);
   const linkEdital = linkSeguro(e.link);
   const itens = (e.itens_batem||[]).map(d=>`• ${esc(d)}`).join('<br>');
   return `<div class="card">
@@ -3057,6 +3061,7 @@ async function loadDocumentos(){
       validadeTxt = d.data_validade.split('-').reverse().join('/');
       txt = `${d.dias_para_vencer} dias`;
       if(d.dias_para_vencer<0){ cor='var(--destructive)'; txt=`vencido há ${Math.abs(d.dias_para_vencer)} d`; }
+      else if(d.dias_para_vencer===0){ cor='var(--medio)'; txt='vence hoje'; }
       else if(d.dias_para_vencer<=15){ cor='var(--medio)'; txt=`vence em ${d.dias_para_vencer} d`; }
     }
     const link = linkSeguro(d.link);
@@ -3590,7 +3595,7 @@ function _paresHTML(titulo, pares){
 let _checklistDocsAtual = [];
 function _statusDocInfo(item){
   if(item.status==='valido') return ['var(--forte)', 'válido'];
-  if(item.status==='vence_em_breve') return ['var(--medio)', `vence em ${item.dias_para_vencer} d`];
+  if(item.status==='vence_em_breve') return ['var(--medio)', item.dias_para_vencer===0?'vence hoje':`vence em ${item.dias_para_vencer} d`];
   if(item.status==='vencido') return ['var(--destructive)', `vencido há ${Math.abs(item.dias_para_vencer)} d`];
   // declaração: não é "cadastrada" (não é um arquivo reutilizável, é texto
   // novo a cada edital) — o que importa é se o edital já traz o modelo
@@ -4016,7 +4021,7 @@ function _renderCabecalhoEdital(){
   // "encerrado" vira um badge à parte (não só texto na linha muted) --
   // achado real: passava despercebido no meio de modalidade/local/valor,
   // pedido do usuário pra chamar mais atenção na página do edital.
-  const prazo = encerrado ? '' : (e.dias_restantes!=null?`faltam ${e.dias_restantes} dia(s)`:'prazo n/d');
+  const prazo = encerrado ? '' : (e.dias_restantes!=null?fmtPrazoEdital(e.dias_restantes):'prazo n/d');
   const linkPortal = linkSeguro(e.link);
   $('#edital-cabecalho').innerHTML = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
