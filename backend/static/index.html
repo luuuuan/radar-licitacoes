@@ -3718,8 +3718,21 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   _comparacaoCatalogoItensAtual = {};
   const linhas = c.itens.map(it=>{
     _comparacaoCatalogoItensAtual[it.numero] = it;
-    const naCotacao = _cotacaoSelecionados.has(String(it.numero));
     const principal = it.candidatos[0];
+    // Achado real: item confirmado numa análise antiga (produto A), esse
+    // produto depois excluído do catálogo, e uma NOVA análise sugerindo um
+    // produto B diferente pro mesmo item -- o botão continuava travado em
+    // "na cotação" porque _cotacaoSelecionados só sabe o NÚMERO do item (é
+    // a Proposta salva, que não guarda produto nenhum), sem saber se é
+    // justamente ESTE candidato que está confirmado. Confere contra o
+    // produto ao vivo do item (_paginaEditalDetalhe) -- só trava o botão
+    // quando é de fato o mesmo produto já confirmado, senão deixa reabrir
+    // pra confirmar o novo candidato.
+    const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
+      .find(x => String(x.numero) === String(it.numero));
+    const produtoJaConfirmado = !!(itemAoVivo && itemAoVivo.compativel
+      && itemAoVivo.produto && itemAoVivo.produto.id === principal.produto_id);
+    const naCotacao = _cotacaoSelecionados.has(String(it.numero)) && produtoJaConfirmado;
     const p = principal.produto || {};
     const vt = principal.validacao_tecnica;
     // badge compacta de specs: reaproveita a MESMA validação determinística
