@@ -466,6 +466,37 @@ def auth_esqueci_senha(dados: EsqueciSenhaIn, request: Request, bg: BackgroundTa
     return {"ok": True, "mensagem": mensagem}
 
 
+def _email_html_senha_alterada(nome: str) -> str:
+    """E-mail de aviso de segurança: senha foi alterada estando logado."""
+    return f"""\
+<!DOCTYPE html>
+<html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#1a2129">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 0">
+    <tr><td align="center">
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0"
+             style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+        <tr><td style="background:#14121A;padding:20px 28px;color:#fff;font-size:18px;font-weight:bold">
+          Minha Licitação
+        </td></tr>
+        <tr><td style="padding:28px">
+          <p style="margin:0 0 14px;font-size:15px">Olá, {nome}!</p>
+          <p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#3b4654">
+            A senha da sua conta no Minha Licitação foi alterada agora há pouco.
+          </p>
+          <p style="margin:0;font-size:12px;color:#94a3b8">
+            Se foi você, pode ignorar este e-mail. Se não foi você, use a opção
+            "Esqueci minha senha" na tela de login para recuperar o acesso o quanto antes.
+          </p>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:11px;color:#94a3b8">Minha Licitação</p>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
 @app.post("/api/auth/redefinir-senha")
 def auth_redefinir_senha(dados: RedefinirSenhaIn, request: Request, db: Session = Depends(get_session)):
     # o token em si já é praticamente impossível de adivinhar (32 bytes
@@ -560,6 +591,32 @@ def salvar_perfil(dados: PerfilIn, user: Usuario = Depends(_auth.get_current_use
     if dados.logo_base64 is not None:
         user.logo_base64 = _validar_logo_base64(dados.logo_base64) if dados.logo_base64 else None
     db.commit()
+    return {"ok": True}
+
+
+class TrocarSenhaIn(BaseModel):
+    senha_atual: str
+    senha_nova: str
+
+
+@app.post("/api/perfil/senha")
+def trocar_senha(dados: TrocarSenhaIn, bg: BackgroundTasks,
+                 user: Usuario = Depends(_auth.get_current_user),
+                 db: Session = Depends(get_session)):
+    if not _auth.conferir_senha(dados.senha_atual, user.senha_hash):
+        raise HTTPException(401, "Senha atual incorreta.")
+    erro = _auth.validar_forca_senha(dados.senha_nova)
+    if erro:
+        raise HTTPException(400, erro)
+    user.senha_hash = _auth.hash_senha(dados.senha_nova)
+    db.commit()
+    if _email_mod.smtp_configurado():
+        corpo = (f"Olá, {user.nome}!\n\nA senha da sua conta no Minha Licitação foi alterada "
+                 "agora há pouco.\n\nSe não foi você, use a opção \"Esqueci minha senha\" na "
+                 "tela de login para recuperar o acesso o quanto antes.\n\n— Minha Licitação")
+        html = _email_html_senha_alterada(user.nome)
+        bg.add_task(_email_mod.enviar_para, user.email,
+                    "Sua senha foi alterada — Minha Licitação", corpo, html)
     return {"ok": True}
 
 

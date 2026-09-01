@@ -1408,6 +1408,23 @@
     </div>
 
     <div class="card">
+      <h3 style="margin-top:0">Trocar senha</h3>
+      <div class="grid2">
+        <div class="field"><label>Senha atual</label><input type="password" id="sn-atual" style="width:100%" autocomplete="current-password"></div>
+        <div></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Nova senha</label><input type="password" id="sn-nova" style="width:100%" autocomplete="new-password"></div>
+        <div class="field"><label>Confirmar nova senha</label><input type="password" id="sn-confirma" style="width:100%" autocomplete="new-password"></div>
+      </div>
+      <p class="muted" style="font-size:11px;margin-bottom:0">Pelo menos 8 caracteres, com letra, número e símbolo.</p>
+      <div class="toolbar" style="margin-top:10px">
+        <button class="btn ghost" onclick="trocarSenha()">Trocar senha</button>
+        <span id="senha-msg" class="muted" style="margin-left:10px"></span>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 style="margin-top:0">Endereço</h3>
       <div class="grid2">
         <div class="field"><label>CEP</label>
@@ -5232,6 +5249,25 @@ async function buscarCep(){
     $('#cep-status').textContent = '✓ Endereço preenchido';
     $('#pf-numero').focus();
   }catch(e){ $('#cep-status').textContent = 'Erro ao consultar o CEP.'; }
+}
+
+async function trocarSenha(){
+  const atual = $('#sn-atual').value;
+  const nova = $('#sn-nova').value;
+  const confirma = $('#sn-confirma').value;
+  if(!atual || !nova){ $('#senha-msg').textContent = 'Preencha a senha atual e a nova senha.'; return; }
+  if(nova !== confirma){ $('#senha-msg').textContent = 'A confirmação não bate com a nova senha.'; return; }
+  const r = await api('/api/perfil/senha',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({senha_atual:atual, senha_nova:nova})});
+  if(r && r.detail){
+    $('#senha-msg').textContent = r.detail;
+    toast(r.detail, 'erro');
+    return;
+  }
+  $('#sn-atual').value = ''; $('#sn-nova').value = ''; $('#sn-confirma').value = '';
+  $('#senha-msg').textContent = 'Senha alterada!';
+  toast('Senha alterada com sucesso.', 'ok', 3000);
+  setTimeout(()=>{ $('#senha-msg').textContent=''; }, 3000);
 }
 
 async function salvarPerfil(){
