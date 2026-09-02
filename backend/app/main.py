@@ -3628,6 +3628,19 @@ def exportar_proposta_pdf(edital_id: int, user: Usuario = Depends(_auth.get_curr
                              headers={"Content-Disposition": f"attachment; filename={nome}"})
 
 
+@app.get("/api/perfil/papel-timbrado.docx")
+def exportar_papel_timbrado(user: Usuario = Depends(_auth.get_current_user)):
+    """Papel timbrado em .docx (logo + dados da empresa no cabeçalho, contato
+    no rodapé — mesma identidade da proposta em PDF), corpo vazio pra servir
+    de base quando o usuário redige uma declaração no Word."""
+    from .papel_timbrado_docx import gerar_docx_timbrado
+    docx_bytes = gerar_docx_timbrado(_dados_remetente(user))
+    return StreamingResponse(
+        iter([docx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=papel_timbrado.docx"})
+
+
 @app.get("/api/export.csv")
 def export_csv(nivel: str | None = None,
                user: Usuario = Depends(_auth.get_current_user),
