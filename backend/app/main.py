@@ -1452,11 +1452,12 @@ def listar_editais(
             q_sem_match = q_sem_match.where(
                 (Edital.data_abertura.is_(None)) | (Edital.data_abertura >= hoje_data))
         # mesmos filtros de edital aplicados na busca principal (uf, valor,
-        # tipo, hoje) — achado real: esta consulta só levava em conta o termo
-        # buscado e a "vista", ignorando os demais filtros da tela; resultado
-        # era o bloco "sem análise automática" misturando editais de qualquer
-        # estado/valor/tipo mesmo com filtros ativos (nivel/status/lido não
-        # se aplicam aqui, já que por definição estes editais não têm Match).
+        # tipo, hoje, data_de/data_ate) — achado real: esta consulta só levava
+        # em conta o termo buscado e a "vista", ignorando os demais filtros da
+        # tela; resultado era o bloco "sem análise automática" misturando
+        # editais de qualquer estado/valor/tipo/data mesmo com filtros ativos
+        # (nivel/status/lido não se aplicam aqui, já que por definição estes
+        # editais não têm Match).
         if uf:
             q_sem_match = q_sem_match.where(Edital.uf.in_([u.upper() for u in uf]))
         if tipo != "todos":
@@ -1470,6 +1471,10 @@ def listar_editais(
             q_sem_match = q_sem_match.where(Edital.valor_estimado >= valor_min)
         if valor_max is not None:
             q_sem_match = q_sem_match.where(Edital.valor_estimado <= valor_max)
+        if data_de is not None:
+            q_sem_match = q_sem_match.where(Edital.data_abertura >= data_de)
+        if data_ate is not None:
+            q_sem_match = q_sem_match.where(Edital.data_abertura <= data_ate)
         if hoje:
             q_sem_match = q_sem_match.where(Edital.data_abertura == date.today())
         q_sem_match = q_sem_match.order_by(Edital.coletado_em.desc()).limit(20)

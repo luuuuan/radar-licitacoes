@@ -5,6 +5,8 @@ a função da rota diretamente com os parâmetros já resolvidos (o jeito que o
 FastAPI resolveria via Query(...), sem depender da injeção de dependência).
 Rode com:  cd backend && pytest
 """
+from datetime import date, timedelta
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -293,3 +295,38 @@ def test_sem_match_respeita_filtro_de_valor():
 
     assert len(r["sem_match"]) == 1
     assert r["sem_match"][0]["edital_id"] == ed_caro.id
+
+
+def test_sem_match_respeita_filtro_de_data_de():
+    """Achado real: a busca por item filtrando "início do recebimento a
+    partir de X" continuava mostrando, no bloco "sem análise automática",
+    editais que abrem ANTES de X -- data_de/data_ate nunca tinham sido
+    aplicados nessa consulta (só uf/tipo/valor/hoje foram, numa correção
+    anterior que esqueceu esses dois)."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed_depois = _edital_sem_match(db, "ed-depois", itens=["Caneta esferográfica azul"],
+                                  data_abertura=hoje + timedelta(days=10))
+    _edital_sem_match(db, "ed-antes", itens=["Caneta esferográfica azul"],
+                      data_abertura=hoje + timedelta(days=1))
+
+    r = _listar(db, u, busca_item="caneta", data_de=hoje + timedelta(days=5))
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_depois.id
+
+
+def test_sem_match_respeita_filtro_de_data_ate():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed_antes = _edital_sem_match(db, "ed-antes", itens=["Caneta esferográfica azul"],
+                                 data_abertura=hoje + timedelta(days=1))
+    _edital_sem_match(db, "ed-depois", itens=["Caneta esferográfica azul"],
+                      data_abertura=hoje + timedelta(days=10))
+
+    r = _listar(db, u, busca_item="caneta", data_ate=hoje + timedelta(days=5))
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_antes.id
