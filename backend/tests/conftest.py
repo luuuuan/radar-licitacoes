@@ -22,12 +22,13 @@ def _rate_limit_zerado():
 
 @pytest.fixture(autouse=True)
 def _sem_chaves_externas_por_padrao(monkeypatch):
-    """Zera as chaves de IA por padrão em TODO teste — sem isso, um `.env`
-    local com chaves reais (usadas pra testar manualmente contra as APIs de
+    """Zera a chave de IA global por padrão em TODO teste — sem isso, um
+    `.env` local com chave real (usada pra testar manualmente contra a API de
     verdade, prática comum nesta sessão) faz testes "offline" chamarem rede
     de verdade sem querer (achado real: DEEPINFRA_API_KEY no .env local
     fazia MatchingEngine.usar_ia virar True e testes de service.py sem
     nenhum mock chamarem o reranker de verdade). Testes que precisam de uma
-    chave (real ou fake) setam explicitamente com monkeypatch."""
+    chave (real ou fake) setam explicitamente com monkeypatch. (A chave
+    Gemini é sempre BYOK, passada por parâmetro a partir do usuário logado —
+    não existe uma "settings.GEMINI_API_KEY" global pra zerar aqui.)"""
     monkeypatch.setattr(settings, "DEEPINFRA_API_KEY", "")
-    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")

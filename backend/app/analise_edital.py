@@ -6,7 +6,7 @@ resumo estruturado: objeto, documentos exigidos para habilitação, requisitos
 técnicos do objeto, prazos, se exige amostra/visita, e pontos de atenção.
 
 É OPCIONAL e tolerante a falhas:
-- sem GEMINI_API_KEY -> status "sem_ia"
+- sem chave Gemini do usuário -> status "sem_ia"
 - PDF não disponível no PNCP -> status "sem_arquivo"
 - PDF escaneado/sem texto extraível -> status "sem_texto"
 - erro/timeout da IA -> status "erro_ia"

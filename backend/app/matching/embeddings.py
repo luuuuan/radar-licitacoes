@@ -1,17 +1,21 @@
 """
-Similaridade semântica via embeddings (Gemini/BGE-M3) e reranking (DeepInfra).
+Similaridade semântica via embeddings (BGE-M3) e reranking (DeepInfra).
 
-`embeddings()`/`embeddings_deepinfra()`: geram um "vetor de significado" para
-cada texto, comparado por cosseno. `embeddings()` é BYOK (chave pessoal do
-usuário, GEMINI_API_KEY) — hoje usada só pela Análise por IA do edital
-(analise_edital.py), não mais pelo motor de matching. `embeddings_deepinfra()`
-usa o BGE-M3 com a chave GLOBAL do operador (DEEPINFRA_API_KEY).
+`embeddings_deepinfra()`: gera um "vetor de significado" para cada texto,
+comparado por cosseno. Usa o BGE-M3 com a chave GLOBAL do operador
+(DEEPINFRA_API_KEY) — usada hoje por `itens_pdf.py` pra achar os trechos
+mais relevantes de um PDF antes de mandar pra IA de texto.
 
 `rerank()`: cross-encoder (Qwen3-Reranker via DeepInfra, mesma chave global)
 — julga a relevância de um texto contra vários outros DIRETAMENTE (em vez de
 comparar embeddings isolados por cosseno), muito mais preciso pra "isso é a
 mesma coisa?". É o que o motor de matching (matching/engine.py) usa hoje como
 sinal principal de compatibilidade item↔produto.
+
+(Existiu também um `embeddings()` via Gemini/BYOK aqui, bi-encoder comparado
+por cosseno — foi removido: o motor de matching passou a usar só o reranker
+acima, que testou muito mais preciso, e nenhuma outra parte do app chegou a
+adotar essa função antes dela ficar sem nenhum ponto de chamada.)
 
 Proteção de cota: a API tem limite. Quando estoura (HTTP 429), um "disjuntor"
 pausa as chamadas daquela chave por algumas horas (até a cota resetar), usando
@@ -29,12 +33,8 @@ from ..config import settings
 
 log = logging.getLogger("ia.embeddings")
 
-_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _DEEPINFRA_URL = "https://api.deepinfra.com/v1/openai/embeddings"
 # cache simples em memória: texto -> vetor (evita re-embeddar o mesmo texto).
-# Separado por provedor porque vetores de modelos diferentes não são
-# comparáveis entre si (dimensão/espaço semântico distintos).
-_cache: dict[str, list[float]] = {}
 _cache_deepinfra: dict[str, list[float]] = {}
 
 # disjuntor: por CHAVE (cada usuário tem sua própria cota no free tier).
@@ -86,63 +86,6 @@ def cosseno(a: list[float], b: list[float]) -> float:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     return dot / (_norm(a) * _norm(b))
-
-
-def embeddings(textos: list[str], timeout: int = 30,
-               api_key: str | None = None) -> list[list[float] | None]:
-    """Gera embeddings para uma lista de textos. Usa cache e chamada em lote.
-    `api_key` permite usar a chave Gemini do próprio usuário (cai para a global
-    se não vier). Retorna lista alinhada à entrada; sem vetor vem como None."""
-    chave = api_key   # só a chave do próprio usuário (sem fallback global)
-    if not chave:
-        return [None] * len(textos)
-
-    # se a cota DESSA chave estourou recentemente, nem tenta — devolve o que tiver em cache
-    if ia_bloqueada(chave):
-        return [_cache.get(t) for t in textos]
-
-    faltando = [t for t in textos if t and t not in _cache]
-    faltando = list(dict.fromkeys(faltando))  # únicos, preservando ordem
-
-    if faltando:
-        modelo = settings.IA_MODELO_EMBEDDING
-        url = f"{_BASE}/{modelo}:batchEmbedContents"
-        # gemini-embedding-2 ignora silenciosamente "taskType" (parâmetro
-        # descontinuado nesse modelo) — o jeito certo de pedir embeddings
-        # otimizados para similaridade simétrica agora é prefixar o texto.
-        # Para gemini-embedding-001 (legado) o taskType ainda funciona.
-        usa_prefixo = "embedding-2" in modelo
-        if usa_prefixo:
-            body = {"requests": [{
-                "model": f"models/{modelo}",
-                "content": {"parts": [{"text": f"task: sentence similarity | query: {t}"}]},
-            } for t in faltando]}
-        else:
-            body = {"requests": [{
-                "model": f"models/{modelo}",
-                "content": {"parts": [{"text": t}]},
-                "taskType": "SEMANTIC_SIMILARITY",
-            } for t in faltando]}
-        try:
-            r = requests.post(url, json=body, timeout=timeout,
-                              headers={"x-goog-api-key": chave,
-                                       "Content-Type": "application/json"})
-            if r.status_code == 429:
-                _pausar(chave, _COOLDOWN_429, "cota diária do plano gratuito atingida")
-                return [_cache.get(t) for t in textos]
-            if r.status_code != 200:
-                _pausar(chave, _COOLDOWN_ERRO, f"HTTP {r.status_code}")
-                return [_cache.get(t) for t in textos]
-            dados = r.json().get("embeddings", [])
-            for t, emb in zip(faltando, dados):
-                vec = emb.get("values") if isinstance(emb, dict) else None
-                if vec:
-                    _cache[t] = vec
-        except (requests.RequestException, ValueError) as e:
-            _pausar(chave, _COOLDOWN_ERRO, f"falha de rede ({type(e).__name__})")
-            return [_cache.get(t) for t in textos]
-
-    return [_cache.get(t) for t in textos]
 
 
 def embeddings_deepinfra(textos: list[str], timeout: int = 30,

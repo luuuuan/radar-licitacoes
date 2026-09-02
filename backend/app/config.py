@@ -120,16 +120,10 @@ class Settings(BaseSettings):
     LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
     LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
 
-    # IA semântica (Gemini embeddings) — usada só pela Análise por IA do
-    # edital hoje (analise_edital.py); o motor de matching usa o reranker
-    # da DeepInfra (ver DEEPINFRA_MODELO_RERANKER, abaixo).
-    GEMINI_API_KEY: str = ""
-    # gemini-embedding-001 será desligado em 14/07/2026 -> gemini-embedding-2
-    IA_MODELO_EMBEDDING: str = "gemini-embedding-2"
     # gemini-2.5-flash será desligado em 16/10/2026 -> gemini-3.5-flash
     IA_MODELO_TEXTO: str = "gemini-3.5-flash"   # análise de editais (texto)
 
-    # IA extra (DeepInfra) — opcional. Ao contrário da GEMINI_API_KEY (chave
+    # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador
     # do app — vale pra todos os usuários, mesmo quem não configurou uma
     # chave Gemini pessoal.
