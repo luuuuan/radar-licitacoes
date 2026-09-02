@@ -38,6 +38,14 @@
      relativo a esse body — que nunca rola de verdade — em vez da página inteira,
      quebrando o sticky silenciosamente. */
   html{overflow-x:hidden}
+  /* barra de rolagem fina, com pontas arredondadas, na cor de destaque do
+     app (mesma --accent da logo/botões). scrollbar-width/-color cobre
+     Firefox; as pseudo-classes ::-webkit-scrollbar* cobrem Chrome/Edge/Safari. */
+  html{scrollbar-width:thin;scrollbar-color:var(--accent) var(--panel)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:var(--panel)}
+  ::-webkit-scrollbar-thumb{background:var(--accent);border-radius:999px;border:2px solid var(--panel)}
+  ::-webkit-scrollbar-thumb:hover{background:var(--accent-claro,var(--accent))}
   body{margin:0;max-width:100%;font-family:var(--font-body);
     background:var(--bg);color:var(--txt);font-size:16px}
   h1,h2,h3{font-family:var(--font-heading)}
@@ -725,12 +733,12 @@
     position:fixed;top:0;left:0;height:100%;width:85%;max-width:320px;margin:0;
     background:var(--panel);border-right:1px solid var(--line);padding:16px;
     z-index:6000;overflow-y:auto;overflow-x:hidden;
-    scrollbar-width:thin;scrollbar-color:var(--line) var(--panel)}
+    scrollbar-width:thin;scrollbar-color:var(--accent) var(--panel)}
   .filtros-lateral.aberto{display:flex}
   .filtros-lateral::-webkit-scrollbar{width:8px}
-  .filtros-lateral::-webkit-scrollbar-track{background:var(--panel);border-radius:8px}
-  .filtros-lateral::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
-  .filtros-lateral::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+  .filtros-lateral::-webkit-scrollbar-track{background:var(--panel)}
+  .filtros-lateral::-webkit-scrollbar-thumb{background:var(--accent);border-radius:999px}
+  .filtros-lateral::-webkit-scrollbar-thumb:hover{background:var(--accent-claro,var(--accent))}
   .filtros-lateral .field{margin:0}
   .filtros-lateral select,.filtros-lateral input{width:100%}
   .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted)}
@@ -870,7 +878,7 @@
 <div id="topo-fixo">
 <header>
   <button class="hamburger" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <h1><svg viewBox="0 0 64 64" width="26" height="26" style="vertical-align:-4px" aria-hidden="true"><circle cx="14" cy="14" r="4.5" fill="#4c4360"/><circle cx="32" cy="14" r="4.5" fill="#4c4360"/><circle cx="50" cy="14" r="4.5" fill="#4c4360"/><circle cx="14" cy="32" r="4.5" fill="#4c4360"/><circle cx="50" cy="32" r="4.5" fill="#4c4360"/><circle cx="14" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="50" r="4.5" fill="#4c4360"/><circle cx="50" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="32" r="9" fill="var(--accent-claro)"/></svg><span class="logo-txt"> Minha Licitação</span></h1>
+  <h1><svg viewBox="0 0 64 64" width="26" height="26" style="vertical-align:-4px" aria-hidden="true"><circle cx="14" cy="14" r="4.5" fill="#4c4360"/><circle cx="32" cy="14" r="4.5" fill="#4c4360"/><circle cx="50" cy="14" r="4.5" fill="#4c4360"/><circle cx="14" cy="32" r="4.5" fill="#4c4360"/><circle cx="50" cy="32" r="4.5" fill="#4c4360"/><circle cx="14" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="50" r="4.5" fill="#4c4360"/><circle cx="50" cy="50" r="4.5" fill="#4c4360"/><circle cx="32" cy="32" r="9" fill="var(--accent)"/></svg><span class="logo-txt"> Minha Licitação</span></h1>
 
   <!-- cópia do menu principal: só some/aparece em telas bem largas (evita
        repetir a quebra de linha do menu), depois de rolar (ver .compacto).
