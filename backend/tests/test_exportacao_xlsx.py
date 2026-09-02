@@ -166,6 +166,7 @@ def test_catalogo_xlsx_formata_preco_custo_e_venda_como_moeda():
     wb = openpyxl.load_workbook(io.BytesIO(conteudo))
     ws = wb.active
 
-    # linha 2 é a 1ª linha de produto (linha 1 é o cabeçalho)
-    assert ws["J2"].number_format == "R$ #,##0.00"
+    # linha 2 é a 1ª linha de produto (linha 1 é o cabeçalho); coluna A é o
+    # id do produto, então preco_custo/preco_venda ficam em K/L (não J/K).
     assert ws["K2"].number_format == "R$ #,##0.00"
+    assert ws["L2"].number_format == "R$ #,##0.00"

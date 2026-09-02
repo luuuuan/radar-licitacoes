@@ -905,20 +905,25 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Produtos"
-    cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
+    cabec = ["id", "descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
              "fabricante", "marca", "modelo",
              "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
-    ws.append(["Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
+    ws.append(["", "Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
                "7891234567890", "150123", "", "", "", "",
                "18,90", "24,50", "resma", "500",
                "(45) 99999-0000", "", "", ""])
-    ws.append(["Caneta esferográfica azul", "caneta, esferográfica, azul", "",
+    ws.append(["", "Caneta esferográfica azul", "caneta, esferográfica, azul", "",
                "", "", "", "", "", "",
                "1,20", "2,00", "unidade", "",
                "", "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
-    ws["N1"].comment = Comment(
+    ws["A1"].comment = Comment(
+        "Deixe em branco pra produto novo. Só é preenchida de verdade quando "
+        "você exporta o catálogo (/api/produtos/exportar.xlsx) e reimporta — "
+        "aí a linha atualiza o produto certo mesmo que você tenha corrigido a "
+        "descrição, em vez de arriscar criar um duplicado.", "Minha Licitação")
+    ws["O1"].comment = Comment(
         "Se o telefone bater com um fornecedor já cadastrado na aba Fornecedores, "
         "o produto é vinculado a ele automaticamente (nome/contato/site vêm de lá "
         "— não precisa preencher as 3 colunas seguintes). Preencha-as só se o "
@@ -958,7 +963,7 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Produtos"
-    cabec = ["descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
+    cabec = ["id", "descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
              "fabricante", "marca", "modelo",
              "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
@@ -966,14 +971,14 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
     linha = 1
     for p in produtos:
         ws.append([
-            p.descricao, p.palavras_chave, p.ncm, p.ean, p.catmat, p.catser,
+            p.id, p.descricao, p.palavras_chave, p.ncm, p.ean, p.catmat, p.catser,
             p.fabricante, p.marca, p.modelo,
             p.preco_custo, p.preco_venda, p.unidade_venda, p.itens_por_unidade,
             telefones.get(p.fornecedor_id, ""), p.fornecedor_nome, p.fornecedor_contato, p.fornecedor_site,
         ])
         linha += 1
         # mesmo achado do cotacao.xlsx: preço saía sem formatação de moeda.
-        for col in ("J", "K"):
+        for col in ("K", "L"):
             ws[f"{col}{linha}"].number_format = 'R$ #,##0.00'
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
@@ -1026,6 +1031,11 @@ def atualizar_produto(produto_id: int, dados: ProdutoIn,
 
 # Colunas aceitas na planilha de importação (cabeçalho -> campo do produto)
 _COLS_IMPORT = {
+    # id do produto: quando presente e vinculado a um produto do próprio
+    # usuário, casa a linha por ID em vez de por descrição -- ver comentário
+    # no loop de importação sobre por que isso importa (renomear a descrição
+    # não pode "perder" o produto e criar um duplicado).
+    "id": "_produto_id", "produto_id": "_produto_id",
     "descricao": "descricao", "descrição": "descricao", "produto": "descricao",
     "palavras_chave": "palavras_chave", "palavras-chave": "palavras_chave",
     "palavras chave": "palavras_chave", "ncm": "ncm", "cest": "cest", "ean": "ean",
@@ -1127,11 +1137,42 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                     dados["fornecedor_site"] = forn.site
             else:
                 erros.append(f"linha {n}: nenhum fornecedor cadastrado com o telefone '{fone_forn}'")
-        # atualizar se a descrição já existe NESTE usuário (case-insensitive)
-        existente = db.execute(
-            select(Produto).where(Produto.usuario_id == user.id)
-            .where(func.lower(Produto.descricao) == desc.lower())
-        ).scalars().first()
+        # id do produto (coluna "id"/"produto_id", presente quando a planilha
+        # veio de /api/produtos/exportar.xlsx): casa por ID quando dá, senão
+        # cai pra descrição -- achado real: casar só por descrição (case-
+        # insensitive) fazia reimportar o catálogo exportado, depois de
+        # corrigir/renomear uma descrição na planilha, CRIAR um produto novo
+        # em vez de atualizar o original (a descrição antiga não batia mais
+        # com nada), duplicando o item no catálogo em vez de corrigi-lo.
+        pid_raw = dados.pop("_produto_id", None)
+        produto_id = None
+        if pid_raw not in (None, ""):
+            try:
+                produto_id = int(float(pid_raw))
+            except (TypeError, ValueError):
+                erros.append(f"linha {n}: id de produto '{pid_raw}' inválido, ignorada")
+                ignorados += 1
+                continue
+        if produto_id is not None:
+            existente = db.execute(
+                select(Produto).where(Produto.usuario_id == user.id)
+                .where(Produto.id == produto_id)
+            ).scalars().first()
+            if not existente:
+                # id não encontrado (produto apagado nesse meio-tempo, ou id de
+                # outro usuário) -- não cai pra descrição: criar um produto novo
+                # "roubando" o id de outra linha seria mais surpreendente que
+                # simplesmente avisar e pular.
+                erros.append(f"linha {n}: id de produto '{produto_id}' não encontrado no seu catálogo")
+                ignorados += 1
+                continue
+        else:
+            # sem id na planilha (import externo, ex.: lista de fornecedor) —
+            # comportamento de sempre: casa pela descrição já cadastrada.
+            existente = db.execute(
+                select(Produto).where(Produto.usuario_id == user.id)
+                .where(func.lower(Produto.descricao) == desc.lower())
+            ).scalars().first()
         try:
             if existente:
                 for campo, valor in dados.items():
