@@ -2714,11 +2714,9 @@ def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, 
     return resultado
 
 
-# Análise por IA não roda em BackgroundTasks — ao contrário de coleta/
-# recálculo, é uma request síncrona comum, sem "processo de fundo" pra ter
-# uma trava. Só a flag de cancelamento, por usuário, checada ENTRE as até 3
-# chamadas de IA que uma análise faz (edital -> documentos -> catálogo).
-# Nunca interrompe uma chamada já em voo — requests.post dentro de
+# A flag de cancelamento é por usuário, checada ENTRE as até 3 chamadas de
+# IA que uma análise faz (edital -> documentos -> catálogo). Nunca
+# interrompe uma chamada já em voo — requests.post dentro de
 # analise_edital.py:_gerar() não tem nenhum hook de cancelamento.
 _analise_cancelar: dict[int, bool] = {}
 # Achado real: Edital.analise_ia é cache GLOBAL por edital (o resumo é o
@@ -2829,6 +2827,69 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
                 db.commit()
     resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar, forcar)
     return _anexar_checklist_documentos(resultado, user, db)
+
+
+# Achado real (mesmo motivo/padrão do completar-descrição logo abaixo): a
+# análise pode encadear até 3 chamadas de IA (edital -> documentos ->
+# catálogo), a última em lotes de até 90s cada quando o catálogo é grande —
+# rodando direto na request HTTP, o proxy da Railway/Render derrubava a
+# conexão antes de terminar. O trabalho continuava rodando no servidor e
+# salvando no final (por isso reabrir a aba sem clicar em nada mostrava a
+# análise "já pronta" — ela nunca tinha falhado de verdade, só o navegador
+# não esperou o bastante), mas o usuário via um erro genérico sem saber
+# disso. Por (usuário, edital) — não só por edital como o completar-
+# descrição — porque a comparação de catálogo/documentos é POR USUÁRIO
+# (AnaliseIAExtras), então dois usuários no mesmo edital têm resultado
+# final diferente; expor status por edital vazaria o catálogo de um pro
+# outro. Reaproveita a função analise_edital() de cima 100% como está
+# (mesmas travas, mesmo cache) — só passa a rodar em BackgroundTasks.
+_analise_status: dict[tuple[int, int], dict] = {}
+
+
+def _rodar_analise_bg(edital_id: int, user_id: int, forcar: bool):
+    import logging
+    db = SessionLocal()
+    try:
+        user = db.get(Usuario, user_id)
+        if not user:
+            _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": "Usuário não encontrado"}
+            return
+        resultado = analise_edital(edital_id, forcar=forcar, user=user, db=db)
+        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": None, "resultado": resultado}
+    except HTTPException as e:
+        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": e.detail}
+    except Exception as e:
+        db.rollback()
+        logging.getLogger("analise_edital").exception(
+            "Erro ao analisar edital %s (usuário %s)", edital_id, user_id)
+        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/api/editais/{edital_id}/analise/iniciar")
+def analise_edital_iniciar(edital_id: int, bg: BackgroundTasks, forcar: bool = Query(False),
+                           user: Usuario = Depends(_auth.get_current_user),
+                           db: Session = Depends(get_session)):
+    """Dispara a análise por IA em segundo plano (ver comentário acima de
+    _analise_status sobre o motivo). Retorna na hora; o resultado é
+    consultado em .../analise/status."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    chave = (user.id, edital_id)
+    if _analise_status.get(chave, {}).get("rodando"):
+        return {"ok": False, "em_andamento": True,
+                "mensagem": "Já tem uma análise em andamento pra este edital."}
+    _analise_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
+    _analise_status[chave] = {"rodando": True, "erro": None}
+    bg.add_task(_rodar_analise_bg, edital_id, user.id, forcar)
+    return {"ok": True, "em_andamento": True}
+
+
+@app.get("/api/editais/{edital_id}/analise/status")
+def analise_edital_status(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
+    return _analise_status.get((user.id, edital_id), {"rodando": False, "erro": None})
 
 
 # Achado real: essa leitura (baixar o documento + calcular embeddings +

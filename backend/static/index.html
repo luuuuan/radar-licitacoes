@@ -3954,13 +3954,15 @@ let _analiseCache = null;
 // andamento" por engano (nenhuma análise foi pedida pra ele).
 let _analiseEmAndamento = false;
 let _analiseEmAndamentoId = null;
-// controller da análise em voo — permite abortar a ESPERA no navegador na
-// hora (cancelarAnalise()). O servidor não tem como interromper uma chamada
-// à IA já em andamento (requests.post sem hook de cancelamento), mas o
-// endpoint /analise/cancelar pede pra ele parar ANTES da próxima etapa
-// (documentos/catálogo) — cooperativo, igual coleta/recálculo, só que sem
-// trava/BackgroundTasks porque a análise é uma request síncrona comum.
-let _analiseAbortController = null;
+// flag de cancelamento da análise em voo (mesmo padrão do completar-
+// descrição, _completarDescricaoItens): a "espera" aqui é um loop de
+// polling, não uma única requisição — cancelarAnalise() marca essa flag pro
+// loop desistir de agir sobre o que vier depois. O servidor não tem como
+// interromper uma chamada à IA já em andamento (requests.post sem hook de
+// cancelamento), mas o endpoint /analise/cancelar pede pra ele parar ANTES
+// da próxima etapa (documentos/catálogo) — cooperativo, igual coleta/
+// recálculo/completar-descrição.
+let _analiseCancelamento = null;
 
 function _spinnerHTML(texto, extra){
   return `<p class="muted" style="display:flex;align-items:center;gap:8px;margin-top:0;flex-wrap:wrap"><span class="spinner-inline"></span>${esc(texto)}${extra||''}</p>`;
@@ -4320,8 +4322,8 @@ async function _rodarAnaliseEdital(forcar){
   // sempre que ele trocasse de aba). Em vez disso, checa se ele ainda está
   // olhando pra esta mesma aba deste mesmo edital quando a resposta chegar.
   const aindaAqui = () => _abaEditalAtual === 'analise' && _paginaEditalId === id;
-  const controller = new AbortController();
-  _analiseAbortController = controller;
+  const cancelamento = {pedido: false};
+  _analiseCancelamento = cancelamento;
   const btnCancelar = ` <button class="btn discreto" style="padding:3px 10px;font-size:12px" onclick="cancelarAnalise()">Cancelar análise</button>`;
   // troca pra aba Análise por IA de verdade (inclusive quando chamada a
   // partir da Cotação) — o progresso e o resultado sempre aparecem aqui,
@@ -4330,7 +4332,9 @@ async function _rodarAnaliseEdital(forcar){
   _analiseEmAndamento = true;
   _analiseEmAndamentoId = id;
   try{
-    const {html, sucesso} = await _corpoAnaliseEdital(id, forcar, controller.signal);
+    const resultado = await _obterResultadoAnaliseComPolling(id, forcar, aindaAqui, cancelamento);
+    if(resultado === null) return;   // cancelado -- cancelarAnalise() já tratou a tela
+    const {html, sucesso} = resultado;
     _analiseCache = html;
     // só marca "analisado" quando a IA de fato respondeu com sucesso — um
     // erro passageiro (ex.: "serviço de IA sobrecarregado") não pode contar
@@ -4340,30 +4344,29 @@ async function _rodarAnaliseEdital(forcar){
     if(sucesso && _paginaEditalDetalhe && _paginaEditalDetalhe.edital) _paginaEditalDetalhe.edital.analisado = true;
     if(aindaAqui()) cont.innerHTML = html;
   }catch(e){
-    if(e && e.name === 'AbortError'){
-      // NÃO mexe em _analiseCache: se já existia um resultado válido de
-      // antes (ex.: usuário clicou "Realizar nova análise" e cancelou no
-      // meio), ele continua bom — cancelar não deve apagar o que já tinha.
-      if(aindaAqui()) cont.innerHTML = '<p class="muted">Análise cancelada.</p>'
-        + '<button class="btn" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">Realizar nova análise</button>';
-    } else if(aindaAqui()){
+    if(aindaAqui()){
       cont.innerHTML = '<p>Erro ao analisar o edital.</p>'
         + '<button class="btn ghost" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">tentar novamente</button>';
     }
   }finally{
     _analiseEmAndamento = false;
-    _analiseAbortController = null;
+    _analiseCancelamento = null;
   }
 }
 
-// Aborta a ESPERA no navegador na hora (feedback instantâneo) e avisa o
+// Feedback instantâneo (não espera o próximo tick do polling) e avisa o
 // servidor pra parar antes da próxima etapa (documentos/catálogo) — não
 // interrompe uma chamada à IA já em curso, só evita começar a seguinte.
-// fetch avulso (não usa api()) de propósito: é fire-and-forget, não deve
-// mexer na barra de carregamento global nem esperar resposta.
+// NÃO mexe em _analiseCache: se já existia um resultado válido de antes
+// (ex.: usuário clicou "Realizar nova análise" e cancelou no meio), ele
+// continua bom — cancelar não deve apagar o que já tinha.
 function cancelarAnalise(){
-  if(_analiseAbortController) _analiseAbortController.abort();
+  if(_analiseCancelamento) _analiseCancelamento.pedido = true;
   if(_paginaEditalId) fetch(`/api/editais/${_paginaEditalId}/analise/cancelar`, {method:'POST'}).catch(()=>{});
+  if(_abaEditalAtual === 'analise'){
+    $('#edital-conteudo').innerHTML = '<p class="muted">Análise cancelada.</p>'
+      + '<button class="btn" style="margin-top:6px" onclick="abaEdital(\'analise\',true)">Realizar nova análise</button>';
+  }
 }
 
 function _corpoItensEdital(d){
@@ -4576,8 +4579,37 @@ function baixarTodosDocumentos(){
   });
 }
 
-async function _corpoAnaliseEdital(id, forcar, signal){
-  const r=await api(`/api/editais/${id}/analise${forcar?'?forcar=true':''}`, signal?{signal}:undefined);
+// Dispara a análise em segundo plano (POST /analise/iniciar) e acompanha por
+// polling em /analise/status até terminar — mesmo padrão do completar-
+// descrição (_acompanharCompletarDescricao). Achado real: a análise pode
+// encadear até 3 chamadas de IA (edital -> documentos -> catálogo), a
+// última em lotes de até 90s cada quando o catálogo é grande — rodando
+// direto na request HTTP, o proxy da Railway derrubava a conexão antes de
+// terminar. O trabalho continuava no servidor e salvava o resultado (por
+// isso reabrir a aba sem clicar em nada já mostrava a análise pronta), mas
+// o navegador via só um erro de rede genérico. Devolve {sucesso, html} (ver
+// _renderResultadoAnalise) ou `null` se cancelado; lança erro pra qualquer
+// outra falha (tratado no catch de _rodarAnaliseEdital).
+async function _obterResultadoAnaliseComPolling(id, forcar, aindaAqui, cancelamento){
+  const rIniciar = await api(`/api/editais/${id}/analise/iniciar${forcar?'?forcar=true':''}`, {method:'POST'});
+  if(rIniciar && rIniciar.detail) throw new Error(rIniciar.detail);
+  // rIniciar.ok pode vir false com em_andamento=true (já tinha uma rodando —
+  // ex.: reabriu a aba) — não é erro, só entra direto no polling abaixo.
+  for(let tentativa=0; tentativa<200; tentativa++){
+    await new Promise(res=>setTimeout(res, tentativa===0?500:3000));
+    if(cancelamento.pedido || !aindaAqui()) return null;
+    let st;
+    try{ st = await api(`/api/editais/${id}/analise/status`); }
+    catch(e){ continue; }
+    if(cancelamento.pedido || !aindaAqui()) return null;
+    if(st.rodando) continue;
+    if(st.erro) throw new Error(st.erro);
+    return _renderResultadoAnalise(st.resultado || {});
+  }
+  throw new Error('Tempo esgotado esperando a análise.');
+}
+
+function _renderResultadoAnalise(r){
   if(r.status==='ok'){
     const flags=[];
     if(r.exige_amostra) flags.push('Exige amostra');
