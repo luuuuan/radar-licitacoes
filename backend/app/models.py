@@ -227,6 +227,13 @@ class Match(Base):
     prazo_avisado_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
     abertura_avisada: Mapped[bool] = mapped_column(Boolean, default=False)  # aviso de abertura próxima já enviado (e-mail)
     abertura_avisada_telegram: Mapped[bool] = mapped_column(Boolean, default=False)
+    # mesmas 3 flags acima, mas do 2º contato do Telegram (Usuario.telegram_chat_id_2)
+    # -- achado real: sem isso, o 1º contato a tocar num botão do menu marcava
+    # o item como visto pra CONTA inteira, e o outro contato tocando no mesmo
+    # botão depois via a lista vazia (o item nunca chegava até ele de verdade).
+    notificado_2: Mapped[bool] = mapped_column(Boolean, default=False)
+    prazo_avisado_telegram_2: Mapped[bool] = mapped_column(Boolean, default=False)
+    abertura_avisada_telegram_2: Mapped[bool] = mapped_column(Boolean, default=False)
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -334,6 +341,7 @@ class Documento(Base):
     # para não avisar o mesmo vencimento repetidamente (guarda a validade já avisada)
     avisado_para: Mapped[date | None] = mapped_column(Date, nullable=True)             # e-mail
     avisado_para_telegram: Mapped[date | None] = mapped_column(Date, nullable=True)    # menu do Telegram
+    avisado_para_telegram_2: Mapped[date | None] = mapped_column(Date, nullable=True)  # 2º contato do Telegram
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

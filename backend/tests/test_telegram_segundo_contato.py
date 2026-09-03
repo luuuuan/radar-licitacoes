@@ -116,7 +116,7 @@ def test_enviar_resumo_manda_pros_dois_contatos_configurados(monkeypatch):
     db = _sessao()
     u = _usuario(db, telegram_chat_id="chat1", telegram_chat_id_2="chat2", notif_telegram=True)
 
-    monkeypatch.setattr(telegram_menu, "contar_pendentes", lambda db, usuario: {"forte": 2})
+    monkeypatch.setattr(telegram_menu, "contar_pendentes", lambda db, usuario, slot=1: {"forte": 2})
     chamadas = []
     with patch("app.telegram_menu._tg.enviar_menu",
               side_effect=lambda chat_id, *a, **k: chamadas.append(chat_id) or True):

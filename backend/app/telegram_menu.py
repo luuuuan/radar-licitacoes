@@ -11,6 +11,14 @@ Telegram (ex.: `prazo_avisado_telegram`), separada da flag usada pelo
 e-mail (`prazo_avisado`). Se fosse a mesma flag, o e-mail (que roda na hora)
 marcaria o item como visto antes do usuário nunca ter tocado no botão do
 Telegram, e ele sumiria do menu sem o usuário ter escolhido ver.
+
+Cada uma dessas flags do Telegram, por sua vez, existe em PAR — uma pro
+contato principal (Usuario.telegram_chat_id) e uma pro 2º contato
+(Usuario.telegram_chat_id_2, ex.: sócio) -- ver "slot" nas funções abaixo.
+Achado real: antes de existir esse par, o 1º contato a tocar num botão
+marcava o item como visto pra conta inteira, e o outro contato tocando no
+MESMO botão via a lista vazia — o item nunca chegava até ele de verdade,
+mesmo ele nunca tendo recebido nada.
 """
 from __future__ import annotations
 import logging
@@ -26,17 +34,26 @@ from .notifications import telegram as _tg, formato
 log = logging.getLogger("telegram_menu")
 
 
-def _pendentes_forte(db: Session, usuario: Usuario) -> list[tuple[Match, Edital]]:
+def _slot_do_chat(usuario: Usuario, chat_id: str) -> int:
+    """1 = contato principal, 2 = contato adicional. Resolve a partir do
+    chat_id que efetivamente tocou no botão (quem chama já achou o Usuario
+    a partir desse mesmo chat_id, então sempre bate com um dos dois)."""
+    return 2 if chat_id and chat_id == usuario.telegram_chat_id_2 else 1
+
+
+def _pendentes_forte(db: Session, usuario: Usuario, slot: int = 1) -> list[tuple[Match, Edital]]:
+    campo = Match.notificado if slot == 1 else Match.notificado_2
     q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
          .where(Match.usuario_id == usuario.id, Match.nivel == "forte",
-                Match.notificado == False))  # noqa: E712
+                campo == False))  # noqa: E712
     return db.execute(q).all()
 
 
-def _pendentes_prazo(db: Session, usuario: Usuario) -> list[tuple[Match, Edital]]:
+def _pendentes_prazo(db: Session, usuario: Usuario, slot: int = 1) -> list[tuple[Match, Edital]]:
     hoje = date.today()
+    campo = Match.prazo_avisado_telegram if slot == 1 else Match.prazo_avisado_telegram_2
     q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
-         .where(Match.usuario_id == usuario.id, Match.prazo_avisado_telegram == False)  # noqa: E712
+         .where(Match.usuario_id == usuario.id, campo == False)  # noqa: E712
          .where(Edital.data_encerramento.is_not(None))
          .where(or_(Match.interessante == True, Match.nivel == "forte")))  # noqa: E712
     resultado = []
@@ -47,12 +64,13 @@ def _pendentes_prazo(db: Session, usuario: Usuario) -> list[tuple[Match, Edital]
     return resultado
 
 
-def _pendentes_abertura(db: Session, usuario: Usuario) -> list[tuple[Match, Edital]]:
+def _pendentes_abertura(db: Session, usuario: Usuario, slot: int = 1) -> list[tuple[Match, Edital]]:
     if not usuario.avisar_abertura:
         return []
     hoje = date.today()
+    campo = Match.abertura_avisada_telegram if slot == 1 else Match.abertura_avisada_telegram_2
     q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
-         .where(Match.usuario_id == usuario.id, Match.abertura_avisada_telegram == False,  # noqa: E712
+         .where(Match.usuario_id == usuario.id, campo == False,  # noqa: E712
                 Match.nivel == "forte")
          .where(Edital.data_abertura.is_not(None), Edital.data_abertura >= hoje))
     resultado = []
@@ -63,7 +81,7 @@ def _pendentes_abertura(db: Session, usuario: Usuario) -> list[tuple[Match, Edit
     return resultado
 
 
-def _pendentes_documento(db: Session, usuario: Usuario) -> list[Documento]:
+def _pendentes_documento(db: Session, usuario: Usuario, slot: int = 1) -> list[Documento]:
     hoje = date.today()
     docs = db.execute(
         select(Documento).where(Documento.usuario_id == usuario.id, Documento.ativo == True)  # noqa: E712
@@ -75,7 +93,8 @@ def _pendentes_documento(db: Session, usuario: Usuario) -> list[Documento]:
         dias = (d.data_validade - hoje).days
         if dias > settings.LEMBRETE_DOC_DIAS:
             continue
-        if d.avisado_para_telegram == d.data_validade:
+        avisado = d.avisado_para_telegram if slot == 1 else d.avisado_para_telegram_2
+        if avisado == d.data_validade:
             continue
         resultado.append(d)
     return resultado
@@ -90,62 +109,60 @@ CATEGORIAS = {
 }
 
 
-def _marcar_visto(categoria: str, registro) -> None:
+def _marcar_visto(categoria: str, registro, slot: int = 1) -> None:
+    sufixo = "" if slot == 1 else "_2"
     if categoria == "forte":
-        registro.notificado = True
+        setattr(registro, f"notificado{sufixo}", True)
     elif categoria == "prazo":
-        registro.prazo_avisado_telegram = True
+        setattr(registro, f"prazo_avisado_telegram{sufixo}", True)
     elif categoria == "abertura":
-        registro.abertura_avisada_telegram = True
+        setattr(registro, f"abertura_avisada_telegram{sufixo}", True)
     elif categoria == "documento":
-        registro.avisado_para_telegram = registro.data_validade
+        setattr(registro, f"avisado_para_telegram{sufixo}", registro.data_validade)
 
 
-def contar_pendentes(db: Session, usuario: Usuario) -> dict[str, int]:
-    return {chave: len(buscar(db, usuario)) for chave, (_, _, buscar, _) in CATEGORIAS.items()}
-
-
-def _chats_telegram(usuario: Usuario) -> list[str]:
-    """Contatos de Telegram vinculados a este usuário (1 ou 2 -- ver
-    Usuario.telegram_chat_id_2, um 2º contato que recebe os mesmos avisos)."""
-    return [c for c in (usuario.telegram_chat_id, usuario.telegram_chat_id_2) if c]
+def contar_pendentes(db: Session, usuario: Usuario, slot: int = 1) -> dict[str, int]:
+    return {chave: len(buscar(db, usuario, slot)) for chave, (_, _, buscar, _) in CATEGORIAS.items()}
 
 
 def enviar_resumo(db: Session, usuario: Usuario) -> bool:
     """Manda o menu com botões (uma linha por categoria com pendência) pra
-    TODOS os contatos de Telegram vinculados a este usuário. Não manda nada
-    se o usuário não tem nenhum Telegram conectado ou não há absolutamente
-    nada pendente em nenhuma categoria."""
-    chats = _chats_telegram(usuario)
-    if not (usuario.notif_telegram and chats):
+    cada contato de Telegram vinculado a este usuário — com a CONTAGEM
+    própria daquele contato (um pode já ter visto mais categorias que o
+    outro). Não manda nada pra um contato sem nada pendente pra ele."""
+    if not usuario.notif_telegram:
         return False
-    contagens = contar_pendentes(db, usuario)
-    pendentes = {k: v for k, v in contagens.items() if v > 0}
-    if not pendentes:
-        return False
-    botoes = [(f"{CATEGORIAS[k][0]} {CATEGORIAS[k][1]} ({v})", f"radar:{k}")
-             for k, v in pendentes.items()]
-    total = sum(pendentes.values())
-    titulo = f"📋 Você tem {total} aviso(s) novo(s)"
-    corpo = "Escolha o que quer ver agora:"
     enviou = False
-    for chat_id in chats:
+    for slot, chat_id in ((1, usuario.telegram_chat_id), (2, usuario.telegram_chat_id_2)):
+        if not chat_id:
+            continue
+        contagens = contar_pendentes(db, usuario, slot)
+        pendentes = {k: v for k, v in contagens.items() if v > 0}
+        if not pendentes:
+            continue
+        botoes = [(f"{CATEGORIAS[k][0]} {CATEGORIAS[k][1]} ({v})", f"radar:{k}")
+                 for k, v in pendentes.items()]
+        total = sum(pendentes.values())
+        titulo = f"📋 Você tem {total} aviso(s) novo(s)"
+        corpo = "Escolha o que quer ver agora:"
         enviou = _tg.enviar_menu(chat_id, titulo, corpo, botoes) or enviou
     return enviou
 
 
 def mostrar_categoria(db: Session, usuario: Usuario, categoria: str, chat_id: str) -> int:
     """Envia os editais/documentos pendentes daquela categoria (uma mensagem
-    por item, como já era) e marca todos como vistos. Retorna quantos
-    enviou. Chamado a partir do toque no botão (callback_query) -- `chat_id`
-    é o chat que TOCOU (pode ser o 1º ou o 2º contato do usuário); manda a
-    resposta pra ele especificamente, não pra um contato fixo, senão o 2º
-    contato tocando no botão faria a resposta ir pro 1º."""
+    por item, como já era) e marca todos como vistos PARA ESTE CONTATO.
+    Retorna quantos enviou. Chamado a partir do toque no botão
+    (callback_query) -- `chat_id` é o chat que TOCOU (pode ser o 1º ou o 2º
+    contato do usuário); manda a resposta pra ele especificamente, não pra
+    um contato fixo, senão o 2º contato tocando no botão faria a resposta
+    ir pro 1º."""
     cfg = CATEGORIAS.get(categoria)
     if not cfg:
         return 0
+    slot = _slot_do_chat(usuario, chat_id)
     emoji, label, buscar, tipo = cfg
-    pendentes = buscar(db, usuario)
+    pendentes = buscar(db, usuario, slot)
     if not pendentes:
         return 0
 
@@ -162,7 +179,7 @@ def mostrar_categoria(db: Session, usuario: Usuario, categoria: str, chat_id: st
             # mesmo jeito, e ele nunca mais era oferecido de novo (não tem
             # retry) mesmo sem ter sido entregue de verdade.
             if _tg.enviar_para_chat(chat_id, tit, corpo, botao_url=link):
-                _marcar_visto(categoria, m)
+                _marcar_visto(categoria, m, slot)
                 enviados += 1
     else:  # documento
         hoje = date.today()
@@ -180,7 +197,7 @@ def mostrar_categoria(db: Session, usuario: Usuario, categoria: str, chat_id: st
                     + (f"\nObs.: {formato._esc(d.observacao)}" if d.observacao else ""))
             if _tg.enviar_para_chat(chat_id, f"{emoji} {formato._esc(d.nome)}", corpo,
                                     botao_url=d.link or None, botao_texto="Abrir documento"):
-                _marcar_visto(categoria, d)
+                _marcar_visto(categoria, d, slot)
                 enviados += 1
 
     db.commit()

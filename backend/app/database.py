@@ -95,7 +95,12 @@ for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),
           ("prazo_avisado_telegram", "BOOLEAN DEFAULT FALSE"),
           ("abertura_avisada_telegram", "BOOLEAN DEFAULT FALSE"),
           ("interagido_em", "TIMESTAMP"),
-          ("status_atualizado_em", "TIMESTAMP")):
+          ("status_atualizado_em", "TIMESTAMP"),
+          # flags do 2º contato do Telegram, separadas das do 1º -- ver
+          # comentário em models.py (Match.notificado_2)
+          ("notificado_2", "BOOLEAN DEFAULT FALSE"),
+          ("prazo_avisado_telegram_2", "BOOLEAN DEFAULT FALSE"),
+          ("abertura_avisada_telegram_2", "BOOLEAN DEFAULT FALSE")):
     if _c not in _COLUNAS_NOVAS["matches"]:
         _COLUNAS_NOVAS["matches"].append(_c)
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])
@@ -105,7 +110,8 @@ if ("origem", "VARCHAR(10)") not in _COLUNAS_NOVAS["logs_coleta"]:
     _COLUNAS_NOVAS["logs_coleta"].append(("origem", "VARCHAR(10)"))
 _COLUNAS_NOVAS.setdefault("documentos", [])
 for _c in (("link", "VARCHAR(500)"), ("avisado_para_telegram", "DATE"), ("texto_extraido", "TEXT"),
-          ("arquivo_cifrado", "TEXT"), ("arquivo_nome", "VARCHAR(255)"), ("arquivo_tipo", "VARCHAR(100)")):
+          ("arquivo_cifrado", "TEXT"), ("arquivo_nome", "VARCHAR(255)"), ("arquivo_tipo", "VARCHAR(100)"),
+          ("avisado_para_telegram_2", "DATE")):
     if _c not in _COLUNAS_NOVAS["documentos"]:
         _COLUNAS_NOVAS["documentos"].append(_c)
 _COLUNAS_NOVAS.setdefault("produtos", [])
