@@ -37,7 +37,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
@@ -1477,7 +1477,12 @@ def listar_editais(
             q_sem_match = q_sem_match.where(Edital.data_abertura <= data_ate)
         if hoje:
             q_sem_match = q_sem_match.where(Edital.data_abertura == date.today())
-        q_sem_match = q_sem_match.order_by(Edital.coletado_em.desc()).limit(20)
+        # eager load de Edital.itens (selectinload = 1 query IN batch pra
+        # todos os editais da página, não 1 SELECT por edital dentro do loop
+        # abaixo) — achado real (auditoria do agente code-reviewer): sem
+        # isso, cada acesso a `ed.itens` no loop disparava um SELECT extra,
+        # até 20 (o limite desta consulta) numa busca só.
+        q_sem_match = q_sem_match.options(selectinload(Edital.itens)).order_by(Edital.coletado_em.desc()).limit(20)
         for ed in db.execute(q_sem_match).scalars().all():
             dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
             itens_batem = [it.descricao for it in ed.itens

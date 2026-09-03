@@ -270,6 +270,44 @@ def test_sem_match_limitado_a_20_resultados():
     assert len(r["sem_match"]) == 20
 
 
+def test_sem_match_nao_faz_n_mais_1_pra_carregar_itens():
+    """Achado real (auditoria do agente code-reviewer): o loop que monta
+    "itens_batem" acessava ed.itens sem eager loading -- um SELECT extra por
+    edital do bloco (até 20, o limite desta consulta), o mesmo padrão que o
+    código já evita de propósito pra lista principal (ver itens_por_unidade_map,
+    logo acima). selectinload(Edital.itens) reduz isso a no máximo 1 SELECT
+    em lote pra todos os editais da página."""
+    from sqlalchemy import event
+
+    db = _sessao()
+    u = _usuario(db)
+    for i in range(20):
+        _edital_sem_match(db, f"ed{i}", itens=["Grampeador de mesa 26/6", "Grampeador industrial"])
+
+    queries = []
+    engine = db.get_bind()
+
+    def _contar(conn, cursor, statement, parameters, context, executemany):
+        queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _contar)
+    try:
+        r = _listar(db, u, busca_item="grampeador")
+    finally:
+        event.remove(engine, "before_cursor_execute", _contar)
+
+    assert len(r["sem_match"]) == 20
+    # busca_item usa EXISTS (SELECT ... FROM itens_edital ...) em VÁRIAS
+    # queries desta rota (contagem, resultados, sem_match) -- "itens_edital"
+    # aparece em várias delas sem ser um SELECT de linhas completas. O que
+    # identifica de fato "carregar as linhas de ItemEdital" (seja o batch do
+    # eager load, seja uma lazy load por edital no caso de N+1) é a query
+    # começar com "SELECT itens_edital." — nenhuma das EXISTS começa assim.
+    selects_itens = [q for q in queries if q.strip().lower().startswith("select itens_edital.")]
+    assert len(selects_itens) <= 1, (
+        f"esperava no máximo 1 SELECT de linhas de itens_edital (eager load em lote), achou {len(selects_itens)}")
+
+
 def test_sem_match_respeita_filtro_de_uf():
     """Achado real: selecionar um estado e depois buscar por um item trazia
     editais de QUALQUER estado no bloco "sem análise automática ainda" — essa
