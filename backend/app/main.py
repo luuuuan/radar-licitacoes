@@ -1265,6 +1265,42 @@ def remover_produtos_varios(dados: ProdutosIdsIn,
 
 
 # --------------------------- Editais / Matches ------------------------ #
+# Busca por item (busca_item, GET /api/editais): achados reais reportados
+# pelo usuário —
+#   1) buscar "papel a4" não achava itens como "PAPEL SULFITE A4 75G"
+#      (a frase inteira precisava aparecer CONTÍGUA no texto; as palavras
+#      só batiam se estivessem exatamente naquela ordem, uma do lado da
+#      outra);
+#   2) buscar "caneta" trazia um item chamado "MACANETA PARA FECHADURA DE
+#      PORTA" (o PNCP grava sem cedilha) — "caneta" é um substring literal
+#      de "macaneta", sem fronteira de palavra nenhuma.
+# _condicoes_busca_item tokeniza em palavras (cada uma precisa aparecer,
+# em qualquer ordem — resolve o achado 1) e, no Postgres, usa regex com
+# fronteira de palavra (\y) pra cada uma (resolve o achado 2). SQLite (só
+# dev/teste local) não tem esse operador de regex nativo sem registrar uma
+# função customizada por conexão — cai pro substring de sempre, mais largo;
+# aceitável porque é só ambiente de desenvolvimento, produção roda Postgres.
+def _condicoes_busca_item(termo: str, eh_postgres: bool) -> list:
+    palavras = [p for p in termo.strip().lower().split() if p]
+    condicoes = []
+    for p in palavras:
+        col = func.lower(ItemEdital.descricao)
+        if eh_postgres:
+            condicoes.append(col.op("~")(r"\y" + re.escape(p) + r"\y"))
+        else:
+            condicoes.append(col.like(f"%{p}%"))
+    return condicoes
+
+
+def _item_bate_busca(descricao: str | None, palavras: list[str]) -> bool:
+    """Mesma regra de _condicoes_busca_item, mas em Python (usada pra
+    escolher QUAIS trechos de item mostrar como motivo no card "sem análise
+    automática" — precisa bater com o mesmo critério que decidiu incluir
+    aquele edital, senão o card aparece sem nenhum item destacado)."""
+    texto = (descricao or "").lower()
+    return all(re.search(r"\b" + re.escape(p) + r"\b", texto) for p in palavras)
+
+
 def _inicio_hoje_utc() -> datetime:
     """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
     (coletado_em é gravado em UTC). Serve para contar 'coletados hoje'."""
@@ -1326,12 +1362,14 @@ def listar_editais(
         filtro.append(Edital.data_abertura <= data_ate)
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
-    # que pedem isso, em vez de precisar abrir cada um pra conferir.
+    # que pedem isso, em vez de precisar abrir cada um pra conferir. Ver
+    # _condicoes_busca_item logo acima sobre tokenização por palavra +
+    # fronteira de palavra (Postgres).
+    eh_postgres = db.get_bind().dialect.name != "sqlite"
     if busca_item and busca_item.strip():
-        termo = f"%{busca_item.strip().lower()}%"
-        sub_busca = (select(ItemEdital.edital_id)
-                    .where(ItemEdital.edital_id == Edital.id)
-                    .where(func.lower(ItemEdital.descricao).like(termo)))
+        sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
+        for cond in _condicoes_busca_item(busca_item, eh_postgres):
+            sub_busca = sub_busca.where(cond)
         filtro.append(sub_busca.exists())
 
     if vista == "ativos":
@@ -1439,14 +1477,15 @@ def listar_editais(
     # gigante sem paginação.
     sem_match: list[dict] = []
     if busca_item and busca_item.strip():
-        termo = f"%{busca_item.strip().lower()}%"
+        palavras_busca = [p for p in busca_item.strip().lower().split() if p]
         sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
+        sub_itens_sm = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
+        for cond in _condicoes_busca_item(busca_item, eh_postgres):
+            sub_itens_sm = sub_itens_sm.where(cond)
         q_sem_match = (
             select(Edital)
             .where(~Edital.id.in_(sub_com_match))
-            .where(select(ItemEdital.edital_id)
-                  .where(ItemEdital.edital_id == Edital.id)
-                  .where(func.lower(ItemEdital.descricao).like(termo)).exists())
+            .where(sub_itens_sm.exists())
         )
         if vista == "ativos":
             q_sem_match = q_sem_match.where(
@@ -1486,7 +1525,7 @@ def listar_editais(
         for ed in db.execute(q_sem_match).scalars().all():
             dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
             itens_batem = [it.descricao for it in ed.itens
-                          if busca_item.strip().lower() in (it.descricao or "").lower()][:3]
+                          if _item_bate_busca(it.descricao, palavras_busca)][:3]
             sem_match.append({
                 "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
                 "municipio": ed.municipio, "modalidade": ed.modalidade,
