@@ -1880,7 +1880,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     dias = _dias_restantes_edital(ed)
     return {
         "edital": {
-            "id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+            "id": ed.id, "orgao": ed.orgao, "cnpj_orgao": ed.cnpj_orgao, "objeto": ed.objeto,
             "modalidade": ed.modalidade, "uf": ed.uf, "municipio": ed.municipio,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte, "link": ed.link,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,

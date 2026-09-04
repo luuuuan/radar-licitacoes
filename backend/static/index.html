@@ -4627,6 +4627,7 @@ function _renderResultadoAnalise(r){
       ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
 
       ${_paresHTML('Dados do órgão / pregão', [
+        ['CNPJ do órgão', _paginaEditalDetalhe?.edital?.cnpj_orgao ? mascaraDoc(_paginaEditalDetalhe.edital.cnpj_orgao) : ''],
         ['Nº do processo', orgao.numero_processo], ['Modo de disputa', orgao.modo_disputa],
         ['Critério de julgamento', orgao.criterio_julgamento], ['Plataforma', orgao.plataforma],
         ['Data da sessão', orgao.data_sessao], ['Pregoeiro/responsável', orgao.pregoeiro_responsavel],
@@ -4636,7 +4637,7 @@ function _renderResultadoAnalise(r){
 
       ${_paresHTML('Dados da proposta', [
         ['Validade da proposta', proposta.validade_dias], ['Prazo de entrega', proposta.prazo_entrega],
-        ['Local de entrega', proposta.local_entrega], ['Condições de pagamento', proposta.condicoes_pagamento],
+        ['Endereço/local de entrega', proposta.local_entrega], ['Condições de pagamento', proposta.condicoes_pagamento],
         ['Aceita marca/modelo similar', proposta.aceita_similar ? 'Sim' : ''],
         ['Identifica marca/modelo na proposta', proposta.identificacao_marca_modelo ? 'Sim' : ''],
         ['Prospecto/catálogo do produto', proposta.prospecto_catalogo],

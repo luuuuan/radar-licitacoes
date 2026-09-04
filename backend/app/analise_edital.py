@@ -36,7 +36,7 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 7
+VERSAO_PROMPT = 8
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -69,7 +69,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
   - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
   - "prazo_entrega": prazo de entrega/execução do objeto, como aparece no edital.
-  - "local_entrega": local de entrega ou execução, se especificado.
+  - "local_entrega": ENDEREÇO COMPLETO de entrega/execução (rua, número, bairro, cidade/UF), quando o edital informar um endereço literal — não só o nome do órgão. Se não houver endereço completo, use o local/unidade como aparecer (ex.: "almoxarifado central da Secretaria"). "" se não constar.
   - "condicoes_pagamento": forma e prazo de pagamento (ex.: "30 dias após atesto da nota fiscal").
   - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
   - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços e catálogo do produto no sistema").
@@ -560,6 +560,25 @@ def _parse_json(txt: str):
     return None
 
 
+def _prioridade_arquivo(a: dict) -> int:
+    """Prioriza retificação/errata/aditamento -- achado real (edital 127082):
+    quando existe uma retificação alterando data/condições, o edital
+    original sozinho já enche o limite de caracteres do prompt (MAX_TOTAL)
+    antes de `analisar()` sequer chegar a baixar a retificação -- a IA lia
+    só o texto desatualizado e devolvia a data errada. Colocando a
+    retificação primeiro, ela sempre entra no texto combinado (ver
+    `analisar()`: a lista final ainda é truncada em MAX_TOTAL, mas agora o
+    que sobra de fora é o final do edital original, não a correção)."""
+    t = (a.get("titulo") or "").lower()
+    if "retificaç" in t or "retificac" in t or "errata" in t or "aditamento" in t or "adendo" in t:
+        return 0
+    if "edital" in t:
+        return 1
+    if "termo de referência" in t or "termo referencia" in t or "anexo" in t:
+        return 2
+    return 3
+
+
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> dict:
     """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
     api_key: chave Gemini do próprio usuário (obrigatória, cai para a global)."""
@@ -568,16 +587,10 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     if not arquivos:
         return {"status": "sem_arquivo"}
 
-    # prioriza o edital principal, depois termo de referência/anexos (onde
-    # costumam estar as exigências de habilitação e a garantia contratual)
-    def _prioridade(a):
-        t = (a.get("titulo") or "").lower()
-        if "edital" in t:
-            return 0
-        if "termo de referência" in t or "termo referencia" in t or "anexo" in t:
-            return 1
-        return 2
-    candidatos = sorted(arquivos, key=_prioridade)
+    # prioriza retificação/errata, depois o edital principal, depois termo de
+    # referência/anexos (onde costumam estar as exigências de habilitação e
+    # a garantia contratual) -- ver _prioridade_arquivo
+    candidatos = sorted(arquivos, key=_prioridade_arquivo)
 
     # baixa e combina até 2 documentos (ex.: edital + termo de referência),
     # respeitando o limite total de caracteres do prompt
