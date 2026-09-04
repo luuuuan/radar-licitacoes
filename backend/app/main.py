@@ -2389,6 +2389,27 @@ def _listar_arquivos_pncp(ed: Edital) -> dict:
             "arquivos": arquivos, "portal": ed.link}
 
 
+def _arquivos_pncp_cache(db: Session, ed: Edital, forcar: bool = False) -> dict:
+    """Mesmo resultado de _listar_arquivos_pncp, mas cacheado em
+    Edital.arquivos_pncp -- achado real: a aba Documentos e a Análise por
+    IA buscavam essa lista no PNCP cada uma por conta própria, toda vez que
+    a tela era aberta, mesmo já tendo sido buscada com sucesso antes (o
+    PNCP raramente muda a lista de arquivos de um edital já publicado).
+    Sem forcar, usa o cache se já existir. Só GRAVA um resultado novo
+    quando a busca teve sucesso de verdade (status "ok"/"vazio") -- uma
+    falha passageira (rede/PNCP fora do ar) nunca sobrescreve um cache bom
+    nem é salva como se fosse definitiva, pra continuar tentando de novo
+    da próxima vez (mesmo raciocínio da correção de erro_arquivos_pncp)."""
+    if not forcar and ed.arquivos_pncp is not None:
+        return {**ed.arquivos_pncp, "portal": ed.link}
+    resultado = _listar_arquivos_pncp(ed)
+    if resultado["status"] in ("ok", "vazio"):
+        ed.arquivos_pncp = {"status": resultado["status"], "arquivos": resultado["arquivos"]}
+        ed.arquivos_pncp_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+        db.commit()
+    return resultado
+
+
 def _backfill_unidade_medida(ed: Edital) -> int:
     """Busca no PNCP a unidadeMedida de cada item do edital e preenche nos
     que ainda estão sem (achado real: esse campo não era capturado antes —
@@ -2549,7 +2570,7 @@ def documentos_edital(edital_id: int, user: Usuario = Depends(_auth.get_current_
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
-    return _listar_arquivos_pncp(ed)
+    return _arquivos_pncp_cache(db, ed)
 
 
 @app.get("/api/documentos/baixar")
@@ -2892,9 +2913,14 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         if resultado:
             resultado["cache"] = True
         else:
-            docs = _listar_arquivos_pncp(ed)
+            # cacheado em Edital.arquivos_pncp (_arquivos_pncp_cache) -- só
+            # busca de novo no PNCP quando forcar=True (usuário clicou
+            # "Realizar nova análise"), pra pegar documento novo publicado
+            # depois (ex.: retificação) sem ficar refazendo essa busca toda
+            # vez que a aba é aberta.
+            docs = _arquivos_pncp_cache(db, ed, forcar=forcar)
             # achado real (edital 127468): a aba Documentos e a Análise por
-            # IA chamam a MESMA _listar_arquivos_pncp, mas em requisições
+            # IA chamam a MESMA busca de arquivos, mas em requisições
             # diferentes -- uma falha passageira na busca ao PNCP (timeout,
             # rede, 5xx) faz docs["arquivos"] vir vazio por um motivo bem
             # diferente de "este edital não tem arquivo publicado", e as
@@ -3019,7 +3045,7 @@ def _rodar_completar_descricao_bg(edital_id: int):
 
         itens_edital = db.execute(
             select(ItemEdital).where(ItemEdital.edital_id == edital_id)).scalars().all()
-        docs = _listar_arquivos_pncp(ed)
+        docs = _arquivos_pncp_cache(db, ed)
         if _completar_descricao_cancelar.get(edital_id):
             _completar_descricao_status[edital_id] = {
                 "rodando": False, "erro": None, "status": "cancelado", "atualizados": 0}

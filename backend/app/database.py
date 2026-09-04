@@ -64,6 +64,8 @@ _COLUNAS_NOVAS = {
         ("analise_em", "TIMESTAMP"),
         ("itens_completados_em", "TIMESTAMP"),
         ("itens_completados_qtd", "INTEGER DEFAULT 0"),
+        ("arquivos_pncp", "JSON"),
+        ("arquivos_pncp_em", "TIMESTAMP"),
     ],
     "produtos_user": [("usuario_id", "INTEGER")],
 }

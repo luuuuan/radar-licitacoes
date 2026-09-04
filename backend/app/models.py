@@ -156,6 +156,16 @@ class Edital(Base):
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # cache da lista de arquivos/anexos publicados no PNCP (ver
+    # _arquivos_pncp_cache em main.py) -- achado real: a aba Documentos e a
+    # Análise por IA buscavam essa lista no PNCP toda vez, cada uma por
+    # conta própria, mesmo já tendo sido buscada com sucesso antes. Só é
+    # sobrescrita quando a busca funciona de verdade (nunca com uma falha
+    # passageira de rede/PNCP) -- ver mesmo raciocínio em
+    # _dias_restantes_edital sobre não confundir "falha ao buscar" com
+    # "não existe".
+    arquivos_pncp: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    arquivos_pncp_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # já tentou completar a descrição dos itens lendo o PDF (ver
     # app/itens_pdf.py) — só marca quando a tentativa TERMINA com um
