@@ -4623,6 +4623,7 @@ function _renderResultadoAnalise(r){
     const orgao = r.dados_orgao || {};
     const proposta = r.dados_proposta || {};
     return {sucesso: true, html: `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
+      ${r.analise_incompleta?`<p style="margin:6px 0;padding:8px 10px;border:1.5px solid var(--destructive);border-radius:8px;color:var(--destructive);font-size:13px">O texto do edital parece ter sido cortado antes do fim — esta análise pode não cobrir todos os documentos/exigências. Confira o edital original.</p>`:''}
       ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
       ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
 

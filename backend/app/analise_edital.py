@@ -36,29 +36,29 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 8
+VERSAO_PROMPT = 9
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
 
 - "objeto": string. Resumo claro do que está sendo contratado, em 1 a 2 frases.
 
-- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array de strings. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Cada exigência entra em UMA ÚNICA categoria — mesmo quando o edital diz que um cadastro (ex.: Sicaf) substitui documentação de VÁRIAS categorias ao mesmo tempo (jurídica, fiscal, econômico-financeira), liste-o UMA VEZ SÓ, na categoria mais natural pra ele; nunca repita a mesma exigência em duas categorias diferentes. Vazio (não a chave, a lista) se essa categoria não constar:
-  - "juridica": habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
-  - "fiscal_trabalhista": regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
-  - "tecnica": qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
-  - "economico_financeira": qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
-  - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Cada objeto:
+- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Cada exigência entra em UMA ÚNICA categoria — mesmo quando o edital diz que um cadastro (ex.: Sicaf) substitui documentação de VÁRIAS categorias ao mesmo tempo (jurídica, fiscal, econômico-financeira), liste-o UMA VEZ SÓ, na categoria mais natural pra ele; nunca repita a mesma exigência em duas categorias diferentes. Cada chave recebe uma lista vazia [] (nunca false, nunca a chave ausente) se essa categoria não constar:
+  - "juridica": array de strings. Habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
+  - "fiscal_trabalhista": array de strings. Regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
+  - "tecnica": array de strings. Qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
+  - "economico_financeira": array de strings. Qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
+  - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Se não houver nenhuma declaração, use lista vazia []. Cada objeto:
     - "nome": string. A declaração, como aparece no edital.
     - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false se a exigência é só de CONTEÚDO/COMPROMISSO e não há modelo pronto no edital — a empresa precisa redigir seu próprio texto. null se não der pra saber pelo texto disponível.
     - "detalhe": string curta (opcional). Ex.: "modelo no Anexo IV do edital", "sem modelo — declarar conforme exigência do item 8.2". "" se não houver nada relevante a acrescentar.
 
-- "requisitos_tecnicos": array de strings. Especificações TÉCNICAS que o produto/serviço contratado (o objeto em si) precisa atender: normas/certificações do produto, garantia mínima do produto, assistência técnica, nível de serviço (SLA), embalagem. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
+- "requisitos_tecnicos": array de strings. Especificações TÉCNICAS do produto/serviço contratado (o objeto em si) que NÃO tenham campo próprio neste JSON: normas/certificações do produto, embalagem, nível de serviço (SLA), condições de conservação. NÃO coloque aqui garantia do produto, assistência técnica nem entrega/instalação técnica — essas têm campos dedicados em "dados_proposta" (garantia_produto, assistencia_tecnica, entrega_tecnica) e devem ir SÓ lá. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
 
 - "dados_orgao": objeto com (string vazia "" em qualquer chave que não constar):
   - "numero_processo": número do processo administrativo/edital.
   - "modo_disputa": "aberto", "fechado", "aberto e fechado" ou "".
-  - "criterio_julgamento": ex.: "menor preço", "maior desconto", "técnica e preço".
+  - "criterio_julgamento": o CRITÉRIO de escolha do vencedor. Ex.: "menor preço", "maior desconto", "técnica e preço". (Diferente de "julgamento", que é a unidade de disputa — ver abaixo.)
   - "plataforma": sistema/portal onde ocorre a sessão/disputa (ex.: Compras.gov.br, BLL, Portal de Compras Públicas).
   - "data_sessao": data e horário da sessão pública de abertura/disputa, como aparece no edital.
   - "pregoeiro_responsavel": nome do pregoeiro/agente de contratação responsável.
@@ -69,7 +69,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
   - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
   - "prazo_entrega": prazo de entrega/execução do objeto, como aparece no edital.
-  - "local_entrega": ENDEREÇO COMPLETO de entrega/execução (rua, número, bairro, cidade/UF), quando o edital informar um endereço literal — não só o nome do órgão. Se não houver endereço completo, use o local/unidade como aparecer (ex.: "almoxarifado central da Secretaria"). "" se não constar.
+  - "local_entrega": ENDEREÇO COMPLETO de entrega/execução (rua, número, bairro, cidade/UF), quando o edital informar um endereço literal — não só o nome do órgão. Se não houver endereço completo, use o local/unidade como aparecer (ex.: "almoxarifado central da Secretaria"). Se o edital for Registro de Preços e disser que o local será definido depois (ex.: "conforme ordem de fornecimento"), registre isso literalmente. "" se não constar.
   - "condicoes_pagamento": forma e prazo de pagamento (ex.: "30 dias após atesto da nota fiscal").
   - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
   - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços e catálogo do produto no sistema").
@@ -86,11 +86,14 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "exige_amostra": boolean. true se exigir amostra ou prova de conceito.
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
 - "exclusivo_me_epp": boolean. true se o edital (ou algum lote/item) for exclusivo ou tiver cota reservada para microempresa/EPP (LC 123/2006, art. 47/48).
-- "julgamento": string. "lote" se a disputa/adjudicação é por lote fechado (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
+- "julgamento": string. A UNIDADE de adjudicação (não confundir com criterio_julgamento, que é o critério de preço): "lote" se a disputa/adjudicação é por lote fechado (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
 - "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
-- "pontos_atencao": array de strings (máx. 6). Cláusulas que merecem atenção: garantia exigida, prazo de entrega curto, exigências específicas, penalidades relevantes.
+- "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
+- "pontos_atencao": array de strings (máx. 6). Cláusulas que merecem atenção que NÃO estejam já capturadas nos campos estruturados acima (garantia, prazo curto, exigências específicas, penalidades relevantes) — salvo quando forem críticas o bastante pra valer o reforço. Se "analise_incompleta" for true, inclua aqui um aviso de que a análise de habilitação pode estar incompleta por truncamento do texto.
 
-Regras: não invente nada que não esteja no texto. Se algo não constar, use lista vazia, string vazia ou false — nunca omita uma chave. Responda em português. Seja específico e completo em "documentos_habilitacao": o usuário vai separar cada certidão a partir dessa lista antes de enviar a proposta, então esquecer um documento é pior do que listar um a mais.
+Regras de tipo (importante pro parsing): cada chave é obrigatória e nunca omitida. Um campo de LISTA vazio recebe [] (nunca false, nunca ""). Um campo de TEXTO vazio recebe "" (nunca false, nunca []). Um campo BOOLEANO recebe true ou false. Nunca troque um tipo pelo outro — em especial, "documentos_habilitacao.declaracoes" e todas as chaves de "documentos_habilitacao" são sempre listas, mesmo vazias.
+
+Regras gerais: não invente nada que não esteja no texto. Responda em português. Seja específico e completo em "documentos_habilitacao": o usuário vai separar cada certidão a partir dessa lista antes de enviar a proposta, então esquecer um documento é pior do que listar um a mais.
 
 OBJETO (resumo do PNCP): {objeto}
 
@@ -709,6 +712,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "exclusivo_me_epp": bool(data.get("exclusivo_me_epp")),
         "julgamento": s(data.get("julgamento")),
         "garantia_contratual": s(data.get("garantia_contratual")),
+        "analise_incompleta": bool(data.get("analise_incompleta")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
     }
 
