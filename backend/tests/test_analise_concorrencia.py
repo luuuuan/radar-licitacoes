@@ -53,8 +53,6 @@ def test_duas_requisicoes_concorrentes_pro_mesmo_edital_chamam_a_ia_uma_vez_so(m
     u2 = Usuario(nome="Teste 2", email="t2@t.com", senha_hash="x")
     db_setup.add_all([u1, u2])
     db_setup.commit()
-    # id_externo sem "/" não parseia em (cnpj, ano, seq) -> _listar_arquivos_pncp
-    # cai no caminho "sem_ref" sem fazer nenhuma chamada de rede de verdade.
     ed = Edital(fonte="PNCP", id_externo="sem-ref-valida", orgao="Orgao",
                 objeto="Aquisicao de material", uf="SP")
     db_setup.add(ed)
@@ -72,6 +70,14 @@ def test_duas_requisicoes_concorrentes_pro_mesmo_edital_chamam_a_ia_uma_vez_so(m
 
     monkeypatch.setattr(ia_module, "analisar", _analisar_fake)
     monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
+    # busca de arquivos no PNCP encurtada -- sem isso, cairia numa chamada de
+    # rede de verdade (ou, com id_externo inválido, no status "sem_ref", que
+    # agora é tratado como falha de busca, não "sem arquivo" -- ver achado
+    # real no próprio analise_edital()/main.py). "vazio" = busca funcionou,
+    # só não achou nenhum arquivo -- deixa a análise seguir até chamar a IA,
+    # que é o que este teste quer observar.
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed: {"status": "vazio", "arquivos": [], "portal": None})
 
     resultados = [None, None]
 

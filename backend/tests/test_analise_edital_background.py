@@ -67,6 +67,12 @@ def test_iniciar_dispara_e_status_reflete_conclusao(monkeypatch, tmp_path):
     monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None: {
         "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
         "objeto": objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})
+    # id_externo "sem-ref-valida" não parseia em (cnpj, ano, seq) -> sem
+    # isso, _listar_arquivos_pncp cairia em "sem_ref" (falha de busca, não
+    # "sem arquivo" -- ver test_analise_edital_erro_arquivos_pncp.py) e
+    # nunca chegaria a chamar o analisar() acima.
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed_: {"status": "vazio", "arquivos": [], "portal": None})
 
     r = app_main.analise_edital_iniciar(ed.id, BackgroundTasks(), forcar=False, user=u, db=db)
     assert r == {"ok": True, "em_andamento": True}
@@ -119,6 +125,8 @@ def test_bg_com_erro_fica_registrado_no_status_sem_derrubar(monkeypatch, tmp_pat
     u, ed = _usuario_e_edital(db)
 
     monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed_: {"status": "vazio", "arquivos": [], "portal": None})
     def _explode(*a, **k):
         raise RuntimeError("falha simulada da IA")
     monkeypatch.setattr(ia_module, "analisar", _explode)
@@ -143,6 +151,8 @@ def test_status_e_isolado_por_usuario_nao_vaza_catalogo_entre_contas(monkeypatch
     db.commit()
 
     monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed_: {"status": "vazio", "arquivos": [], "portal": None})
     monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None: {
         "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
         "objeto": objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})

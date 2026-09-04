@@ -2893,7 +2893,19 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             resultado["cache"] = True
         else:
             docs = _listar_arquivos_pncp(ed)
-            resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+            # achado real (edital 127468): a aba Documentos e a Análise por
+            # IA chamam a MESMA _listar_arquivos_pncp, mas em requisições
+            # diferentes -- uma falha passageira na busca ao PNCP (timeout,
+            # rede, 5xx) faz docs["arquivos"] vir vazio por um motivo bem
+            # diferente de "este edital não tem arquivo publicado", e as
+            # duas coisas viravam a mesma mensagem enganosa pro usuário.
+            # Só trata como "sem arquivo" quando a busca realmente teve
+            # sucesso e voltou vazia (status "ok"/"vazio"); qualquer outro
+            # status é uma falha de busca, não ausência de documento.
+            if docs["status"] not in ("ok", "vazio"):
+                resultado = {"status": "erro_arquivos_pncp", "detalhe": docs["status"]}
+            else:
+                resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
             if resultado.get("status") == "ok":
                 ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
                 ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
