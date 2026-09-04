@@ -28,10 +28,11 @@ def _usuario(db):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, data_abertura=None):
+def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
+                      data_abertura=None, data_encerramento=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
-                data_abertura=data_abertura)
+                data_abertura=data_abertura, data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -41,10 +42,11 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None, 
     return ed
 
 
-def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP", valor_estimado=None):
+def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP",
+                      valor_estimado=None, data_encerramento=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
                objeto="Aquisicao", uf=uf, data_abertura=data_abertura,
-               valor_estimado=valor_estimado)
+               valor_estimado=valor_estimado, data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -257,6 +259,70 @@ def test_sem_match_respeita_vista_ativos_por_padrao():
     r = _listar(db, u, busca_item="grampeador")
 
     assert r["sem_match"] == []
+
+
+# --------- "ativo" x "encerrado" usa o prazo EFETIVO (data_encerramento --------- #
+# quando existe, senão data_abertura), não só data_abertura --------- #
+# Achado real (edital 127082, reportado pelo usuário): data_abertura no
+# passado não significa que a janela de propostas fechou -- data_encerramento
+# (prazo final no PNCP) pode estar no futuro, e o edital continua aceitando
+# propostas normalmente. Ver _dias_restantes_edital em app/main.py.
+
+def test_vista_ativos_inclui_edital_com_abertura_passada_mas_encerramento_futuro():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje - timedelta(days=5),
+                           data_encerramento=hoje + timedelta(days=10))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["dias_restantes"] == 10
+
+
+def test_vista_ativos_exclui_edital_com_abertura_e_encerramento_passados():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    _edital_com_match(db, u, "ed1",
+                      data_abertura=hoje - timedelta(days=20),
+                      data_encerramento=hoje - timedelta(days=5))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["total"] == 0
+
+
+def test_dias_restantes_antes_da_abertura_conta_ate_abertura_nao_ate_encerramento():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje + timedelta(days=3),
+                           data_encerramento=hoje + timedelta(days=40))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["dias_restantes"] == 3
+
+
+def test_sem_match_inclui_edital_com_abertura_passada_mas_encerramento_futuro():
+    hoje = date.today()
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_sem_match(db, "ed-janela-aberta", itens=["Grampeador de mesa"],
+                           data_abertura=hoje - timedelta(days=5),
+                           data_encerramento=hoje + timedelta(days=10))
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed.id
+    assert r["sem_match"][0]["dias_restantes"] == 10
 
 
 def test_sem_match_limitado_a_20_resultados():

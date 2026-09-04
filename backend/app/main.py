@@ -1301,6 +1301,26 @@ def _item_bate_busca(descricao: str | None, palavras: list[str]) -> bool:
     return all(re.search(r"\b" + re.escape(p) + r"\b", texto) for p in palavras)
 
 
+def _dias_restantes_edital(ed: Edital) -> int | None:
+    """Dias pro badge/ordenação "faltam X dias" / "Encerrado" dos cards.
+
+    Achado real (edital 127082): antes da janela abrir, o número certo é
+    dias até data_abertura (dataAberturaProposta no PNCP) -- é o que o
+    usuário quer ver no calendário/agenda antes do evento acontecer. Mas
+    usar SÓ data_abertura depois que ela já passou marca como "Encerrado"
+    um edital cuja janela de propostas ainda está aberta (data_abertura no
+    passado com data_encerramento no futuro é normal, não indica erro) --
+    dias_restantes negativo tem que refletir o prazo FINAL de verdade
+    (data_encerramento), não só o início. Sem data_encerramento cadastrada,
+    cai de volta pra data_abertura (mesmo comportamento de antes, única
+    informação disponível)."""
+    hoje = date.today()
+    if ed.data_abertura and hoje < ed.data_abertura:
+        return (ed.data_abertura - hoje).days
+    limite = ed.data_encerramento or ed.data_abertura
+    return (limite - hoje).days if limite else None
+
+
 def _inicio_hoje_utc() -> datetime:
     """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
     (coletado_em é gravado em UTC). Serve para contar 'coletados hoje'."""
@@ -1372,15 +1392,19 @@ def listar_editais(
             sub_busca = sub_busca.where(cond)
         filtro.append(sub_busca.exists())
 
+    # "prazo efetivo": data_encerramento (fim do recebimento de propostas no
+    # PNCP) quando existe, senão cai pra data_abertura -- achado real
+    # (edital 127082): um edital com data_abertura passada pode ter
+    # data_encerramento no futuro (janela de propostas ainda aberta); usar
+    # só data_abertura pra decidir "ativo x encerrado" marcava esse caso
+    # como encerrado incorretamente. Ver _dias_restantes_edital, mesma
+    # lógica pro badge/ordenação da lista.
+    prazo_efetivo = func.coalesce(Edital.data_encerramento, Edital.data_abertura)
     if vista == "ativos":
-        # por pedido do usuário, "prazo" aqui é a abertura do recebimento de
-        # propostas (data_abertura/dataAberturaProposta no PNCP), não o
-        # encerramento -- sem data ou data >= hoje conta como ativo
-        filtro.append((Edital.data_abertura.is_(None)) |
-                      (Edital.data_abertura >= hoje_data))
+        filtro.append((prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje_data))
     elif vista == "encerrados":
         # prazo passou E eu participei (proposta enviada / ganho / perdido)
-        filtro.append(Edital.data_abertura < hoje_data)
+        filtro.append(prazo_efetivo < hoje_data)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
@@ -1389,8 +1413,8 @@ def listar_editais(
         select(func.count()).select_from(base.subquery())
     ) or 0
 
-    ordem = (Match.score.desc(), Edital.data_abertura.asc()) if vista == "ativos" \
-        else (Edital.data_abertura.desc(),)
+    ordem = (Match.score.desc(), prazo_efetivo.asc()) if vista == "ativos" \
+        else (prazo_efetivo.desc(),)
     q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
@@ -1429,7 +1453,7 @@ def listar_editais(
 
     out = []
     for match, ed in linhas:
-        dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
+        dias = _dias_restantes_edital(ed)
         detalhe = match.detalhe
         itens_compativeis = match.itens_compativeis
         if detalhe and detalhe.get("itens"):
@@ -1489,7 +1513,7 @@ def listar_editais(
         )
         if vista == "ativos":
             q_sem_match = q_sem_match.where(
-                (Edital.data_abertura.is_(None)) | (Edital.data_abertura >= hoje_data))
+                (prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje_data))
         # mesmos filtros de edital aplicados na busca principal (uf, valor,
         # tipo, hoje, data_de/data_ate) — achado real: esta consulta só levava
         # em conta o termo buscado e a "vista", ignorando os demais filtros da
@@ -1523,7 +1547,7 @@ def listar_editais(
         # até 20 (o limite desta consulta) numa busca só.
         q_sem_match = q_sem_match.options(selectinload(Edital.itens)).order_by(Edital.coletado_em.desc()).limit(20)
         for ed in db.execute(q_sem_match).scalars().all():
-            dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
+            dias = _dias_restantes_edital(ed)
             itens_batem = [it.descricao for it in ed.itens
                           if _item_bate_busca(it.descricao, palavras_busca)][:3]
             sem_match.append({
@@ -1853,7 +1877,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
 
-    dias = (ed.data_abertura - date.today()).days if ed.data_abertura else None
+    dias = _dias_restantes_edital(ed)
     return {
         "edital": {
             "id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
@@ -2421,12 +2445,17 @@ def _rodar_backfill_unidade_bg():
         hoje = date.today()
         sub_acompanhados = select(Match.edital_id).where(
             Match.status.in_(("proposta_enviada", "ganho", "perdido")))
+        # prazo efetivo = data_encerramento se houver, senão data_abertura --
+        # ver _dias_restantes_edital sobre por que só data_abertura marca
+        # como "não mais ativo" editais cuja janela de propostas continua
+        # aberta depois da data de abertura.
+        prazo_efetivo = func.coalesce(Edital.data_encerramento, Edital.data_abertura)
         eds = db.execute(
             select(Edital)
             .where(Edital.itens.any(ItemEdital.unidade_medida.is_(None)))
             .where(
-                (Edital.data_abertura.is_(None))
-                | (Edital.data_abertura >= hoje)
+                (prazo_efetivo.is_(None))
+                | (prazo_efetivo >= hoje)
                 | (Edital.id.in_(sub_acompanhados))
             )
         ).scalars().unique().all()
@@ -3378,7 +3407,12 @@ def logs(user: Usuario = Depends(_auth.get_current_user),
 def resumo(user: Usuario = Depends(_auth.get_current_user),
            db: Session = Depends(get_session)):
     hoje = date.today()
-    ativo = (Edital.data_abertura.is_(None)) | (Edital.data_abertura >= hoje)
+    # prazo efetivo = data_encerramento se houver, senão data_abertura --
+    # mesma lógica de listar_editais/_dias_restantes_edital (ver comentário
+    # lá: data_abertura sozinha marca como encerrado um edital cuja janela
+    # de propostas ainda está aberta).
+    prazo_efetivo = func.coalesce(Edital.data_encerramento, Edital.data_abertura)
+    ativo = (prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje)
     meu = Match.usuario_id == user.id
 
     total_prod = db.scalar(

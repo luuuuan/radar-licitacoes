@@ -1043,7 +1043,7 @@
         </div>
         <div class="field">
           <label>Início do recebimento de propostas
-            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data em que a janela de propostas abre no PNCP (dataAberturaProposta) — é a mesma data do "faltam X dias" mostrado nos cards e no calendário, não o prazo final de encerramento.</span></span>
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data em que a janela de propostas abre no PNCP (dataAberturaProposta) — este filtro e o calendário usam essa data. Já o "faltam X dias" dos cards muda de sentido conforme a janela: antes de abrir, mostra os dias até abrir; depois de aberta, mostra os dias até o prazo final de encerramento.</span></span>
           </label>
           <div style="display:flex;gap:6px">
             <input type="date" id="f-data-de" onchange="loadEditais()" style="width:50%">

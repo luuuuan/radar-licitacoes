@@ -24,10 +24,11 @@ def _usuario(db):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, valor_estimado=None, data_abertura=None):
+def _edital_com_match(db, usuario, id_externo, valor_estimado=None, data_abertura=None,
+                      data_encerramento=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
-                data_abertura=data_abertura)
+                data_abertura=data_abertura, data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.5, nivel="medio"))
@@ -73,3 +74,35 @@ def test_valor_do_dia_ignora_edital_sem_valor_estimado():
 
     assert r["do_dia"] == 2
     assert r["valor_do_dia"] == 2000.0
+
+
+def test_editais_ativos_conta_edital_com_abertura_passada_mas_encerramento_futuro():
+    """Achado real (edital 127082, reportado pelo usuário): data_abertura no
+    passado não significa que a janela de propostas fechou -- se
+    data_encerramento (prazo final no PNCP) está no futuro, o edital
+    continua ativo. Ver _dias_restantes_edital em app/main.py."""
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.date.today()
+    _edital_com_match(db, u, "ed1",
+                      data_abertura=hoje - datetime.timedelta(days=5),
+                      data_encerramento=hoje + datetime.timedelta(days=10))
+
+    r = resumo(user=u, db=db)
+
+    assert r["editais"] == 1
+
+
+def test_editais_ativos_nao_conta_edital_com_encerramento_passado():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.date.today()
+    _edital_com_match(db, u, "ed1",
+                      data_abertura=hoje - datetime.timedelta(days=20),
+                      data_encerramento=hoje - datetime.timedelta(days=5))
+
+    r = resumo(user=u, db=db)
+
+    assert r["editais"] == 0
