@@ -1867,6 +1867,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
+            "unidade_medida": it.unidade_medida,
             "compativel": compativel,
             "confianca": confianca,
             "confirmado_manualmente": confirmado,

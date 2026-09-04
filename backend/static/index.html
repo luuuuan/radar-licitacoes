@@ -4392,7 +4392,7 @@ function _corpoItensEdital(d){
         </div>
         ${it.alerta_embalagem?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`
           :(it.alerta_margem_extrema?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ Margem muito fora do normal. Confira se o preço de custo cadastrado deste produto está certo — ou pode ser que este item realmente não valha a pena disputar.</div>`:'')}
-        <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}</div>`;
+        <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}${it.unidade_medida?` · unidade: ${esc(it.unidade_medida)}`:''}</div>`;
       if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
         const siteForn = linkSeguro(f.fornecedor_site);
         bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` <a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:6px;padding:2px 8px;font-size:11px">abrir página do item ↗</a>`:''}</div>`;
@@ -4421,7 +4421,7 @@ function _corpoItensEdital(d){
       if(it.sugestoes && it.sugestoes.length) bloco += _seletorSugestaoHtml(it, true);
     } else {
       const temSugestoes = it.sugestoes && it.sugestoes.length;
-      bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}</div>`;
+      bloco=`<div class="muted" style="font-size:12px;margin-top:4px">Valor do órgão: ${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}${it.quantidade?` · qtd: ${esc(it.quantidade)}`:''}${it.unidade_medida?` · unidade: ${esc(it.unidade_medida)}`:''}</div>`;
       if(temSugestoes){
         bloco += `<div style="margin-top:6px;font-size:12px;font-weight:600;color:var(--medio)">⚠ Sugestão — confirme o produto</div>`
           + _seletorSugestaoHtml(it, false);
@@ -4526,6 +4526,7 @@ function abrirDetalheItem(numero){
       ${_paresHTML('Do edital', [
         ['Valor do órgão (unit.)', it.valor_orgao!=null?fmtMoeda(it.valor_orgao):null],
         ['Quantidade pedida', it.quantidade],
+        ['Unidade pedida pelo órgão', it.unidade_medida],
       ])}
       ${p ? _paresHTML('Produto do catálogo', [
         ['Descrição', p.descricao],
