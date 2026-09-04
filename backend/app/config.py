@@ -122,6 +122,13 @@ class Settings(BaseSettings):
 
     # gemini-2.5-flash será desligado em 16/10/2026 -> gemini-3.5-flash
     IA_MODELO_TEXTO: str = "gemini-3.5-flash"   # análise de editais (texto)
+    # achado real: 503 ("modelo sobrecarregado") no modelo principal
+    # acontecendo com frequência -- ao esgotar as tentativas nele, _gerar()
+    # tenta 1x este modelo antes de desistir (mesma chave do usuário, só
+    # troca o nome do modelo). Atualizar junto quando IA_MODELO_TEXTO subir
+    # de versão (mesmo motivo do comentário acima: gemini-2.5-flash
+    # desliga em 16/10/2026).
+    IA_MODELO_TEXTO_FALLBACK: str = "gemini-2.5-flash"
 
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador

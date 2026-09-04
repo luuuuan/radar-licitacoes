@@ -579,16 +579,54 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     return texto
 
 
+def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas: int):
+    """1 modelo, com a retentativa curta (backoff simples) já existente pra
+    falha TRANSIENTE (timeout/rede, 5xx) — mesmo espírito do
+    PNCPConnector._get_com_retry. NÃO tenta de novo em 429 (rate limit —
+    retentar na hora só reforça o limite, já tem mensagem própria) nem
+    outros 4xx (não é transiente, retentar não ajuda)."""
+    url = f"{_BASE}/{modelo}:generateContent"
+    ultimo_erro = "sem_resposta"
+    for tentativa in range(1, max(1, tentativas) + 1):
+        try:
+            r = requests.post(url, json=body, timeout=timeout,
+                             headers={"x-goog-api-key": chave,
+                                      "Content-Type": "application/json"})
+        except requests.RequestException as e:
+            ultimo_erro = f"rede:{e}"
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code in (500, 502, 503, 504):
+            ultimo_erro = f"http_{r.status_code}"
+            log.warning("Gemini texto (%s) HTTP %s (tentativa %d/%d): %s",
+                       modelo, r.status_code, tentativa, tentativas, r.text[:200])
+            if tentativa < tentativas:
+                time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code != 200:
+            log.warning("Gemini texto (%s) HTTP %s: %s", modelo, r.status_code, r.text[:200])
+            return None, f"http_{r.status_code}"
+        try:
+            dados = r.json()
+            return dados["candidates"][0]["content"]["parts"][0]["text"], "ok"
+        except (ValueError, KeyError, IndexError):
+            return None, "sem_resposta"
+    return None, ultimo_erro
+
+
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
           response_schema: dict | None = None):
-    """Chama o Gemini. Reforçado com 1 retentativa curta (backoff simples)
-    pra falha TRANSIENTE (timeout/rede, 5xx) — mesmo espírito do
-    PNCPConnector._get_com_retry, que já existia só do lado do PNCP; achado
-    real: usuário clicando "Realizar nova análise" e caindo direto em "não
-    foi possível conectar" numa falha passageira, sem nenhuma segunda
-    chance. NÃO tenta de novo em 429 (rate limit — retentar na hora só
-    reforça o limite, já tem mensagem própria) nem outros 4xx (não é
-    transiente, retentar não ajuda).
+    """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
+    sobrecarregado") acontecendo com frequência mesmo depois de esgotar as
+    retentativas -- ao falhar por completo no modelo principal com um erro
+    que parece sobrecarga passageira (5xx ou rede), tenta 1x
+    IA_MODELO_TEXTO_FALLBACK antes de desistir de vez (mesma chave do
+    usuário, mesmo request). NÃO troca de modelo em 429/outros 4xx: cota
+    costuma ser por projeto, não por modelo, então trocar não costuma
+    ajudar, e esses erros já têm mensagem própria (ver _msgErroIA no front).
 
     response_schema: opcional, Schema (formato Gemini) pra forçar tipos/
     chaves obrigatórias/enums no decoder — em vez de só pedir por prosa
@@ -597,7 +635,6 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
-    url = f"{_BASE}/{settings.IA_MODELO_TEXTO}:generateContent"
     generation_config = {
         "temperature": 0.2, "responseMimeType": "application/json",
         # maxOutputTokens explícito: achado real num edital com 57 itens —
@@ -614,34 +651,20 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": generation_config,
     }
+
+    modelos = [settings.IA_MODELO_TEXTO]
+    if settings.IA_MODELO_TEXTO_FALLBACK and settings.IA_MODELO_TEXTO_FALLBACK != settings.IA_MODELO_TEXTO:
+        modelos.append(settings.IA_MODELO_TEXTO_FALLBACK)
+
     ultimo_erro = "sem_resposta"
-    for tentativa in range(1, max(1, tentativas) + 1):
-        try:
-            r = requests.post(url, json=body, timeout=timeout,
-                             headers={"x-goog-api-key": chave,
-                                      "Content-Type": "application/json"})
-        except requests.RequestException as e:
-            ultimo_erro = f"rede:{e}"
-            if tentativa < tentativas:
-                time.sleep(1.5 * tentativa)
-                continue
-            return None, ultimo_erro
-        if r.status_code in (500, 502, 503, 504):
-            ultimo_erro = f"http_{r.status_code}"
-            log.warning("Gemini texto HTTP %s (tentativa %d/%d): %s",
-                       r.status_code, tentativa, tentativas, r.text[:200])
-            if tentativa < tentativas:
-                time.sleep(1.5 * tentativa)
-                continue
-            return None, ultimo_erro
-        if r.status_code != 200:
-            log.warning("Gemini texto HTTP %s: %s", r.status_code, r.text[:200])
-            return None, f"http_{r.status_code}"
-        try:
-            dados = r.json()
-            return dados["candidates"][0]["content"]["parts"][0]["text"], "ok"
-        except (ValueError, KeyError, IndexError):
-            return None, "sem_resposta"
+    for i, modelo in enumerate(modelos):
+        txt, erro = _chamar_modelo(modelo, body, chave, timeout, tentativas)
+        if txt is not None:
+            return txt, erro
+        ultimo_erro = erro
+        eh_transiente = erro.startswith("http_5") or erro.startswith("rede:")
+        if not eh_transiente or i == len(modelos) - 1:
+            break
     return None, ultimo_erro
 
 

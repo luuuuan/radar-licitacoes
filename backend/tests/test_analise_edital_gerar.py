@@ -33,14 +33,17 @@ def test_gerar_retenta_apos_falha_de_rede_e_da_certo_na_segunda(monkeypatch):
     assert chamadas["n"] == 2
 
 
-def test_gerar_falha_de_rede_persistente_esgota_tentativas(monkeypatch):
+def test_gerar_falha_de_rede_persistente_esgota_tentativas_dos_2_modelos(monkeypatch):
     monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
     with patch("app.analise_edital.requests.post",
               side_effect=requests.exceptions.Timeout("sem resposta")) as mock_post:
         txt, status = _gerar("prompt", api_key="fake-key")
     assert txt is None
     assert status.startswith("rede:")
-    assert mock_post.call_count == 2   # tentativas=2 (padrão) — não fica tentando pra sempre
+    # tentativas=2 (padrão) no modelo principal + 2 no fallback -- rede
+    # persistente é tratada como "pode ser sobrecarga", então tenta o
+    # modelo de fallback antes de desistir de vez (ver eh_transiente).
+    assert mock_post.call_count == 4
 
 
 def test_gerar_retenta_em_5xx_mas_nao_em_429(monkeypatch):
@@ -66,3 +69,57 @@ def test_gerar_sem_chave_nao_chama_rede():
         txt, status = _gerar("prompt", api_key=None)
     assert status == "sem_chave"
     assert mock_post.called is False
+
+
+# --------- fallback pro modelo secundário quando o principal esgota --------- #
+# em 5xx/rede (sobrecarga) --------- #
+# Achado real: 503 ("modelo sobrecarregado") no modelo principal
+# acontecendo com frequência. Ao esgotar as tentativas nele, _gerar() tenta
+# 1x IA_MODELO_TEXTO_FALLBACK (mesma chave) antes de desistir de vez.
+
+def test_gerar_usa_fallback_quando_modelo_principal_esgota_em_503(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+    urls_chamadas = []
+
+    def _post(url, **kw):
+        urls_chamadas.append(url)
+        if "modelo-principal" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        return _resposta_ok('{"veio_do_fallback": true}')
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_fallback": true}'
+    # 2 tentativas no principal (esgotou) + 1 no fallback (deu certo de cara)
+    assert sum("modelo-principal" in u for u in urls_chamadas) == 2
+    assert sum("modelo-fallback" in u for u in urls_chamadas) == 1
+
+
+def test_gerar_nao_usa_fallback_em_429_ou_outro_4xx(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+
+    with patch("app.analise_edital.requests.post",
+              return_value=MagicMock(status_code=429, text="rate limit")) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "http_429"
+    assert mock_post.call_count == 1   # nem tentou o fallback
+
+
+def test_gerar_sem_fallback_configurado_nao_tenta_segundo_modelo(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+
+    with patch("app.analise_edital.requests.post",
+              return_value=MagicMock(status_code=503, text="sobrecarregado")) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "http_503"
+    assert mock_post.call_count == 2   # só as tentativas do modelo principal
