@@ -36,7 +36,7 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 9
+VERSAO_PROMPT = 10
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -50,18 +50,18 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "economico_financeira": array de strings. Qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
   - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Se não houver nenhuma declaração, use lista vazia []. Cada objeto:
     - "nome": string. A declaração, como aparece no edital.
-    - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false se a exigência é só de CONTEÚDO/COMPROMISSO e não há modelo pronto no edital — a empresa precisa redigir seu próprio texto. null se não der pra saber pelo texto disponível.
+    - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false SOMENTE se o edital afirmar explicitamente que a declaração segue texto livre/próprio da empresa. Os anexos com os modelos costumam vir no final do edital ou em arquivo separado, fora do texto disponível — se o texto não menciona anexo pra essa declaração (em vez de negar explicitamente que exista um), use null, não false: ausência de menção não é o mesmo que confirmação de que não há modelo.
     - "detalhe": string curta (opcional). Ex.: "modelo no Anexo IV do edital", "sem modelo — declarar conforme exigência do item 8.2". "" se não houver nada relevante a acrescentar.
 
 - "requisitos_tecnicos": array de strings. Especificações TÉCNICAS do produto/serviço contratado (o objeto em si) que NÃO tenham campo próprio neste JSON: normas/certificações do produto, embalagem, nível de serviço (SLA), condições de conservação. NÃO coloque aqui garantia do produto, assistência técnica nem entrega/instalação técnica — essas têm campos dedicados em "dados_proposta" (garantia_produto, assistencia_tecnica, entrega_tecnica) e devem ir SÓ lá. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
 
 - "dados_orgao": objeto com (string vazia "" em qualquer chave que não constar):
-  - "numero_processo": número do processo administrativo/edital.
+  - "numero_processo": número do PROCESSO administrativo (ex.: "Processo nº 1234/2025"). É comum o edital ter um número de processo e um número de pregão/edital DIFERENTES — se ambos aparecerem, inclua os dois de forma clara (ex.: "Processo 1234/2025 — Pregão Eletrônico 07/2025"), nunca só um dos dois torcendo pra ser o certo.
   - "modo_disputa": "aberto", "fechado", "aberto e fechado" ou "".
   - "criterio_julgamento": o CRITÉRIO de escolha do vencedor. Ex.: "menor preço", "maior desconto", "técnica e preço". (Diferente de "julgamento", que é a unidade de disputa — ver abaixo.)
   - "plataforma": sistema/portal onde ocorre a sessão/disputa (ex.: Compras.gov.br, BLL, Portal de Compras Públicas).
-  - "data_sessao": data e horário da sessão pública de abertura/disputa, como aparece no edital.
-  - "pregoeiro_responsavel": nome do pregoeiro/agente de contratação responsável.
+  - "data_sessao": APENAS a data/hora rotulada explicitamente como sessão pública/abertura/disputa. NÃO use outra data do documento (assinatura do edital, publicação, prazo de validade de certidão) só porque é a mais parecida com uma data de sessão. "" se não houver data de sessão explícita.
+  - "pregoeiro_responsavel": APENAS o nome identificado explicitamente como pregoeiro/agente de contratação/leiloeiro responsável pela sessão. NÃO use o nome de quem assina o edital (ordenador de despesa, secretário) nem de outra autoridade — são papéis diferentes. "" se não constar.
   - "contato_orgao": telefone/e-mail de contato do órgão para dúvidas sobre o edital.
   - "exclusivo_regional": boolean. true se a participação for restrita a empresas de uma região/estado/município específico.
   - "regiao_exclusiva": string. Qual região/UF/município, se exclusivo_regional for true. "" caso contrário.
@@ -72,7 +72,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "local_entrega": ENDEREÇO COMPLETO de entrega/execução (rua, número, bairro, cidade/UF), quando o edital informar um endereço literal — não só o nome do órgão. Se não houver endereço completo, use o local/unidade como aparecer (ex.: "almoxarifado central da Secretaria"). Se o edital for Registro de Preços e disser que o local será definido depois (ex.: "conforme ordem de fornecimento"), registre isso literalmente. "" se não constar.
   - "condicoes_pagamento": forma e prazo de pagamento (ex.: "30 dias após atesto da nota fiscal").
   - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
-  - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços e catálogo do produto no sistema").
+  - "forma_apresentacao": como a proposta/documentos devem ser enviados (ex.: "anexar planilha de preços no sistema"). NÃO inclua aqui exigência de catálogo/prospecto nem de identificar marca/modelo — isso vai SÓ em "prospecto_catalogo"/"identificacao_marca_modelo", não repita aqui.
   - "garantia_proposta": se exige caução/garantia de manutenção da proposta, e o valor/percentual. "" se não exigir.
   - "identificacao_marca_modelo": boolean. true se a proposta precisa identificar marca/modelo/fabricante do produto ofertado.
   - "prospecto_catalogo": string. Se exige anexar prospecto/catálogo/folder técnico do produto junto com a proposta, e em que condição (ex.: "obrigatório", "se solicitado pelo pregoeiro"). "" se não exigir.
@@ -86,12 +86,14 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "exige_amostra": boolean. true se exigir amostra ou prova de conceito.
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
 - "exclusivo_me_epp": boolean. true se o edital (ou algum lote/item) for exclusivo ou tiver cota reservada para microempresa/EPP (LC 123/2006, art. 47/48).
-- "julgamento": string. A UNIDADE de adjudicação (não confundir com criterio_julgamento, que é o critério de preço): "lote" se a disputa/adjudicação é por lote fechado (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
+- "julgamento": string. A UNIDADE de adjudicação (não confundir com criterio_julgamento, que é o critério de preço): "lote" se a disputa/adjudicação é por lote, grupo ou item agrupado/global (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
 - "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
 - "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
-- "pontos_atencao": array de strings (máx. 6). Cláusulas que merecem atenção que NÃO estejam já capturadas nos campos estruturados acima (garantia, prazo curto, exigências específicas, penalidades relevantes) — salvo quando forem críticas o bastante pra valer o reforço. Se "analise_incompleta" for true, inclua aqui um aviso de que a análise de habilitação pode estar incompleta por truncamento do texto.
+- "pontos_atencao": array de strings (máx. 6). Riscos ou exigências INCOMUNS que NÃO tenham campo próprio neste JSON (ex.: multa/penalidade severa, prazo de entrega atipicamente curto, exigência técnica atípica, cláusula restritiva de concorrência). NÃO repita aqui informação que já esteja em outro campo estruturado (garantia_contratual, garantia_produto, validade_dias, exige_amostra, exige_visita etc.) — a tela já mostra esses campos separadamente, duplicar não ajuda. Única exceção: se "analise_incompleta" for true, inclua aqui um aviso de que a análise pode estar incompleta por truncamento do texto.
 
-Regras de tipo (importante pro parsing): cada chave é obrigatória e nunca omitida. Um campo de LISTA vazio recebe [] (nunca false, nunca ""). Um campo de TEXTO vazio recebe "" (nunca false, nunca []). Um campo BOOLEANO recebe true ou false. Nunca troque um tipo pelo outro — em especial, "documentos_habilitacao.declaracoes" e todas as chaves de "documentos_habilitacao" são sempre listas, mesmo vazias.
+O texto abaixo pode conter mais de um documento separado por "---" (por exemplo, uma RETIFICAÇÃO/ERRATA seguida do edital original). Quando houver informação conflitante entre eles (datas, prazos, exigências), o valor da RETIFICAÇÃO/ERRATA prevalece sobre o do edital original — a retificação é sempre mais recente, mesmo quando aparece antes no texto.
+
+O texto foi extraído automaticamente de PDF e pode conter artefatos: cabeçalhos/rodapés repetidos em cada página, trechos de colunas fora de ordem, palavras quebradas por hífen no fim de linha. Ignore esses artefatos e reconstitua o sentido do conteúdo.
 
 Regras gerais: não invente nada que não esteja no texto. Responda em português. Seja específico e completo em "documentos_habilitacao": o usuário vai separar cada certidão a partir dessa lista antes de enviar a proposta, então esquecer um documento é pior do que listar um a mais.
 
@@ -99,6 +101,82 @@ OBJETO (resumo do PNCP): {objeto}
 
 TEXTO DO EDITAL (pode estar truncado):
 \"\"\"{texto}\"\"\""""
+
+_S = {"type": "STRING"}
+_L_S = {"type": "ARRAY", "items": _S}
+_B = {"type": "BOOLEAN"}
+
+# Schema (formato Gemini, subset de OpenAPI) espelhando _PROMPT -- força tipo,
+# obrigatoriedade de chave e os enums no decoder do próprio Gemini, em vez de
+# só pedir por prosa ("nunca troque lista por false"). Reduz a resposta
+# trocar tipo (isso já existiu: ver normalização em analisar()) a zero.
+_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "objeto": _S,
+        "documentos_habilitacao": {
+            "type": "OBJECT",
+            "properties": {
+                "juridica": _L_S, "fiscal_trabalhista": _L_S,
+                "tecnica": _L_S, "economico_financeira": _L_S,
+                "declaracoes": {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "nome": _S,
+                            "modelo_orgao": {"type": "BOOLEAN", "nullable": True},
+                            "detalhe": _S,
+                        },
+                        "required": ["nome", "modelo_orgao", "detalhe"],
+                    },
+                },
+            },
+            "required": ["juridica", "fiscal_trabalhista", "tecnica",
+                        "economico_financeira", "declaracoes"],
+        },
+        "requisitos_tecnicos": _L_S,
+        "dados_orgao": {
+            "type": "OBJECT",
+            "properties": {
+                "numero_processo": _S,
+                "modo_disputa": {"type": "STRING", "enum": ["aberto", "fechado", "aberto e fechado", ""]},
+                "criterio_julgamento": _S, "plataforma": _S,
+                "data_sessao": _S, "pregoeiro_responsavel": _S, "contato_orgao": _S,
+                "exclusivo_regional": _B, "regiao_exclusiva": _S,
+            },
+            "required": ["numero_processo", "modo_disputa", "criterio_julgamento",
+                        "plataforma", "data_sessao", "pregoeiro_responsavel",
+                        "contato_orgao", "exclusivo_regional", "regiao_exclusiva"],
+        },
+        "dados_proposta": {
+            "type": "OBJECT",
+            "properties": {
+                "validade_dias": _S, "prazo_entrega": _S, "local_entrega": _S,
+                "condicoes_pagamento": _S, "aceita_similar": _B,
+                "forma_apresentacao": _S, "garantia_proposta": _S,
+                "identificacao_marca_modelo": _B, "prospecto_catalogo": _S,
+                "entrega_tecnica": _B, "assistencia_tecnica": _B, "garantia_produto": _S,
+            },
+            "required": ["validade_dias", "prazo_entrega", "local_entrega",
+                        "condicoes_pagamento", "aceita_similar", "forma_apresentacao",
+                        "garantia_proposta", "identificacao_marca_modelo",
+                        "prospecto_catalogo", "entrega_tecnica", "assistencia_tecnica",
+                        "garantia_produto"],
+        },
+        "validade_documentos_habilitacao": _S,
+        "prazos": _L_S,
+        "exige_amostra": _B, "exige_visita": _B, "exclusivo_me_epp": _B,
+        "julgamento": {"type": "STRING", "enum": ["lote", "item", ""]},
+        "garantia_contratual": _S,
+        "analise_incompleta": _B,
+        "pontos_atencao": _L_S,
+    },
+    "required": ["objeto", "documentos_habilitacao", "requisitos_tecnicos", "dados_orgao",
+                "dados_proposta", "validade_documentos_habilitacao", "prazos",
+                "exige_amostra", "exige_visita", "exclusivo_me_epp", "julgamento",
+                "garantia_contratual", "analise_incompleta", "pontos_atencao"],
+}
 
 
 def ia_texto_disponivel(api_key: str | None = None) -> bool:
@@ -494,7 +572,8 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     return texto
 
 
-def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2):
+def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
+          response_schema: dict | None = None):
     """Chama o Gemini. Reforçado com 1 retentativa curta (backoff simples)
     pra falha TRANSIENTE (timeout/rede, 5xx) — mesmo espírito do
     PNCPConnector._get_com_retry, que já existia só do lado do PNCP; achado
@@ -502,21 +581,31 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     foi possível conectar" numa falha passageira, sem nenhuma segunda
     chance. NÃO tenta de novo em 429 (rate limit — retentar na hora só
     reforça o limite, já tem mensagem própria) nem outros 4xx (não é
-    transiente, retentar não ajuda)."""
+    transiente, retentar não ajuda).
+
+    response_schema: opcional, Schema (formato Gemini) pra forçar tipos/
+    chaves obrigatórias/enums no decoder — em vez de só pedir por prosa
+    ("nunca troque lista por false"). Usado hoje só por analisar(); os
+    demais chamadores continuam sem schema (JSON livre)."""
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
     url = f"{_BASE}/{settings.IA_MODELO_TEXTO}:generateContent"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+    generation_config = {
+        "temperature": 0.2, "responseMimeType": "application/json",
         # maxOutputTokens explícito: achado real num edital com 57 itens —
         # comparar_catalogo_usuario() pede um JSON com até 2 candidatos por
         # item, e sem esse limite a resposta usa o padrão implícito do
         # modelo, que pode não ser suficiente pra um JSON desse tamanho —
         # a IA responde 200 (não é erro_ia), mas o texto vem cortado no
         # meio e falha ao parsear (status "resposta_invalida").
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json",
-                             "maxOutputTokens": 16384},
+        "maxOutputTokens": 16384,
+    }
+    if response_schema is not None:
+        generation_config["responseSchema"] = response_schema
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": generation_config,
     }
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
@@ -613,7 +702,8 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     if len(texto) < 300:
         return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
 
-    txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key)
+    txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
+                     response_schema=_RESPONSE_SCHEMA)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
@@ -630,6 +720,17 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     # escopo de fora — ela já foi consumida acima, mas mantém o código claro.
     def s(x):
         return str(x or "")
+
+    # achado real (auditoria do prompt-engineer): bool(x) em Python trata
+    # QUALQUER string não-vazia como True -- se a IA (ou uma resposta sem o
+    # response_schema aplicado, ex.: mock de teste) mandar a STRING "false"
+    # em vez do boolean, bool("false") vira True e inverte o sentido do
+    # campo silenciosamente. Trata string explicitamente antes de cair no
+    # bool() padrão.
+    def b(x):
+        if isinstance(x, str):
+            return x.strip().lower() not in ("", "false", "não", "nao", "0")
+        return bool(x)
 
     # declarações não são "certidão com validade" — o edital ou fornece um
     # modelo pronto (a empresa só preenche/assina) ou exige que a empresa
@@ -675,7 +776,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
             "data_sessao": s(x.get("data_sessao")),
             "pregoeiro_responsavel": s(x.get("pregoeiro_responsavel")),
             "contato_orgao": s(x.get("contato_orgao")),
-            "exclusivo_regional": bool(x.get("exclusivo_regional")),
+            "exclusivo_regional": b(x.get("exclusivo_regional")),
             "regiao_exclusiva": s(x.get("regiao_exclusiva")),
         }
 
@@ -686,13 +787,13 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
             "prazo_entrega": s(x.get("prazo_entrega")),
             "local_entrega": s(x.get("local_entrega")),
             "condicoes_pagamento": s(x.get("condicoes_pagamento")),
-            "aceita_similar": bool(x.get("aceita_similar")),
+            "aceita_similar": b(x.get("aceita_similar")),
             "forma_apresentacao": s(x.get("forma_apresentacao")),
             "garantia_proposta": s(x.get("garantia_proposta")),
-            "identificacao_marca_modelo": bool(x.get("identificacao_marca_modelo")),
+            "identificacao_marca_modelo": b(x.get("identificacao_marca_modelo")),
             "prospecto_catalogo": s(x.get("prospecto_catalogo")),
-            "entrega_tecnica": bool(x.get("entrega_tecnica")),
-            "assistencia_tecnica": bool(x.get("assistencia_tecnica")),
+            "entrega_tecnica": b(x.get("entrega_tecnica")),
+            "assistencia_tecnica": b(x.get("assistencia_tecnica")),
             "garantia_produto": s(x.get("garantia_produto")),
         }
 
@@ -707,12 +808,12 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "dados_orgao": dados_orgao(data.get("dados_orgao")),
         "dados_proposta": dados_proposta(data.get("dados_proposta")),
         "prazos": lista(data.get("prazos")),
-        "exige_amostra": bool(data.get("exige_amostra")),
-        "exige_visita": bool(data.get("exige_visita")),
-        "exclusivo_me_epp": bool(data.get("exclusivo_me_epp")),
+        "exige_amostra": b(data.get("exige_amostra")),
+        "exige_visita": b(data.get("exige_visita")),
+        "exclusivo_me_epp": b(data.get("exclusivo_me_epp")),
         "julgamento": s(data.get("julgamento")),
         "garantia_contratual": s(data.get("garantia_contratual")),
-        "analise_incompleta": bool(data.get("analise_incompleta")),
+        "analise_incompleta": b(data.get("analise_incompleta")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
     }
 
