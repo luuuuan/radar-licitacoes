@@ -579,19 +579,22 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
     return texto
 
 
-def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas: int):
-    """1 modelo, com a retentativa curta (backoff simples) já existente pra
-    falha TRANSIENTE (timeout/rede, 5xx) — mesmo espírito do
-    PNCPConnector._get_com_retry. NÃO tenta de novo em 429 (rate limit —
-    retentar na hora só reforça o limite, já tem mensagem própria) nem
-    outros 4xx (não é transiente, retentar não ajuda)."""
-    url = f"{_BASE}/{modelo}:generateContent"
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativas: int,
+                    extrair_texto, rotulo: str):
+    """POST com a retentativa curta (backoff simples) comum a qualquer
+    provedor de IA usado aqui — mesmo espírito do
+    PNCPConnector._get_com_retry — pra falha TRANSIENTE (timeout/rede,
+    5xx). NÃO tenta de novo em 429 (rate limit — retentar na hora só
+    reforça o limite, já tem mensagem própria) nem outros 4xx (não é
+    transiente, retentar não ajuda). extrair_texto(dados_json) -> texto da
+    resposta, específico do formato de cada provedor (Gemini x Groq)."""
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
         try:
-            r = requests.post(url, json=body, timeout=timeout,
-                             headers={"x-goog-api-key": chave,
-                                      "Content-Type": "application/json"})
+            r = requests.post(url, json=body, timeout=timeout, headers=headers)
         except requests.RequestException as e:
             ultimo_erro = f"rede:{e}"
             if tentativa < tentativas:
@@ -600,38 +603,73 @@ def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas
             return None, ultimo_erro
         if r.status_code in (500, 502, 503, 504):
             ultimo_erro = f"http_{r.status_code}"
-            log.warning("Gemini texto (%s) HTTP %s (tentativa %d/%d): %s",
-                       modelo, r.status_code, tentativa, tentativas, r.text[:200])
+            log.warning("%s HTTP %s (tentativa %d/%d): %s",
+                       rotulo, r.status_code, tentativa, tentativas, r.text[:200])
             if tentativa < tentativas:
                 time.sleep(1.5 * tentativa)
                 continue
             return None, ultimo_erro
         if r.status_code != 200:
-            log.warning("Gemini texto (%s) HTTP %s: %s", modelo, r.status_code, r.text[:200])
+            log.warning("%s HTTP %s: %s", rotulo, r.status_code, r.text[:200])
             return None, f"http_{r.status_code}"
         try:
-            dados = r.json()
-            return dados["candidates"][0]["content"]["parts"][0]["text"], "ok"
+            return extrair_texto(r.json()), "ok"
         except (ValueError, KeyError, IndexError):
             return None, "sem_resposta"
     return None, ultimo_erro
+
+
+def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas: int):
+    """1 modelo Gemini."""
+    url = f"{_BASE}/{modelo}:generateContent"
+    headers = {"x-goog-api-key": chave, "Content-Type": "application/json"}
+    return _post_com_retry(
+        url, headers, body, timeout, tentativas,
+        extrair_texto=lambda d: d["candidates"][0]["content"]["parts"][0]["text"],
+        rotulo=f"Gemini texto ({modelo})")
+
+
+def _chamar_groq(prompt: str, timeout: int, tentativas: int):
+    """Último recurso, provedor DIFERENTE do Gemini (settings.GROQ_API_KEY,
+    chave global do operador) -- API compatível com formato OpenAI. Sem
+    response_schema aqui (Groq não tem o mesmo mecanismo de schema do
+    Gemini): "response_format: json_object" garante JSON válido, mas quem
+    segura a estrutura esperada continua sendo só a prosa do _PROMPT --
+    igual era pro Gemini antes do schema existir."""
+    if not settings.GROQ_API_KEY:
+        return None, "sem_chave_groq"
+    body = {
+        "model": settings.GROQ_MODELO_TEXTO,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {settings.GROQ_API_KEY}", "Content-Type": "application/json"}
+    return _post_com_retry(
+        _GROQ_URL, headers, body, timeout, tentativas,
+        extrair_texto=lambda d: d["choices"][0]["message"]["content"],
+        rotulo="Groq texto")
 
 
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
           response_schema: dict | None = None):
     """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
     sobrecarregado") acontecendo com frequência mesmo depois de esgotar as
-    retentativas -- ao falhar por completo no modelo principal com um erro
-    que parece sobrecarga passageira (5xx ou rede), tenta 1x
-    IA_MODELO_TEXTO_FALLBACK antes de desistir de vez (mesma chave do
-    usuário, mesmo request). NÃO troca de modelo em 429/outros 4xx: cota
-    costuma ser por projeto, não por modelo, então trocar não costuma
-    ajudar, e esses erros já têm mensagem própria (ver _msgErroIA no front).
+    retentativas -- ao falhar por completo num modelo com um erro que
+    parece sobrecarga passageira (5xx ou rede), tenta o próximo antes de
+    desistir de vez: 1º IA_MODELO_TEXTO_FALLBACK (mesma chave do usuário,
+    ainda Gemini), depois, se ainda assim falhar, Groq (settings.
+    GROQ_API_KEY, provedor diferente -- protege contra uma instabilidade
+    do Google inteiro, não só de 1 modelo). NÃO troca de modelo/provedor em
+    429/outros 4xx: cota costuma ser por projeto, não por modelo, então
+    trocar não costuma ajudar, e esses erros já têm mensagem própria (ver
+    _msgErroIA no front).
 
     response_schema: opcional, Schema (formato Gemini) pra forçar tipos/
     chaves obrigatórias/enums no decoder — em vez de só pedir por prosa
     ("nunca troque lista por false"). Usado hoje só por analisar(); os
-    demais chamadores continuam sem schema (JSON livre)."""
+    demais chamadores continuam sem schema (JSON livre). Só vale pros
+    modelos Gemini -- o Groq não usa esse mecanismo (ver _chamar_groq)."""
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
@@ -657,14 +695,25 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         modelos.append(settings.IA_MODELO_TEXTO_FALLBACK)
 
     ultimo_erro = "sem_resposta"
+    eh_transiente = False
     for i, modelo in enumerate(modelos):
         txt, erro = _chamar_modelo(modelo, body, chave, timeout, tentativas)
         if txt is not None:
             return txt, erro
         ultimo_erro = erro
         eh_transiente = erro.startswith("http_5") or erro.startswith("rede:")
-        if not eh_transiente or i == len(modelos) - 1:
-            break
+        if not eh_transiente:
+            return None, ultimo_erro
+
+    # os 2 modelos Gemini esgotaram com erro de sobrecarga/rede -- última
+    # tentativa, provedor diferente (sem custo se GROQ_API_KEY não estiver
+    # configurada: _chamar_groq devolve "sem_chave_groq" sem chamar rede).
+    if eh_transiente:
+        txt, erro = _chamar_groq(prompt, timeout, tentativas)
+        if txt is not None:
+            return txt, erro
+        if erro != "sem_chave_groq":
+            ultimo_erro = erro
     return None, ultimo_erro
 
 

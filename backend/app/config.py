@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     # desliga em 16/10/2026).
     IA_MODELO_TEXTO_FALLBACK: str = "gemini-2.5-flash"
 
+    # Último recurso quando os DOIS modelos Gemini acima esgotam com erro
+    # de sobrecarga/rede -- provedor diferente (Groq), então uma
+    # instabilidade do Google inteiro não derruba a análise. Chave GLOBAL
+    # (mesmo espírito do DEEPINFRA_API_KEY abaixo), não do usuário -- o
+    # objetivo é o fallback funcionar sozinho, sem pedir configuração
+    # extra de quem já cadastrou a chave Gemini pessoal. Vazio = fallback
+    # pro Groq desativado (comportamento de antes).
+    GROQ_API_KEY: str = ""
+    GROQ_MODELO_TEXTO: str = "llama-3.3-70b-versatile"
+
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador
     # do app — vale pra todos os usuários, mesmo quem não configurou uma

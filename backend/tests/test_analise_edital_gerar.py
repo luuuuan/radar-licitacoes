@@ -123,3 +123,83 @@ def test_gerar_sem_fallback_configurado_nao_tenta_segundo_modelo(monkeypatch):
 
     assert status == "http_503"
     assert mock_post.call_count == 2   # só as tentativas do modelo principal
+
+
+# --------- último recurso: Groq (provedor diferente) quando os 2 --------- #
+# modelos Gemini esgotam --------- #
+
+def _resposta_groq_ok(texto='{"veio_do_groq": true}'):
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = {"choices": [{"message": {"content": texto}}]}
+    return r
+
+
+def test_gerar_cai_pro_groq_quando_os_2_modelos_gemini_esgotam(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    urls_chamadas = []
+
+    def _post(url, headers=None, **kw):
+        urls_chamadas.append(url)
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        assert headers["Authorization"] == "Bearer groq-fake-key"
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_groq": true}'
+    # 2 tentativas em cada modelo Gemini (esgotaram) + 1 no Groq (deu certo)
+    assert sum("generativelanguage" in u for u in urls_chamadas) == 4
+    assert sum(u == "https://api.groq.com/openai/v1/chat/completions" for u in urls_chamadas) == 1
+
+
+def test_gerar_sem_groq_key_nao_chama_a_api_da_groq(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "")
+
+    with patch("app.analise_edital.requests.post",
+              return_value=MagicMock(status_code=503, text="sobrecarregado")) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "http_503"   # erro do último modelo Gemini, não "sem_chave_groq"
+    assert mock_post.call_count == 4   # só os 2 modelos Gemini, nunca bateu na Groq
+
+
+def test_gerar_groq_tambem_falha_devolve_erro_da_groq(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        return MagicMock(status_code=500, text="groq fora do ar")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert txt is None
+    assert status == "http_500"   # erro da Groq (última tentativa), não do Gemini
+
+
+def test_gerar_nao_tenta_groq_em_429_do_gemini(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    with patch("app.analise_edital.requests.post",
+              return_value=MagicMock(status_code=429, text="rate limit")) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "http_429"
+    assert mock_post.call_count == 1   # nem o Gemini retentou, nem foi pra Groq
