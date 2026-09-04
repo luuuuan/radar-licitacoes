@@ -140,7 +140,12 @@ _RESPONSE_SCHEMA = {
             "type": "OBJECT",
             "properties": {
                 "numero_processo": _S,
-                "modo_disputa": {"type": "STRING", "enum": ["aberto", "fechado", "aberto e fechado", ""]},
+                # sem "enum" aqui de propósito: a API do Gemini rejeita
+                # enum com valor vazio ("cannot be empty") -- e "" é o
+                # sentinela pra "não identificado" que o prompt já pede.
+                # Fica STRING livre, a lista de valores esperados continua
+                # só na prosa do _PROMPT.
+                "modo_disputa": _S,
                 "criterio_julgamento": _S, "plataforma": _S,
                 "data_sessao": _S, "pregoeiro_responsavel": _S, "contato_orgao": _S,
                 "exclusivo_regional": _B, "regiao_exclusiva": _S,
@@ -167,7 +172,9 @@ _RESPONSE_SCHEMA = {
         "validade_documentos_habilitacao": _S,
         "prazos": _L_S,
         "exige_amostra": _B, "exige_visita": _B, "exclusivo_me_epp": _B,
-        "julgamento": {"type": "STRING", "enum": ["lote", "item", ""]},
+        # mesmo motivo do modo_disputa acima: sem "enum" (Gemini rejeita
+        # valor vazio no enum, e "" é o sentinela de "não identificado").
+        "julgamento": _S,
         "garantia_contratual": _S,
         "analise_incompleta": _B,
         "pontos_atencao": _L_S,

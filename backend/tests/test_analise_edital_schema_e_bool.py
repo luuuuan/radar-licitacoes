@@ -73,3 +73,28 @@ def test_schema_cobre_todas_as_chaves_top_level_obrigatorias():
     }
     assert set(_RESPONSE_SCHEMA["properties"].keys()) == esperadas
     assert set(_RESPONSE_SCHEMA["required"]) == esperadas
+
+
+def _achar_enums_vazios(no, caminho=""):
+    """Acha qualquer "enum" no schema (em qualquer nível) que contenha uma
+    string vazia -- achado real em produção: a API do Gemini rejeita com
+    HTTP 400 ("cannot be empty") um enum com "" na lista, mesmo sendo o
+    sentinela óbvio pra "não identificado" que o resto do prompt usa. Como
+    "" é exatamente o valor que a prosa do _PROMPT pede pra campos sem
+    enum, o risco de alguém reintroduzir isso ao adicionar um enum novo é
+    real -- este teste pega qualquer recorrência, não só os dois campos
+    corrigidos desta vez."""
+    achados = []
+    if isinstance(no, dict):
+        if "enum" in no and any(v == "" for v in no["enum"]):
+            achados.append(caminho or "<raiz>")
+        for chave, valor in no.get("properties", {}).items():
+            achados += _achar_enums_vazios(valor, f"{caminho}.{chave}")
+        if "items" in no:
+            achados += _achar_enums_vazios(no["items"], f"{caminho}[]")
+    return achados
+
+
+def test_nenhum_enum_do_schema_contem_string_vazia():
+    achados = _achar_enums_vazios(_RESPONSE_SCHEMA)
+    assert achados == [], f"enum com '' encontrado em: {achados} -- Gemini rejeita com HTTP 400"
