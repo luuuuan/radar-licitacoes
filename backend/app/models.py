@@ -167,7 +167,7 @@ class Edital(Base):
     arquivos_pncp: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     arquivos_pncp_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # cache do TEXTO já extraído do(s) PDF(s) usado na Análise por IA (até
-    # ~24000 chars, o mesmo limite que o prompt já usa -- não o texto bruto
+    # ~80000 chars, o mesmo limite que o prompt já usa -- não o texto bruto
     # bem maior que o completar-descrição às vezes lê, pra não inflar o
     # banco). Achado real: reabrir a aba ou tentar de novo depois de uma
     # falha (ex.: PNCP instável, ou só a chamada de IA que falhou) baixava

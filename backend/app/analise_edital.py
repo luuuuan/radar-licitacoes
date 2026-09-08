@@ -830,8 +830,18 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         candidatos = sorted(arquivos, key=_prioridade_arquivo)
 
         # baixa e combina até 2 documentos (ex.: edital + termo de
-        # referência), respeitando o limite total de caracteres do prompt
-        MAX_TOTAL = 24000
+        # referência), respeitando o limite total de caracteres do prompt.
+        # Achado real: editais grandes (ex.: 350 itens) enchiam o limite
+        # antigo (24000, ~6 mil tokens) ainda no meio da tabela de itens,
+        # cortando fora a seção de habilitação/garantia que costuma vir
+        # depois -- a IA sinalizava "analise_incompleta" com frequência. O
+        # Gemini (gemini-3.6/3.5-flash) tem contexto de sobra pra um texto
+        # bem maior; o teto pequeno era mais conservador do que precisava.
+        # A Groq (fallback, teto de TPM bem menor) já trunca de novo por
+        # conta própria em _GROQ_LIMITE_PROMPT_CHARS -- não depende deste
+        # valor. max_paginas também sobe (senão o PDF para de ser lido bem
+        # antes de bater esse teto de caracteres).
+        MAX_TOTAL = 80000
         partes, fontes = [], []
         falhou_download = False
         for a in candidatos[:5]:
@@ -839,7 +849,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 break
             if not a.get("url"):
                 continue
-            t, falhou = _baixar_texto_pdf(a["url"], max_chars=MAX_TOTAL)
+            t, falhou = _baixar_texto_pdf(a["url"], max_paginas=150, max_chars=MAX_TOTAL)
             if falhou:
                 falhou_download = True
                 continue
