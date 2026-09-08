@@ -140,7 +140,15 @@ class Settings(BaseSettings):
     # extra de quem já cadastrou a chave Gemini pessoal. Vazio = fallback
     # pro Groq desativado (comportamento de antes).
     GROQ_API_KEY: str = ""
-    GROQ_MODELO_TEXTO: str = "llama-3.3-70b-versatile"
+    # achado real: llama-3.3-70b-versatile devolveu HTTP 404 "does not
+    # exist or you do not have access to it" -- a documentação da Groq
+    # ainda lista esse modelo, mas na categoria "Enterprise" (provavelmente
+    # exige plano pago, não o tier gratuito). Trocado pra um modelo com
+    # preço por token normal (sinal de disponível pra conta comum). Se
+    # ESSE também der model_not_found, o jeito é conferir direto no
+    # console.groq.com (Playground) quais modelos a conta de verdade
+    # enxerga -- a doc pública nem sempre reflete o acesso da conta.
+    GROQ_MODELO_TEXTO: str = "openai/gpt-oss-120b"
 
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador
