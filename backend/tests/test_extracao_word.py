@@ -80,7 +80,7 @@ def test_baixar_texto_detecta_doc_ole2_e_usa_conversor_word(monkeypatch):
     r = ia._baixar_texto_pdf("http://exemplo/arquivo")
 
     assert chamadas == [".doc"]
-    assert r == "texto do doc"
+    assert r == ("texto do doc", False)
 
 
 def test_baixar_texto_detecta_docx_via_zip_e_usa_conversor_word(monkeypatch):
@@ -93,7 +93,7 @@ def test_baixar_texto_detecta_docx_via_zip_e_usa_conversor_word(monkeypatch):
     r = ia._baixar_texto_pdf("http://exemplo/arquivo")
 
     assert chamadas == [".docx"]
-    assert r == "texto do docx"
+    assert r == ("texto do docx", False)
 
 
 def test_baixar_texto_detecta_rtf_e_usa_conversor_word(monkeypatch):
@@ -111,7 +111,7 @@ def test_baixar_texto_detecta_rtf_e_usa_conversor_word(monkeypatch):
     r = ia._baixar_texto_pdf("http://exemplo/arquivo")
 
     assert chamadas == [".rtf"]
-    assert r == "texto do rtf"
+    assert r == ("texto do rtf", False)
 
 
 def test_baixar_texto_zip_de_pdfs_continua_no_caminho_antigo(monkeypatch):
@@ -128,7 +128,7 @@ def test_baixar_texto_zip_de_pdfs_continua_no_caminho_antigo(monkeypatch):
 
     assert chamadas_zip == [1]
     assert chamadas_word == []
-    assert r == "texto do zip de pdfs"
+    assert r == ("texto do zip de pdfs", False)
 
 
 def test_baixar_texto_pdf_comum_continua_no_caminho_antigo(monkeypatch):
@@ -140,4 +140,4 @@ def test_baixar_texto_pdf_comum_continua_no_caminho_antigo(monkeypatch):
     r = ia._baixar_texto_pdf("http://exemplo/arquivo")
 
     assert chamadas == [1]
-    assert r == "texto do pdf"
+    assert r == ("texto do pdf", False)

@@ -20,7 +20,7 @@ def _resposta_gemini(json_texto: str):
 def _analisar_com_resposta(json_texto: str) -> dict:
     arquivos = [{"titulo": "Edital", "tipo": "pdf", "url": "http://x/edital.pdf"}]
     texto_pdf = "x" * 400
-    with patch("app.analise_edital._baixar_texto_pdf", return_value=texto_pdf), \
+    with patch("app.analise_edital._baixar_texto_pdf", return_value=(texto_pdf, False)), \
          patch("app.analise_edital.requests.post", return_value=_resposta_gemini(json_texto)):
         return analisar("Objeto de teste", arquivos, api_key="fake-key")
 

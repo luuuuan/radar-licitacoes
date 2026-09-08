@@ -189,17 +189,25 @@ def extrair_itens_completos(objeto: str, arquivos: list[dict], itens_atuais: lis
     # o porquê — mandar tudo pro chat se mostrou lento/instável).
     MAX_BRUTO = 400000
     partes = []
+    falhou_download = False
     for a in candidatos[:5]:
         if sum(len(p) for p in partes) >= MAX_BRUTO:
             break
         if not a.get("url"):
             continue
-        t = _baixar_texto_pdf(a["url"], max_paginas=200, max_chars=MAX_BRUTO,
+        t, falhou = _baixar_texto_pdf(a["url"], max_paginas=200, max_chars=MAX_BRUTO,
                               max_paginas_ocr=settings.OCR_MAX_PAGINAS_ITENS)
+        if falhou:
+            falhou_download = True
+            continue
         if len(t) > 300:
             partes.append(t)
     texto_bruto = "\n\n---\n\n".join(partes)[:MAX_BRUTO]
     if len(texto_bruto) < 300:
+        # mesmo raciocínio de analisar() em analise_edital.py: não confunde
+        # falha ao baixar (rede/PNCP instável) com "realmente sem texto".
+        if falhou_download:
+            return {"status": "erro_download_pdf"}
         return {"status": "sem_texto"}
 
     texto = _selecionar_trechos_relevantes(texto_bruto, itens_atuais, api_key)

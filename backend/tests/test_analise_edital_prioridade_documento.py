@@ -60,7 +60,7 @@ def test_analisar_inclui_texto_da_retificacao_mesmo_com_edital_grande():
     }
 
     def _fake_baixar(url, max_chars=24000, **kw):
-        return textos[url][:max_chars]
+        return textos[url][:max_chars], False
 
     chamadas = []
 

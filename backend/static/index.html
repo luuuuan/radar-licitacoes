@@ -4297,6 +4297,7 @@ async function _acompanharCompletarDescricao(id, ativo, avisar, cancelamento){
     const msgs = {sem_ia: 'Recurso indisponível no momento.',
       sem_arquivo: 'Este edital não tem arquivo publicado no PNCP pra ler.',
       sem_itens: 'Este edital não tem itens detalhados.',
+      erro_download_pdf: 'Não consegui baixar o documento no PNCP agora (instabilidade passageira). Tente de novo mais tarde.',
       sem_texto: 'Não consegui ler o texto do documento (pode estar escaneado/sem suporte).',
       erro_ia: 'Não foi possível buscar agora. Tente de novo.',
       resposta_invalida: 'Resposta inesperada. Tente de novo.'};
@@ -4685,6 +4686,7 @@ function _renderResultadoAnalise(r){
     erro_arquivos_pncp:'Não consegui buscar os documentos deste edital no PNCP agora (instabilidade passageira). Tente novamente em instantes.',
     sem_arquivo:'Este edital não tem arquivos publicados no PNCP para analisar.',
     vazio:'Este edital não tem arquivos publicados no PNCP para analisar.',
+    erro_download_pdf:'Não consegui baixar o arquivo do edital no PNCP agora (instabilidade passageira). Tente novamente em instantes.',
     sem_texto:'O edital está publicado como imagem/escaneado, sem texto que a IA consiga ler.',
     cancelado:'Análise cancelada antes de começar.',
     erro_ia:_msgErroIA(r.detalhe),

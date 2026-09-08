@@ -22,7 +22,7 @@ def _resposta_gemini(json_texto: str):
 def _analisar_com_resposta(json_texto: str) -> dict:
     arquivos = [{"titulo": "Edital", "tipo": "pdf", "url": "http://x/edital.pdf"}]
     texto_pdf = "x" * 400
-    with patch("app.analise_edital._baixar_texto_pdf", return_value=texto_pdf), \
+    with patch("app.analise_edital._baixar_texto_pdf", return_value=(texto_pdf, False)), \
          patch("app.analise_edital.requests.post", return_value=_resposta_gemini(json_texto)):
         return analisar("Objeto de teste", arquivos, api_key="fake-key")
 
@@ -56,7 +56,7 @@ def test_analisar_manda_response_schema_pro_gemini():
         chamadas.append(kw)
         return _resposta_gemini('{"objeto": "teste"}')
 
-    with patch("app.analise_edital._baixar_texto_pdf", return_value="x" * 400), \
+    with patch("app.analise_edital._baixar_texto_pdf", return_value=("x" * 400, False)), \
          patch("app.analise_edital.requests.post", side_effect=_fake_post):
         analisar("Objeto de teste", arquivos, api_key="fake-key")
 

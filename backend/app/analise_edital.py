@@ -334,23 +334,41 @@ def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int,
 
 
 def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_chars: int = 24000,
-                      max_paginas_ocr: int | None = None) -> str:
-    try:
-        r = requests.get(url, timeout=timeout,
-                        headers={"User-Agent": "RadarLicitacoes/1.0"})
-    except requests.RequestException:
-        return ""
-    if r.status_code != 200 or not r.content:
-        return ""
+                      max_paginas_ocr: int | None = None) -> tuple[str, bool]:
+    """Retorna (texto, falhou_busca). Achado real: um PDF genuinamente
+    escaneado/sem texto extraível e uma falha passageira ao BAIXAR o
+    arquivo (rede, PNCP fora do ar) geravam o mesmo texto vazio -- a
+    Análise por IA (e o completar-descrição de itens) diziam "publicado
+    como imagem/escaneado" quando na real só não conseguiu buscar (mesmo
+    raciocínio de erro_arquivos_pncp em main.py, um nível mais fundo: ali
+    é a LISTA de arquivos, aqui é o CONTEÚDO de um arquivo). falhou_busca
+    só fica True quando nem chegou a baixar os bytes (rede/HTTP não-200) —
+    depois de 1 retentativa curta, já que o PNCP tem se mostrado instável
+    (503 passageiro observado em produção). Um download com sucesso mas
+    sem texto extraível (scan ruim, OCR indisponível) devolve texto=""
+    com falhou_busca=False -- isso SIM é "sem texto legível" de verdade."""
+    r = None
+    for tentativa in range(2):
+        try:
+            r = requests.get(url, timeout=timeout,
+                            headers={"User-Agent": "RadarLicitacoes/1.0"})
+        except requests.RequestException:
+            r = None
+        if r is not None and r.status_code not in (500, 502, 503, 504):
+            break
+        if tentativa == 0:
+            time.sleep(1.5)
+    if r is None or r.status_code != 200 or not r.content:
+        return "", True
     if r.content[:8] == _MAGIC_OLE2:
-        return _texto_de_word_bytes(r.content, ".doc", max_chars)
+        return _texto_de_word_bytes(r.content, ".doc", max_chars), False
     if r.content[:5] == _MAGIC_RTF:
-        return _texto_de_word_bytes(r.content, ".rtf", max_chars)
+        return _texto_de_word_bytes(r.content, ".rtf", max_chars), False
     if _e_zip(r.content):
         if _e_docx(r.content):
-            return _texto_de_word_bytes(r.content, ".docx", max_chars)
-        return _texto_de_zip(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr)
-    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr)
+            return _texto_de_word_bytes(r.content, ".docx", max_chars), False
+        return _texto_de_zip(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr), False
+    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr), False
 
 
 def _ocr_imagem(conteudo: bytes) -> str:
@@ -801,18 +819,27 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
     # respeitando o limite total de caracteres do prompt
     MAX_TOTAL = 24000
     partes, fontes = [], []
+    falhou_download = False
     for a in candidatos[:5]:
         if len(fontes) >= 2 or sum(len(p) for p in partes) >= MAX_TOTAL:
             break
         if not a.get("url"):
             continue
-        t = _baixar_texto_pdf(a["url"], max_chars=MAX_TOTAL)
+        t, falhou = _baixar_texto_pdf(a["url"], max_chars=MAX_TOTAL)
+        if falhou:
+            falhou_download = True
+            continue
         if len(t) > 300:
             partes.append(t)
             fontes.append(a.get("titulo") or "documento")
     texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
     fonte = ", ".join(fontes) if fontes else None
     if len(texto) < 300:
+        # não confunde "não consegui baixar o arquivo" (rede/PNCP
+        # instável) com "baixei e realmente não tem texto legível" (scan)
+        # -- ver docstring de _baixar_texto_pdf.
+        if falhou_download:
+            return {"status": "erro_download_pdf"}
         return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
 
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
