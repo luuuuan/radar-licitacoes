@@ -4332,7 +4332,7 @@ async function _rodarAnaliseEdital(forcar){
   _analiseEmAndamento = true;
   _analiseEmAndamentoId = id;
   try{
-    const resultado = await _obterResultadoAnaliseComPolling(id, forcar, aindaAqui, cancelamento);
+    const resultado = await _obterResultadoAnaliseComPolling(id, forcar, cancelamento);
     if(resultado === null) return;   // cancelado -- cancelarAnalise() já tratou a tela
     const {html, sucesso} = resultado;
     _analiseCache = html;
@@ -4591,18 +4591,28 @@ function baixarTodosDocumentos(){
 // o navegador via só um erro de rede genérico. Devolve {sucesso, html} (ver
 // _renderResultadoAnalise) ou `null` se cancelado; lança erro pra qualquer
 // outra falha (tratado no catch de _rodarAnaliseEdital).
-async function _obterResultadoAnaliseComPolling(id, forcar, aindaAqui, cancelamento){
+async function _obterResultadoAnaliseComPolling(id, forcar, cancelamento){
   const rIniciar = await api(`/api/editais/${id}/analise/iniciar${forcar?'?forcar=true':''}`, {method:'POST'});
   if(rIniciar && rIniciar.detail) throw new Error(rIniciar.detail);
   // rIniciar.ok pode vir false com em_andamento=true (já tinha uma rodando —
   // ex.: reabriu a aba) — não é erro, só entra direto no polling abaixo.
+  //
+  // Achado real: só parava de acompanhar quando saía do EDITAL (usa
+  // `id` fixo, não _paginaEditalId, que muda ao abrir outro edital) —
+  // trocar de ABA dentro do MESMO edital (ex.: ir pra "Itens" e voltar)
+  // não pode derrubar o acompanhamento, senão a análise "some" (volta a
+  // mostrar o botão "Realizar análise com IA" mesmo com uma rodando de
+  // verdade no servidor) só porque o usuário saiu da aba Análise por um
+  // instante. `aindaAqui()` (mesmo edital E mesma aba) só decide se
+  // atualiza a TELA agora — ver _rodarAnaliseEdital.
+  const mesmoEdital = () => _paginaEditalId === id;
   for(let tentativa=0; tentativa<200; tentativa++){
     await new Promise(res=>setTimeout(res, tentativa===0?500:3000));
-    if(cancelamento.pedido || !aindaAqui()) return null;
+    if(cancelamento.pedido || !mesmoEdital()) return null;
     let st;
     try{ st = await api(`/api/editais/${id}/analise/status`); }
     catch(e){ continue; }
-    if(cancelamento.pedido || !aindaAqui()) return null;
+    if(cancelamento.pedido || !mesmoEdital()) return null;
     if(st.rodando) continue;
     if(st.erro) throw new Error(st.erro);
     return _renderResultadoAnalise(st.resultado || {});
