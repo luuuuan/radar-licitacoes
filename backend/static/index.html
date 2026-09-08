@@ -4724,6 +4724,9 @@ async function _corpoCotacaoEdital(id){
       <td><input type="checkbox" class="chk-cotacao-item" value="${it.numero}" checked onchange="_marcarSelecaoCotacao('${it.numero}',this.checked)"></td>
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
       <td style="font-size:13px">${esc(descCurta)}</td>
+      <td style="white-space:nowrap">${esc(it.quantidade??'—')}</td>
+      <td style="white-space:nowrap" class="muted">${esc(it.unidade_medida||'—')}</td>
+      <td style="white-space:nowrap">${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}</td>
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
       <td><input type="number" step="0.01" class="cot-frete-saida-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
@@ -4734,7 +4737,7 @@ async function _corpoCotacaoEdital(id){
     <div style="overflow-x:auto"><table>
       <thead><tr>
         <th><input type="checkbox" id="chk-cotacao-todos" checked onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
-        <th>Item</th><th>Descrição</th><th>Produto do catálogo</th>
+        <th>Item</th><th>Descrição</th><th>Qtd. pedida</th><th>Unidade</th><th>Valor unit. (órgão)</th><th>Produto do catálogo</th>
         <th>Frete entrada (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Fornecedor → você, valor total pra esse item (pode ser de um fornecedor diferente dos outros itens). Fica em branco = sem custo de frete de entrada.</span></span></th>
         <th>Frete saída (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Você → órgão, valor total pra esse item. Fica em branco = sem custo de frete de saída.</span></span></th>
         <th>Link <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Página do produto no fornecedor (campo "Site do fornecedor / página do item" no Catálogo). Sem link cadastrado pro produto, fica em branco.</span></span></th>
