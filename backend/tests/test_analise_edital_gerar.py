@@ -249,3 +249,47 @@ def test_gerar_nao_tenta_groq_em_outro_4xx_que_nao_429(monkeypatch):
 
     assert status == "http_400"
     assert mock_post.call_count == 1   # nem o Gemini retentou, nem foi pra Groq
+
+
+# --------- 404 (modelo desativado/renomeado pelo provedor) também troca --------- #
+# de modelo/provedor --------- #
+# Achado real em produção: gemini-2.5-flash (configurado como
+# IA_MODELO_TEXTO_FALLBACK) parou de responder pra contas novas com HTTP
+# 404 antes da data de desligamento anunciada. Sem tratar 404 como "tenta
+# o próximo", isso travava a cadeia no fallback, sem nunca chegar no Groq.
+
+def test_gerar_troca_de_modelo_em_404(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-desativado")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+
+    def _post(url, **kw):
+        if "modelo-desativado" in url:
+            return MagicMock(status_code=404, text="model no longer available")
+        return _resposta_ok('{"veio_do_fallback": true}')
+
+    with patch("app.analise_edital.requests.post", side_effect=_post) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_fallback": true}'
+    assert mock_post.call_count == 2   # 1 no modelo desativado (404, sem retentar) + 1 no fallback
+
+
+def test_gerar_tenta_groq_quando_os_2_modelos_gemini_dao_404(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-desativado")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=404, text="model no longer available")
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_groq": true}'
+    assert mock_post.call_count == 2   # 1 no Gemini (404, sem retentar) + 1 na Groq

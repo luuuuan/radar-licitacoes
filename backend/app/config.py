@@ -120,15 +120,17 @@ class Settings(BaseSettings):
     LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
     LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
 
-    # gemini-2.5-flash será desligado em 16/10/2026 -> gemini-3.5-flash
-    IA_MODELO_TEXTO: str = "gemini-3.5-flash"   # análise de editais (texto)
-    # achado real: 503 ("modelo sobrecarregado") no modelo principal
-    # acontecendo com frequência -- ao esgotar as tentativas nele, _gerar()
-    # tenta 1x este modelo antes de desistir (mesma chave do usuário, só
-    # troca o nome do modelo). Atualizar junto quando IA_MODELO_TEXTO subir
-    # de versão (mesmo motivo do comentário acima: gemini-2.5-flash
-    # desliga em 16/10/2026).
-    IA_MODELO_TEXTO_FALLBACK: str = "gemini-2.5-flash"
+    # achado real: gemini-2.5-flash parou de responder pra contas novas
+    # ANTES da data de desligamento anunciada (HTTP 404 "no longer
+    # available to new users", a própria API do Gemini recomendou
+    # gemini-3.6-flash no lugar) -- promovido a principal; o antigo
+    # principal (3.5-flash) vira fallback (1 versão pra trás, mesmo
+    # padrão de antes). Gemini desativa modelo antigo sem aviso prévio
+    # cumprido à risca -- ao trocar de novo, mover o modelo atual pra
+    # IA_MODELO_TEXTO_FALLBACK e o novo pra IA_MODELO_TEXTO, não só
+    # apagar o de trás (é o fallback que _gerar() tenta).
+    IA_MODELO_TEXTO: str = "gemini-3.6-flash"   # análise de editais (texto)
+    IA_MODELO_TEXTO_FALLBACK: str = "gemini-3.5-flash"
 
     # Último recurso quando os DOIS modelos Gemini acima esgotam com erro
     # de sobrecarga/rede -- provedor diferente (Groq), então uma
