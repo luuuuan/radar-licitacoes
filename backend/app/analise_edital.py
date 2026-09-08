@@ -656,14 +656,18 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
     sobrecarregado") acontecendo com frequência mesmo depois de esgotar as
     retentativas -- ao falhar por completo num modelo com um erro que
-    parece sobrecarga passageira (5xx ou rede), tenta o próximo antes de
+    parece sobrecarga/limite (5xx, 429 ou rede), tenta o próximo antes de
     desistir de vez: 1º IA_MODELO_TEXTO_FALLBACK (mesma chave do usuário,
     ainda Gemini), depois, se ainda assim falhar, Groq (settings.
     GROQ_API_KEY, provedor diferente -- protege contra uma instabilidade
-    do Google inteiro, não só de 1 modelo). NÃO troca de modelo/provedor em
-    429/outros 4xx: cota costuma ser por projeto, não por modelo, então
-    trocar não costuma ajudar, e esses erros já têm mensagem própria (ver
-    _msgErroIA no front).
+    do Google inteiro, não só de 1 modelo). 429 troca de modelo/provedor
+    (pedido do usuário: mesmo cota costumando ser por projeto — não
+    necessariamente por modelo dentro do mesmo projeto —, e Groq é um
+    provedor à parte com cota totalmente independente da do Gemini) mas
+    NÃO retenta 429 dentro do MESMO modelo (isso continua sem efeito —
+    ver _post_com_retry). Outros 4xx (400 etc.) não trocam de
+    modelo/provedor: não é erro de limite, retentar (mesmo modelo
+    diferente) não costuma ajudar.
 
     response_schema: opcional, Schema (formato Gemini) pra forçar tipos/
     chaves obrigatórias/enums no decoder — em vez de só pedir por prosa
@@ -701,11 +705,11 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         if txt is not None:
             return txt, erro
         ultimo_erro = erro
-        eh_transiente = erro.startswith("http_5") or erro.startswith("rede:")
+        eh_transiente = erro.startswith("http_5") or erro == "http_429" or erro.startswith("rede:")
         if not eh_transiente:
             return None, ultimo_erro
 
-    # os 2 modelos Gemini esgotaram com erro de sobrecarga/rede -- última
+    # os 2 modelos Gemini esgotaram com erro de sobrecarga/limite/rede -- última
     # tentativa, provedor diferente (sem custo se GROQ_API_KEY não estiver
     # configurada: _chamar_groq devolve "sem_chave_groq" sem chamar rede).
     if eh_transiente:

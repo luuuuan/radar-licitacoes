@@ -46,7 +46,7 @@ def test_gerar_falha_de_rede_persistente_esgota_tentativas_dos_2_modelos(monkeyp
     assert mock_post.call_count == 4
 
 
-def test_gerar_retenta_em_5xx_mas_nao_em_429(monkeypatch):
+def test_gerar_retenta_em_5xx_mas_nao_dentro_do_mesmo_modelo_em_429(monkeypatch):
     monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
     respostas = []
     r503 = MagicMock(status_code=503, text="sobrecarregado")
@@ -57,11 +57,16 @@ def test_gerar_retenta_em_5xx_mas_nao_em_429(monkeypatch):
     assert status == "ok"
     assert mock_post.call_count == 2
 
+    # 429 não retenta DENTRO do mesmo modelo (mensagem própria já existe pra
+    # esse caso) -- isola sem fallback/Groq configurados pra testar só essa
+    # parte; a troca de modelo/provedor em 429 tem testes dedicados abaixo.
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "")
     r429 = MagicMock(status_code=429, text="rate limit")
     with patch("app.analise_edital.requests.post", return_value=r429) as mock_post2:
         txt2, status2 = _gerar("prompt", api_key="fake-key")
     assert status2 == "http_429"
-    assert mock_post2.call_count == 1   # 429 não retenta — mensagem própria já existe
+    assert mock_post2.call_count == 1   # 1 tentativa só nesse modelo (sem retentar 429)
 
 
 def test_gerar_sem_chave_nao_chama_rede():
@@ -99,7 +104,11 @@ def test_gerar_usa_fallback_quando_modelo_principal_esgota_em_503(monkeypatch):
     assert sum("modelo-fallback" in u for u in urls_chamadas) == 1
 
 
-def test_gerar_nao_usa_fallback_em_429_ou_outro_4xx(monkeypatch):
+def test_gerar_usa_fallback_em_429_tambem(monkeypatch):
+    """Pedido do usuário: 429 também troca de modelo/provedor, não só
+    5xx/rede -- cota costuma ser por projeto, mas não necessariamente é a
+    MESMA entre modelos diferentes (Gemini principal x fallback) e
+    certamente não é a mesma entre provedores diferentes (Gemini x Groq)."""
     monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
     monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
     monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
@@ -109,6 +118,24 @@ def test_gerar_nao_usa_fallback_em_429_ou_outro_4xx(monkeypatch):
         txt, status = _gerar("prompt", api_key="fake-key")
 
     assert status == "http_429"
+    # 1 tentativa em cada modelo (429 não retenta dentro do mesmo modelo,
+    # mas troca pro próximo) -- principal + fallback
+    assert mock_post.call_count == 2
+
+
+def test_gerar_nao_usa_fallback_em_outro_4xx_que_nao_429(monkeypatch):
+    """400 (bad request) não é erro de limite/sobrecarga -- trocar de
+    modelo não costuma ajudar (é a mesma requisição malformada), então
+    continua sem trocar."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+
+    with patch("app.analise_edital.requests.post",
+              return_value=MagicMock(status_code=400, text="bad request")) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "http_400"
     assert mock_post.call_count == 1   # nem tentou o fallback
 
 
@@ -191,15 +218,34 @@ def test_gerar_groq_tambem_falha_devolve_erro_da_groq(monkeypatch):
     assert status == "http_500"   # erro da Groq (última tentativa), não do Gemini
 
 
-def test_gerar_nao_tenta_groq_em_429_do_gemini(monkeypatch):
+def test_gerar_tenta_groq_em_429_do_gemini(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=429, text="rate limit")
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_groq": true}'
+    assert mock_post.call_count == 2   # 1 no Gemini (429, sem retentar) + 1 na Groq (deu certo)
+
+
+def test_gerar_nao_tenta_groq_em_outro_4xx_que_nao_429(monkeypatch):
     monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
     monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
     monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
     monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
 
     with patch("app.analise_edital.requests.post",
-              return_value=MagicMock(status_code=429, text="rate limit")) as mock_post:
+              return_value=MagicMock(status_code=400, text="bad request")) as mock_post:
         txt, status = _gerar("prompt", api_key="fake-key")
 
-    assert status == "http_429"
+    assert status == "http_400"
     assert mock_post.call_count == 1   # nem o Gemini retentou, nem foi pra Groq
