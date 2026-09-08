@@ -802,55 +802,69 @@ def _prioridade_arquivo(a: dict) -> int:
     return 3
 
 
-def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> dict:
+def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
+            texto_pronto: dict | None = None) -> dict:
     """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
-    api_key: chave Gemini do próprio usuário (obrigatória, cai para a global)."""
+    api_key: chave Gemini do próprio usuário (obrigatória, cai para a global).
+
+    texto_pronto: opcional, {"texto": str, "fonte": str|None} já extraído
+    numa chamada anterior (ver _texto_pronto_cache em main.py) -- pula o
+    download/extração de PDF inteiramente quando fornecido. Achado real:
+    reabrir a aba ou tentar de novo (depois de uma falha na chamada de IA,
+    não na busca) baixava o PDF de novo à toa. Quando None (padrão), extrai
+    normalmente e devolve o texto usado em resultado["_texto_extraido"]/
+    ["_fonte_extraida"] -- só quando a EXTRAÇÃO deu certo, mesmo que a
+    chamada de IA em si falhe depois -- pra quem chama poder cachear."""
     if not ia_texto_disponivel(api_key):
         return {"status": "sem_ia"}
-    if not arquivos:
-        return {"status": "sem_arquivo"}
 
-    # prioriza retificação/errata, depois o edital principal, depois termo de
-    # referência/anexos (onde costumam estar as exigências de habilitação e
-    # a garantia contratual) -- ver _prioridade_arquivo
-    candidatos = sorted(arquivos, key=_prioridade_arquivo)
+    if texto_pronto is not None:
+        texto, fonte = texto_pronto["texto"], texto_pronto.get("fonte")
+    else:
+        if not arquivos:
+            return {"status": "sem_arquivo"}
 
-    # baixa e combina até 2 documentos (ex.: edital + termo de referência),
-    # respeitando o limite total de caracteres do prompt
-    MAX_TOTAL = 24000
-    partes, fontes = [], []
-    falhou_download = False
-    for a in candidatos[:5]:
-        if len(fontes) >= 2 or sum(len(p) for p in partes) >= MAX_TOTAL:
-            break
-        if not a.get("url"):
-            continue
-        t, falhou = _baixar_texto_pdf(a["url"], max_chars=MAX_TOTAL)
-        if falhou:
-            falhou_download = True
-            continue
-        if len(t) > 300:
-            partes.append(t)
-            fontes.append(a.get("titulo") or "documento")
-    texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
-    fonte = ", ".join(fontes) if fontes else None
-    if len(texto) < 300:
-        # não confunde "não consegui baixar o arquivo" (rede/PNCP
-        # instável) com "baixei e realmente não tem texto legível" (scan)
-        # -- ver docstring de _baixar_texto_pdf.
-        if falhou_download:
-            return {"status": "erro_download_pdf"}
-        return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
+        # prioriza retificação/errata, depois o edital principal, depois termo
+        # de referência/anexos (onde costumam estar as exigências de
+        # habilitação e a garantia contratual) -- ver _prioridade_arquivo
+        candidatos = sorted(arquivos, key=_prioridade_arquivo)
+
+        # baixa e combina até 2 documentos (ex.: edital + termo de
+        # referência), respeitando o limite total de caracteres do prompt
+        MAX_TOTAL = 24000
+        partes, fontes = [], []
+        falhou_download = False
+        for a in candidatos[:5]:
+            if len(fontes) >= 2 or sum(len(p) for p in partes) >= MAX_TOTAL:
+                break
+            if not a.get("url"):
+                continue
+            t, falhou = _baixar_texto_pdf(a["url"], max_chars=MAX_TOTAL)
+            if falhou:
+                falhou_download = True
+                continue
+            if len(t) > 300:
+                partes.append(t)
+                fontes.append(a.get("titulo") or "documento")
+        texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
+        fonte = ", ".join(fontes) if fontes else None
+        if len(texto) < 300:
+            # não confunde "não consegui baixar o arquivo" (rede/PNCP
+            # instável) com "baixei e realmente não tem texto legível"
+            # (scan) -- ver docstring de _baixar_texto_pdf.
+            if falhou_download:
+                return {"status": "erro_download_pdf"}
+            return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
 
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
                      response_schema=_RESPONSE_SCHEMA)
     if st != "ok" or not txt:
-        return {"status": "erro_ia", "detalhe": st}
+        return {"status": "erro_ia", "detalhe": st, "_texto_extraido": texto, "_fonte_extraida": fonte}
     data = _parse_json(txt)
     if not isinstance(data, dict):
         log.warning("analisar(): resposta da IA não é um JSON válido (%d chars). Início: %r Fim: %r",
                    len(txt), txt[:300], txt[-300:])
-        return {"status": "resposta_invalida"}
+        return {"status": "resposta_invalida", "_texto_extraido": texto, "_fonte_extraida": fonte}
 
     # normaliza saída
     def lista(x):
@@ -955,6 +969,8 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None) -> d
         "garantia_contratual": s(data.get("garantia_contratual")),
         "analise_incompleta": b(data.get("analise_incompleta")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
+        "_texto_extraido": texto,
+        "_fonte_extraida": fonte,
     }
 
 

@@ -2411,6 +2411,18 @@ def _arquivos_pncp_cache(db: Session, ed: Edital, forcar: bool = False) -> dict:
     return resultado
 
 
+def _texto_pronto_cache(ed: Edital, forcar: bool) -> dict | None:
+    """Mesmo raciocínio de _arquivos_pncp_cache, mas pro TEXTO já extraído
+    do PDF usado na Análise por IA -- achado real: tentar de novo depois de
+    uma falha (PNCP instável, ou só a chamada de IA que falhou) baixava e
+    extraía o PDF de novo, mesmo já tendo extraído com sucesso antes. Sem
+    forcar, usa o cache se já existir; None quando não há cache (chama
+    analisar() sem texto_pronto, extrai normalmente)."""
+    if not forcar and ed.texto_analise_ia is not None:
+        return {"texto": ed.texto_analise_ia, "fonte": ed.texto_analise_ia_fonte}
+    return None
+
+
 def _backfill_unidade_medida(ed: Edital) -> int:
     """Busca no PNCP a unidadeMedida de cada item do edital e preenche nos
     que ainda estão sem (achado real: esse campo não era capturado antes —
@@ -2914,25 +2926,40 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
         if resultado:
             resultado["cache"] = True
         else:
-            # cacheado em Edital.arquivos_pncp (_arquivos_pncp_cache) -- só
-            # busca de novo no PNCP quando forcar=True (usuário clicou
-            # "Realizar nova análise"), pra pegar documento novo publicado
-            # depois (ex.: retificação) sem ficar refazendo essa busca toda
-            # vez que a aba é aberta.
-            docs = _arquivos_pncp_cache(db, ed, forcar=forcar)
-            # achado real (edital 127468): a aba Documentos e a Análise por
-            # IA chamam a MESMA busca de arquivos, mas em requisições
-            # diferentes -- uma falha passageira na busca ao PNCP (timeout,
-            # rede, 5xx) faz docs["arquivos"] vir vazio por um motivo bem
-            # diferente de "este edital não tem arquivo publicado", e as
-            # duas coisas viravam a mesma mensagem enganosa pro usuário.
-            # Só trata como "sem arquivo" quando a busca realmente teve
-            # sucesso e voltou vazia (status "ok"/"vazio"); qualquer outro
-            # status é uma falha de busca, não ausência de documento.
-            if docs["status"] not in ("ok", "vazio"):
-                resultado = {"status": "erro_arquivos_pncp", "detalhe": docs["status"]}
+            # texto já extraído numa análise anterior (_texto_pronto_cache)
+            # -- pula a busca de arquivos no PNCP inteiramente, ela só serve
+            # pra achar o PDF de onde extrair o texto.
+            texto_pronto = _texto_pronto_cache(ed, forcar)
+            if texto_pronto is not None:
+                resultado = ia.analisar(ed.objeto or "", [], api_key=chave, texto_pronto=texto_pronto)
             else:
-                resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+                # cacheado em Edital.arquivos_pncp (_arquivos_pncp_cache) --
+                # só busca de novo no PNCP quando forcar=True (usuário
+                # clicou "Realizar nova análise"), pra pegar documento novo
+                # publicado depois (ex.: retificação) sem ficar refazendo
+                # essa busca toda vez que a aba é aberta.
+                docs = _arquivos_pncp_cache(db, ed, forcar=forcar)
+                # achado real (edital 127468): a aba Documentos e a Análise
+                # por IA chamam a MESMA busca de arquivos, mas em
+                # requisições diferentes -- uma falha passageira na busca ao
+                # PNCP (timeout, rede, 5xx) faz docs["arquivos"] vir vazio
+                # por um motivo bem diferente de "este edital não tem
+                # arquivo publicado", e as duas coisas viravam a mesma
+                # mensagem enganosa pro usuário. Só trata como "sem arquivo"
+                # quando a busca realmente teve sucesso e voltou vazia
+                # (status "ok"/"vazio"); qualquer outro status é uma falha
+                # de busca, não ausência de documento.
+                if docs["status"] not in ("ok", "vazio"):
+                    resultado = {"status": "erro_arquivos_pncp", "detalhe": docs["status"]}
+                else:
+                    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+            texto_extraido = resultado.pop("_texto_extraido", None)
+            fonte_extraida = resultado.pop("_fonte_extraida", None)
+            if texto_extraido is not None:
+                ed.texto_analise_ia = texto_extraido
+                ed.texto_analise_ia_fonte = fonte_extraida
+                ed.texto_analise_ia_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+                db.commit()
             if resultado.get("status") == "ok":
                 ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)
                 ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)

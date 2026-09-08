@@ -166,6 +166,17 @@ class Edital(Base):
     # "não existe".
     arquivos_pncp: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     arquivos_pncp_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # cache do TEXTO já extraído do(s) PDF(s) usado na Análise por IA (até
+    # ~24000 chars, o mesmo limite que o prompt já usa -- não o texto bruto
+    # bem maior que o completar-descrição às vezes lê, pra não inflar o
+    # banco). Achado real: reabrir a aba ou tentar de novo depois de uma
+    # falha (ex.: PNCP instável, ou só a chamada de IA que falhou) baixava
+    # e extraía o PDF de novo, mesmo já tendo extraído com sucesso antes.
+    # Só é gravado quando a extração funciona (mesmo que a chamada de IA
+    # em si falhe depois) -- ver _texto_pronto_cache em main.py.
+    texto_analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)
+    texto_analise_ia_fonte: Mapped[str | None] = mapped_column(Text, nullable=True)
+    texto_analise_ia_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # já tentou completar a descrição dos itens lendo o PDF (ver
     # app/itens_pdf.py) — só marca quando a tentativa TERMINA com um
