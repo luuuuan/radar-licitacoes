@@ -293,3 +293,58 @@ def test_gerar_tenta_groq_quando_os_2_modelos_gemini_dao_404(monkeypatch):
     assert status == "ok"
     assert txt == '{"veio_do_groq": true}'
     assert mock_post.call_count == 2   # 1 no Gemini (404, sem retentar) + 1 na Groq
+
+
+# --------- prompt grande demais estoura o TPM da Groq (achado real: --------- #
+# HTTP 413 num edital de 350 itens, "Limit 8000, Requested 11382") --------- #
+# tier gratuito da Groq: 8000 tokens/minuto é POR REQUISIÇÃO, esperar e
+# tentar de novo com o mesmo tamanho bate no mesmo erro pra sempre -- só
+# resolve truncando o que é mandado (_chamar_groq corta antes de enviar).
+
+def test_chamar_groq_trunca_prompt_grande_antes_de_mandar(monkeypatch):
+    from app.analise_edital import _chamar_groq, _GROQ_LIMITE_PROMPT_CHARS
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    prompt_grande = "x" * (_GROQ_LIMITE_PROMPT_CHARS + 5000)
+    prompts_recebidos = []
+
+    def _post(url, json=None, **kw):
+        prompts_recebidos.append(json["messages"][0]["content"])
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _chamar_groq(prompt_grande, timeout=60, tentativas=1)
+
+    assert status == "ok"
+    assert len(prompts_recebidos[0]) == _GROQ_LIMITE_PROMPT_CHARS   # cortado, não os 5000 a mais
+
+
+def test_chamar_groq_nao_trunca_prompt_pequeno():
+    from app.analise_edital import _chamar_groq
+    prompt_pequeno = "prompt normal, bem menor que o limite"
+    prompts_recebidos = []
+
+    def _post(url, json=None, **kw):
+        prompts_recebidos.append(json["messages"][0]["content"])
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post), \
+         patch("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key"):
+        txt, status = _chamar_groq(prompt_pequeno, timeout=60, tentativas=1)
+
+    assert status == "ok"
+    assert prompts_recebidos[0] == prompt_pequeno   # intacto
+
+
+def test_chamar_groq_manda_max_tokens_pra_reservar_espaco_na_resposta():
+    from app.analise_edital import _chamar_groq, _GROQ_MAX_TOKENS_RESPOSTA
+    corpos_recebidos = []
+
+    def _post(url, json=None, **kw):
+        corpos_recebidos.append(json)
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post), \
+         patch("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key"):
+        _chamar_groq("prompt qualquer", timeout=60, tentativas=1)
+
+    assert corpos_recebidos[0]["max_tokens"] == _GROQ_MAX_TOKENS_RESPOSTA

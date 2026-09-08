@@ -629,6 +629,26 @@ def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas
         rotulo=f"Gemini texto ({modelo})")
 
 
+# Achado real em produção (edital de 350 itens): a Groq devolveu HTTP 413
+# ("Request too large... TPM: Limit 8000, Requested 11382") -- confirmado
+# na doc deles que TODOS os modelos grandes do tier gratuito (120b, 20b)
+# compartilham o mesmo teto de 8000 tokens/minuto, e é POR REQUISIÇÃO, não
+# uma cota que enche e esvazia: uma requisição de 11382 tokens sozinha já
+# passa do teto de QUALQUER minuto, então esperar e tentar de novo com o
+# MESMO tamanho bate no mesmo 413 pra sempre -- só resolve diminuindo o
+# que é mandado. ~3 chars/token foi a proporção observada nesse caso real
+# (texto de PDF, cheio de acento/espaço junto); usa esse valor pra estimar
+# com folga. Corta só a ponta do TEXTO DO EDITAL (fica sempre no fim do
+# _PROMPT) -- as instruções completas continuam intactas, e o próprio
+# prompt já pede pra IA sinalizar "analise_incompleta" quando o texto
+# parece cortado no meio, então truncar aqui é seguro (mesmo raciocínio de
+# MAX_TOTAL em analisar(), só que com um teto bem menor, específico da
+# Groq). max_tokens explícito reserva espaço pra resposta dentro do mesmo
+# teto de 8000 (entrada + saída contam juntas).
+_GROQ_LIMITE_PROMPT_CHARS = 12000
+_GROQ_MAX_TOKENS_RESPOSTA = 3000
+
+
 def _chamar_groq(prompt: str, timeout: int, tentativas: int):
     """Último recurso, provedor DIFERENTE do Gemini (settings.GROQ_API_KEY,
     chave global do operador) -- API compatível com formato OpenAI. Sem
@@ -638,10 +658,13 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
     igual era pro Gemini antes do schema existir."""
     if not settings.GROQ_API_KEY:
         return None, "sem_chave_groq"
+    if len(prompt) > _GROQ_LIMITE_PROMPT_CHARS:
+        prompt = prompt[:_GROQ_LIMITE_PROMPT_CHARS]
     body = {
         "model": settings.GROQ_MODELO_TEXTO,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
+        "max_tokens": _GROQ_MAX_TOKENS_RESPOSTA,
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {settings.GROQ_API_KEY}", "Content-Type": "application/json"}
