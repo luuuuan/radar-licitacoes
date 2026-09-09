@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -600,14 +601,62 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
+# Teto de quanto vale a pena ESPERAR um 429 de rate limit (tokens/requisições
+# por minuto) passar antes de desistir -- um pouco acima da janela de 60s que
+# a Groq usa (achado real, ver _GROQ_LIMITE_PROMPT_CHARS). Só espera quando o
+# PRÓPRIO provedor informa quanto falta (Retry-After ou "please try again in
+# Xs" no corpo, formato usado pela Groq) -- nunca um valor chutado: sem essa
+# informação não dá pra saber se esperar vai adiantar alguma coisa (pode ser
+# cota diária esgotada, tipo a do Gemini free tier, que não volta em 1 min).
+_RETRY_APOS_429_TETO_S = 61.0
+
+
+def _retry_after_segundos(r) -> float | None:
+    """Tempo sugerido pelo provedor pra esperar antes de tentar de novo um
+    429, quando confiável (positivo e dentro do teto) -- None caso
+    contrário (não veio, veio inválido, ou é longo demais pra valer a pena
+    segurar o trabalho em segundo plano esperando)."""
+    bruto = None
+    try:
+        bruto = r.headers.get("Retry-After") or r.headers.get("retry-after")
+    except Exception:
+        bruto = None
+    # só str/int/float -- em teste, um MagicMock sem headers configurado
+    # devolve outro MagicMock aqui (não None), e float(MagicMock()) não
+    # levanta erro (retorna 1.0, valor padrão do dunder __float__ mockado).
+    if isinstance(bruto, (str, int, float)):
+        try:
+            segundos = float(bruto)
+            if 0 < segundos <= _RETRY_APOS_429_TETO_S:
+                return segundos
+        except (TypeError, ValueError):
+            pass
+    texto = getattr(r, "text", None)
+    m = re.search(r"try again in ([\d.]+)\s*s", texto, re.IGNORECASE) if isinstance(texto, str) else None
+    if m:
+        try:
+            segundos = float(m.group(1))
+            if 0 < segundos <= _RETRY_APOS_429_TETO_S:
+                return segundos
+        except ValueError:
+            pass
+    return None
+
+
 def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativas: int,
                     extrair_texto, rotulo: str):
     """POST com a retentativa curta (backoff simples) comum a qualquer
     provedor de IA usado aqui — mesmo espírito do
     PNCPConnector._get_com_retry — pra falha TRANSIENTE (timeout/rede,
-    5xx). NÃO tenta de novo em 429 (rate limit — retentar na hora só
-    reforça o limite, já tem mensagem própria) nem outros 4xx (não é
-    transiente, retentar não ajuda). extrair_texto(dados_json) -> texto da
+    5xx). Em 429 (rate limit) só tenta de novo quando o provedor informa
+    quanto esperar E esse tempo é confiável (ver _retry_after_segundos) —
+    achado real: numa comparação de catálogo em lotes, cada lote batia no
+    limite de tokens/minuto da Groq em sequência rápida (sem essa espera,
+    todos os lotes seguintes falhavam igual, mesmo o limite sendo por
+    JANELA DE TEMPO, não cota fixa). Sem essa informação, retentar na hora
+    só reforça o limite -- devolve o erro direto, mesmo comportamento de
+    antes. Consome o mesmo orçamento de `tentativas` do backoff de 5xx (não
+    é um mecanismo à parte). extrair_texto(dados_json) -> texto da
     resposta, específico do formato de cada provedor (Gemini x Groq)."""
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
@@ -625,6 +674,15 @@ def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativa
                        rotulo, r.status_code, tentativa, tentativas, r.text[:200])
             if tentativa < tentativas:
                 time.sleep(1.5 * tentativa)
+                continue
+            return None, ultimo_erro
+        if r.status_code == 429:
+            ultimo_erro = "http_429"
+            espera = _retry_after_segundos(r)
+            log.warning("%s HTTP 429 (tentativa %d/%d, espera=%s): %s",
+                       rotulo, tentativa, tentativas, espera, r.text[:200])
+            if espera is not None and tentativa < tentativas:
+                time.sleep(espera)
                 continue
             return None, ultimo_erro
         if r.status_code != 200:
