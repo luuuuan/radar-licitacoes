@@ -2833,6 +2833,7 @@ def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, 
             enriquecidos.append({
                 "numero": it["numero"], "descricao_item": ie.descricao,
                 "valor_orgao": ie.valor_unitario, "quantidade": ie.quantidade,
+                "unidade_medida": ie.unidade_medida,
                 "candidatos": candidatos,
             })
         saida["itens"] = enriquecidos
