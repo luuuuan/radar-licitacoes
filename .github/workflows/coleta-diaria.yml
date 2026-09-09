@@ -4,8 +4,8 @@ name: Coleta automática de licitações
 on:
   schedule:
     # Horários em UTC. Brasília = UTC-3.
-    - cron: "0 9 * * *"    
-    - cron: "0 14 * * *"     
+    - cron: "0 6 * * *"    
+    - cron: "0 12 * * *"     
   workflow_dispatch: {}
 
 jobs:
