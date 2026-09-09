@@ -4084,8 +4084,8 @@ function _spinnerHTML(texto, extra){
 // lugar onde o conteúdo vai aparecer (não tela cheia) — usado ao abrir a
 // página de um edital, pra dar uma sensação mais "do app" que o spinner
 // genérico de texto.
-function _radarCarregandoHTML(texto){
-  return `<div class="radar-carregando"><div class="radar pequeno"><svg class="ml-dots" viewBox="0 0 64 64" role="status" aria-label="Carregando"><circle cx="14" cy="14" r="4.5"/><circle cx="32" cy="14" r="4.5"/><circle cx="50" cy="14" r="4.5"/><circle cx="14" cy="32" r="4.5"/><circle cx="50" cy="32" r="4.5"/><circle cx="14" cy="50" r="4.5"/><circle cx="32" cy="50" r="4.5"/><circle cx="50" cy="50" r="4.5"/><circle class="core" cx="32" cy="32" r="9"/></svg></div><div class="t">${esc(texto)}</div></div>`;
+function _radarCarregandoHTML(texto, extra){
+  return `<div class="radar-carregando"><div class="radar pequeno"><svg class="ml-dots" viewBox="0 0 64 64" role="status" aria-label="Carregando"><circle cx="14" cy="14" r="4.5"/><circle cx="32" cy="14" r="4.5"/><circle cx="50" cy="14" r="4.5"/><circle cx="14" cy="32" r="4.5"/><circle cx="50" cy="32" r="4.5"/><circle cx="14" cy="50" r="4.5"/><circle cx="32" cy="50" r="4.5"/><circle cx="50" cy="50" r="4.5"/><circle class="core" cx="32" cy="32" r="9"/></svg></div><div class="t">${esc(texto)}</div>${extra||''}</div>`;
 }
 
 // Guarda o quanto a página tinha rolado ANTES de entrar no edital — sem
@@ -4240,7 +4240,7 @@ async function abaEdital(nome, forcar){
     const emAndamentoAqui = _analiseEmAndamento && _analiseEmAndamentoId === id;
     if(_analiseCache){ cont.innerHTML = _analiseCache; return; }
     if(emAndamentoAqui){
-      cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.',
+      cont.innerHTML = _radarCarregandoHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.',
         ` <button class="btn discreto" style="padding:3px 10px;font-size:12px" onclick="cancelarAnalise()">Cancelar análise</button>`);
       return;
     }
@@ -4443,7 +4443,7 @@ async function _rodarAnaliseEdital(forcar){
   // troca pra aba Análise por IA de verdade (inclusive quando chamada a
   // partir da Cotação) — o progresso e o resultado sempre aparecem aqui,
   // nunca na aba de onde a análise foi disparada.
-  cont.innerHTML = _spinnerHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.', btnCancelar);
+  cont.innerHTML = _radarCarregandoHTML('Lendo o edital e analisando com IA… isso pode levar alguns segundos.', btnCancelar);
   _analiseEmAndamento = true;
   _analiseEmAndamentoId = id;
   try{
