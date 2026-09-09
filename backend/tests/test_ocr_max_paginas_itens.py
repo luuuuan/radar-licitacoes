@@ -141,7 +141,7 @@ def test_baixar_texto_pdf_repassa_max_paginas_ocr_pro_pdf_comum(monkeypatch):
 
     chamadas = []
     monkeypatch.setattr(ia, "_texto_de_pdf_bytes",
-                        lambda conteudo, max_paginas, max_chars, max_paginas_ocr=None:
+                        lambda conteudo, max_paginas, max_chars, max_paginas_ocr=None, marcar_paginas=False:
                             chamadas.append(max_paginas_ocr) or "texto do pdf")
 
     ia._baixar_texto_pdf("http://exemplo/arquivo", max_paginas_ocr=99)
@@ -163,7 +163,7 @@ def test_baixar_texto_pdf_repassa_max_paginas_ocr_pro_zip_de_pdfs(monkeypatch):
 
     chamadas = []
     monkeypatch.setattr(ia, "_texto_de_zip",
-                        lambda conteudo, max_paginas, max_chars, max_paginas_ocr=None:
+                        lambda conteudo, max_paginas, max_chars, max_paginas_ocr=None, marcar_paginas=False:
                             chamadas.append(max_paginas_ocr) or "texto do zip")
 
     ia._baixar_texto_pdf("http://exemplo/arquivo", max_paginas_ocr=77)

@@ -37,7 +37,7 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 10
+VERSAO_PROMPT = 11
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -52,7 +52,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Se não houver nenhuma declaração, use lista vazia []. Cada objeto:
     - "nome": string. A declaração, como aparece no edital.
     - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false SOMENTE se o edital afirmar explicitamente que a declaração segue texto livre/próprio da empresa. Os anexos com os modelos costumam vir no final do edital ou em arquivo separado, fora do texto disponível — se o texto não menciona anexo pra essa declaração (em vez de negar explicitamente que exista um), use null, não false: ausência de menção não é o mesmo que confirmação de que não há modelo.
-    - "detalhe": string curta (opcional). Ex.: "modelo no Anexo IV do edital", "sem modelo — declarar conforme exigência do item 8.2". "" se não houver nada relevante a acrescentar.
+    - "detalhe": string curta. Sempre que conseguir identificar com segurança, informe EM QUAL DOCUMENTO (pelo nome no cabeçalho "=== DOCUMENTO: ... ===") e EM QUAL PÁGINA (pelo marcador "[pág. N]" mais próximo) essa declaração/exigência aparece — o texto às vezes vem de mais de um arquivo (edital + termo de referência/anexo em arquivo separado), e sem isso o usuário não sabe onde procurar. Ex.: "modelo pronto no Anexo IV — documento 'Edital.pdf', pág. 12", "exigida no item 8.2, documento 'Termo de Referência.pdf', pág. 3 — sem modelo, redigir texto próprio". Se não der pra identificar documento/página com segurança (ex.: texto vindo de OCR, sem marcador de página por perto), descreva só o que for certo, sem inventar número de página ou nome de documento. "" apenas se não houver nada relevante a acrescentar.
 
 - "requisitos_tecnicos": array de strings. Especificações TÉCNICAS do produto/serviço contratado (o objeto em si) que NÃO tenham campo próprio neste JSON: normas/certificações do produto, embalagem, nível de serviço (SLA), condições de conservação. NÃO coloque aqui garantia do produto, assistência técnica nem entrega/instalação técnica — essas têm campos dedicados em "dados_proposta" (garantia_produto, assistencia_tecnica, entrega_tecnica) e devem ir SÓ lá. Não repita aqui os documentos de habilitação da empresa. Vazio se não encontrar.
 
@@ -92,7 +92,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
 - "pontos_atencao": array de strings (máx. 6). Riscos ou exigências INCOMUNS que NÃO tenham campo próprio neste JSON (ex.: multa/penalidade severa, prazo de entrega atipicamente curto, exigência técnica atípica, cláusula restritiva de concorrência). NÃO repita aqui informação que já esteja em outro campo estruturado (garantia_contratual, garantia_produto, validade_dias, exige_amostra, exige_visita etc.) — a tela já mostra esses campos separadamente, duplicar não ajuda. Única exceção: se "analise_incompleta" for true, inclua aqui um aviso de que a análise pode estar incompleta por truncamento do texto.
 
-O texto abaixo pode conter mais de um documento separado por "---" (por exemplo, uma RETIFICAÇÃO/ERRATA seguida do edital original). Quando houver informação conflitante entre eles (datas, prazos, exigências), o valor da RETIFICAÇÃO/ERRATA prevalece sobre o do edital original — a retificação é sempre mais recente, mesmo quando aparece antes no texto.
+O texto abaixo pode conter mais de um documento, cada um começando com um cabeçalho "=== DOCUMENTO: <nome do arquivo> ===" e separado do seguinte por "---" (por exemplo, o edital principal e um termo de referência/anexo publicados como arquivos separados, ou uma RETIFICAÇÃO/ERRATA seguida do edital original). Dentro de cada documento, use os marcadores "[pág. N]" que aparecem antes de trechos do texto pra saber em que página do ARQUIVO ATUAL (não do PDF combinado) uma informação está — são reiniciados a cada novo documento. Quando houver informação conflitante entre eles (datas, prazos, exigências), o valor da RETIFICAÇÃO/ERRATA prevalece sobre o do edital original — a retificação é sempre mais recente, mesmo quando aparece antes no texto.
 
 O texto foi extraído automaticamente de PDF e pode conter artefatos: cabeçalhos/rodapés repetidos em cada página, trechos de colunas fora de ordem, palavras quebradas por hífen no fim de linha. Ignore esses artefatos e reconstitua o sentido do conteúdo.
 
@@ -262,11 +262,18 @@ def _texto_de_word_bytes(conteudo: bytes, extensao: str, max_chars: int) -> str:
 
 
 def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
-                        max_paginas_ocr: int | None = None) -> str:
+                        max_paginas_ocr: int | None = None, marcar_paginas: bool = False) -> str:
     """Extrai texto de um PDF (bytes), com fallback de OCR se vier quase
     vazio (PDF escaneado). `max_paginas_ocr` (opcional) sobrescreve
     settings.OCR_MAX_PAGINAS só pra esta chamada — usado por itens_pdf.py,
-    que roda em segundo plano e pode pagar um OCR mais largo."""
+    que roda em segundo plano e pode pagar um OCR mais largo.
+
+    `marcar_paginas`: prefixa cada página com "[pág. N]" -- só usado pela
+    análise de edital (analisar()), pra IA conseguir dizer em que página
+    achou uma exigência/declaração. Fica False por padrão porque
+    itens_pdf.py pede pra IA copiar a descrição do item "como está no
+    edital" -- se o marcador entrasse no meio do texto, viraria lixo
+    colado na descrição extraída."""
     try:
         import pypdf
         leitor = pypdf.PdfReader(io.BytesIO(conteudo))
@@ -280,6 +287,8 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
             t = pag.extract_text() or ""
         except Exception:
             t = ""
+        if marcar_paginas and t.strip():
+            t = f"[pág. {i + 1}]\n{t}"
         partes.append(t)
         total += len(t)
         if total > max_chars:
@@ -308,7 +317,7 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
 
 
 def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int,
-                  max_paginas_ocr: int | None = None) -> str:
+                  max_paginas_ocr: int | None = None, marcar_paginas: bool = False) -> str:
     """O PNCP às vezes publica um único 'documento' como um .zip contendo
     vários PDFs (edital + anexos) em vez de um PDF direto. Sem isso, esses
     editais caíam sempre em "sem_texto" (pypdf/pdf2image não leem .zip)."""
@@ -327,15 +336,18 @@ def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int,
             dados = zf.read(nome)
         except Exception:
             continue
-        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total, max_paginas_ocr=max_paginas_ocr)
+        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total,
+                                max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas)
         if t:
+            if marcar_paginas:
+                t = f"=== DOCUMENTO: {nome} ===\n{t}"
             partes.append(t)
             total += len(t)
     return "\n\n---\n\n".join(partes)[:max_chars]
 
 
 def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_chars: int = 24000,
-                      max_paginas_ocr: int | None = None) -> tuple[str, bool]:
+                      max_paginas_ocr: int | None = None, marcar_paginas: bool = False) -> tuple[str, bool]:
     """Retorna (texto, falhou_busca). Achado real: um PDF genuinamente
     escaneado/sem texto extraível e uma falha passageira ao BAIXAR o
     arquivo (rede, PNCP fora do ar) geravam o mesmo texto vazio -- a
@@ -368,8 +380,10 @@ def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_ch
     if _e_zip(r.content):
         if _e_docx(r.content):
             return _texto_de_word_bytes(r.content, ".docx", max_chars), False
-        return _texto_de_zip(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr), False
-    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars, max_paginas_ocr=max_paginas_ocr), False
+        return _texto_de_zip(r.content, max_paginas, max_chars,
+                             max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas), False
+    return _texto_de_pdf_bytes(r.content, max_paginas, max_chars,
+                               max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas), False
 
 
 def _ocr_imagem(conteudo: bytes) -> str:
@@ -912,13 +926,14 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 break
             if not a.get("url"):
                 continue
-            t, falhou = _baixar_texto_pdf(a["url"], max_paginas=150, max_chars=MAX_TOTAL)
+            t, falhou = _baixar_texto_pdf(a["url"], max_paginas=150, max_chars=MAX_TOTAL, marcar_paginas=True)
             if falhou:
                 falhou_download = True
                 continue
             if len(t) > 300:
-                partes.append(t)
-                fontes.append(a.get("titulo") or "documento")
+                titulo = a.get("titulo") or "documento"
+                partes.append(f"=== DOCUMENTO: {titulo} ===\n{t}")
+                fontes.append(titulo)
         texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
         fonte = ", ".join(fontes) if fontes else None
         if len(texto) < 300:

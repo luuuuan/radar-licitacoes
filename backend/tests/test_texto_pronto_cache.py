@@ -104,7 +104,7 @@ def test_ok_inclui_texto_extraido_para_cache(monkeypatch):
         resultado = ia_module.analisar(
             "Objeto", [{"titulo": "Edital", "url": "http://x/e.pdf"}], api_key="fake-key")
     assert resultado["status"] == "ok"
-    assert resultado["_texto_extraido"] == "x" * 400
+    assert resultado["_texto_extraido"] == "=== DOCUMENTO: Edital ===\n" + "x" * 400
     assert resultado["_fonte_extraida"] == "Edital"
 
 
@@ -118,7 +118,7 @@ def test_erro_ia_inclui_texto_extraido_mesmo_com_chamada_de_ia_falhando(monkeypa
         resultado = ia_module.analisar(
             "Objeto", [{"titulo": "Edital", "url": "http://x/e.pdf"}], api_key="fake-key")
     assert resultado["status"] == "erro_ia"
-    assert resultado["_texto_extraido"] == "x" * 400
+    assert resultado["_texto_extraido"] == "=== DOCUMENTO: Edital ===\n" + "x" * 400
 
 
 def test_resposta_invalida_inclui_texto_extraido(monkeypatch):
@@ -127,7 +127,7 @@ def test_resposta_invalida_inclui_texto_extraido(monkeypatch):
         resultado = ia_module.analisar(
             "Objeto", [{"titulo": "Edital", "url": "http://x/e.pdf"}], api_key="fake-key")
     assert resultado["status"] == "resposta_invalida"
-    assert resultado["_texto_extraido"] == "x" * 400
+    assert resultado["_texto_extraido"] == "=== DOCUMENTO: Edital ===\n" + "x" * 400
 
 
 def test_sem_arquivo_nao_inclui_texto_extraido():
