@@ -1667,13 +1667,29 @@ function _fecharAjuda(a){
 // achado real: só o clique chamava isso; passando o mouse por cima (hover
 // puro, só CSS, sem passar por essa função) o balão nunca ganhava o
 // deslocamento, saindo cortado do mesmo jeito de antes da correção).
+// Acha o ancestral mais próximo que corta conteúdo (overflow diferente de
+// "visible" nos dois eixos) -- generaliza o caso original (.filtros-lateral)
+// pra qualquer tabela em "overflow-x:auto" (ex.: Cotação, Comparação por IA):
+// um "?" dentro do <thead> dessas tabelas tinha o balão cortado do mesmo
+// jeito, só que _posicionarAjuda só sabia procurar .filtros-lateral
+// especificamente, então nunca corrigia esse caso.
+function _ancestralComCorte(el){
+  let a = el.parentElement;
+  while(a && a !== document.body){
+    const cs = getComputedStyle(a);
+    if(cs.overflowX !== 'visible' || cs.overflowY !== 'visible') return a;
+    a = a.parentElement;
+  }
+  return null;
+}
 function _posicionarAjuda(el){
   requestAnimationFrame(()=>{
     const bolha = el.querySelector('.bolha');
     if(!bolha) return;
-    // se abrir pra cima estourar o topo da lateral de filtros (que tem scroll
-    // próprio), o balão fica "atrás" do corte do overflow — abre pra baixo nesse caso
-    const scrollAncestor = el.closest('.filtros-lateral');
+    // se abrir pra cima estourar o topo do ancestral que corta (scroll
+    // próprio ou overflow-x:auto), o balão fica "atrás" do corte — abre pra
+    // baixo nesse caso.
+    const scrollAncestor = _ancestralComCorte(el);
     if(scrollAncestor && bolha.getBoundingClientRect().top < scrollAncestor.getBoundingClientRect().top + 8){
       el.classList.add('abre-baixo');
     } else {
@@ -1681,12 +1697,12 @@ function _posicionarAjuda(el){
     }
     const r = bolha.getBoundingClientRect();
     const margem = 8;
-    // limite horizontal certo pra medir o "estourou a borda": dentro de
-    // .filtros-lateral (que tem overflow-x:hidden) um balão largo perto da
-    // quina esquerda saía cortado mesmo já "dentro" da viewport inteira,
-    // porque o corte acontece na borda da lateral, não na borda da tela —
-    // achado real com o hint do filtro de "Prazo final". Fora dela, usa a
-    // viewport inteira, como sempre foi.
+    // limite horizontal certo pra medir o "estourou a borda": dentro de um
+    // ancestral com overflow, um balão largo perto da quina saía cortado
+    // mesmo já "dentro" da viewport inteira, porque o corte acontece na
+    // borda do ancestral, não na borda da tela — achado real com o hint do
+    // filtro de "Prazo final" (e, depois, com colunas de tabela em
+    // overflow-x:auto). Sem ancestral com corte, usa a viewport inteira.
     const limite = scrollAncestor ? scrollAncestor.getBoundingClientRect() : {left: 0, right: innerWidth};
     let shift = 0;
     if(r.left < limite.left + margem) shift = (limite.left + margem) - r.left;
