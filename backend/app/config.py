@@ -143,12 +143,20 @@ class Settings(BaseSettings):
     # achado real: llama-3.3-70b-versatile devolveu HTTP 404 "does not
     # exist or you do not have access to it" -- a documentação da Groq
     # ainda lista esse modelo, mas na categoria "Enterprise" (provavelmente
-    # exige plano pago, não o tier gratuito). Trocado pra um modelo com
-    # preço por token normal (sinal de disponível pra conta comum). Se
-    # ESSE também der model_not_found, o jeito é conferir direto no
-    # console.groq.com (Playground) quais modelos a conta de verdade
-    # enxerga -- a doc pública nem sempre reflete o acesso da conta.
-    GROQ_MODELO_TEXTO: str = "openai/gpt-oss-120b"
+    # exige plano pago, não o tier gratuito). openai/gpt-oss-120b (usado
+    # antes deste) funcionava, mas só tem 8000 tokens/min no plano
+    # gratuito -- um edital grande sozinho já esgotava isso, e feria a
+    # comparação de catálogo em lotes rodando em sequência. groq/compound-
+    # mini tem 70000 tokens/min (confirmado ao vivo via header
+    # x-ratelimit-limit-tokens, ~8.75x mais) -- é um sistema "agentic" (pode
+    # chamar busca na web/execução de código sozinho), mas em teste real
+    # (prompt de ~15000 chars, response_format json_object) devolveu JSON
+    # limpo sem acionar nenhuma ferramenta, mesmo contexto (131072 tokens)
+    # do gpt-oss-120b. Se um dia parar de funcionar (model_not_found ou
+    # comportamento estranho, tipo tool call inesperada), conferir direto
+    # no console.groq.com (Playground) -- a doc pública nem sempre reflete
+    # o acesso da conta.
+    GROQ_MODELO_TEXTO: str = "groq/compound-mini"
 
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador

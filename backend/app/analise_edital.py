@@ -705,24 +705,29 @@ def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas
         rotulo=f"Gemini texto ({modelo})")
 
 
-# Achado real em produção (edital de 350 itens): a Groq devolveu HTTP 413
-# ("Request too large... TPM: Limit 8000, Requested 11382") -- confirmado
-# na doc deles que TODOS os modelos grandes do tier gratuito (120b, 20b)
-# compartilham o mesmo teto de 8000 tokens/minuto, e é POR REQUISIÇÃO, não
-# uma cota que enche e esvazia: uma requisição de 11382 tokens sozinha já
-# passa do teto de QUALQUER minuto, então esperar e tentar de novo com o
-# MESMO tamanho bate no mesmo 413 pra sempre -- só resolve diminuindo o
-# que é mandado. ~3 chars/token foi a proporção observada nesse caso real
-# (texto de PDF, cheio de acento/espaço junto); usa esse valor pra estimar
-# com folga. Corta só a ponta do TEXTO DO EDITAL (fica sempre no fim do
+# Achado real em produção (edital de 350 itens, modelo antigo
+# openai/gpt-oss-120b): a Groq devolveu HTTP 413 ("Request too large...
+# TPM: Limit 8000, Requested 11382") -- confirmado na doc deles que os
+# modelos grandes do tier gratuito (120b, 20b) compartilham só 8000
+# tokens/minuto, POR REQUISIÇÃO, não uma cota que enche e esvazia. Trocado
+# pro groq/compound-mini (ver comentário em settings.GROQ_MODELO_TEXTO em
+# config.py): 70000 tokens/minuto, confirmado ao vivo via header
+# x-ratelimit-limit-tokens -- ~8.75x mais espaço. Ainda assim mantém um
+# teto (bem maior que antes): sem ele, um 429/413 na Groq com o MESMO
+# tamanho bateria de novo pra sempre. ~1.3 chars/token foi a proporção
+# observada num teste real com texto repetitivo (pior caso, mais denso que
+# o ~3 chars/token de texto de PDF comum) -- usa esse valor pra estimar com
+# folga. Corta só a ponta do TEXTO DO EDITAL (fica sempre no fim do
 # _PROMPT) -- as instruções completas continuam intactas, e o próprio
 # prompt já pede pra IA sinalizar "analise_incompleta" quando o texto
 # parece cortado no meio, então truncar aqui é seguro (mesmo raciocínio de
-# MAX_TOTAL em analisar(), só que com um teto bem menor, específico da
+# MAX_TOTAL em analisar(), só que com um teto ainda menor, específico da
 # Groq). max_tokens explícito reserva espaço pra resposta dentro do mesmo
-# teto de 8000 (entrada + saída contam juntas).
-_GROQ_LIMITE_PROMPT_CHARS = 12000
-_GROQ_MAX_TOKENS_RESPOSTA = 3000
+# teto de 70000 (entrada + saída contam juntas) -- achado real: o valor
+# antigo (3000) podia cortar a resposta em editais com muita exigência de
+# habilitação, bem menor que o maxOutputTokens usado pro Gemini (16384).
+_GROQ_LIMITE_PROMPT_CHARS = 70000
+_GROQ_MAX_TOKENS_RESPOSTA = 6000
 
 
 def _chamar_groq(prompt: str, timeout: int, tentativas: int):
