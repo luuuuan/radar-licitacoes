@@ -31,6 +31,7 @@ class EditalColetado:
     data_abertura: date | None = None
     data_encerramento: date | None = None
     link: str | None = None
+    plataforma: str | None = None
     categoria_pncp: str | None = None
     itens: list[ItemColetado] = field(default_factory=list)
     raw: dict | None = None

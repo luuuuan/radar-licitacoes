@@ -153,6 +153,15 @@ class Edital(Base):
     data_abertura: Mapped[date | None] = mapped_column(Date, nullable=True)
     data_encerramento: Mapped[date | None] = mapped_column(Date, nullable=True)  # fim recebimento propostas
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # sistema/plataforma onde a disputa ocorre (ex.: "BLL Compras",
+    # "ComprasNet"), derivado do domínio de linkSistemaOrigem (campo da
+    # própria API do PNCP) na coleta -- ver _plataforma_de_link em
+    # connectors/pncp.py. Ao contrário de dados_orgao.plataforma da Análise
+    # por IA (só existe depois que o usuário roda a análise com a própria
+    # chave Gemini, e só se o PDF mencionar), este vem de graça pra TODO
+    # edital coletado, direto da API estruturada -- é o que alimenta o
+    # filtro por plataforma na listagem.
+    plataforma: Mapped[str | None] = mapped_column(String(120), nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -29,10 +29,11 @@ def _usuario(db):
 
 
 def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
-                      data_abertura=None, data_encerramento=None):
+                      data_abertura=None, data_encerramento=None, plataforma=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
-                data_abertura=data_abertura, data_encerramento=data_encerramento)
+                data_abertura=data_abertura, data_encerramento=data_encerramento,
+                plataforma=plataforma)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -43,10 +44,11 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
 
 
 def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP",
-                      valor_estimado=None, data_encerramento=None):
+                      valor_estimado=None, data_encerramento=None, plataforma=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
                objeto="Aquisicao", uf=uf, data_abertura=data_abertura,
-               valor_estimado=valor_estimado, data_encerramento=data_encerramento)
+               valor_estimado=valor_estimado, data_encerramento=data_encerramento,
+               plataforma=plataforma)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -56,7 +58,7 @@ def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP",
 
 
 def _listar(db, user, **kwargs):
-    padrao = dict(nivel=None, uf=None, status=None, vista="ativos",
+    padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
                   data_de=None, data_ate=None, busca_item=None,
@@ -374,6 +376,36 @@ def test_sem_match_nao_faz_n_mais_1_pra_carregar_itens():
         f"esperava no máximo 1 SELECT de linhas de itens_edital (eager load em lote), achou {len(selects_itens)}")
 
 
+def test_filtro_plataforma_exclui_editais_de_outra_plataforma():
+    """Achado real (pedido do usuário: filtro por plataforma/sistema, ex.:
+    BLL, ComprasNet) -- vale tanto pro edital que teve análise automática
+    (Match) quanto pro que ainda não teve (ver
+    test_sem_match_respeita_filtro_de_plataforma logo abaixo)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_bll = _edital_com_match(db, u, "ed-bll", plataforma="BLL Compras")
+    _edital_com_match(db, u, "ed-cn", plataforma="ComprasNet")
+
+    r = _listar(db, u, plataforma=["BLL Compras"])
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed_bll.id
+    assert r["resultados"][0]["plataforma"] == "BLL Compras"
+
+
+def test_sem_match_respeita_filtro_de_plataforma():
+    db = _sessao()
+    u = _usuario(db)
+    ed_bll = _edital_sem_match(db, "ed-bll", itens=["Papel A4 75g"], plataforma="BLL Compras")
+    _edital_sem_match(db, "ed-cn", itens=["Papel A4 75g"], plataforma="ComprasNet")
+
+    r = _listar(db, u, busca_item="papel a4", plataforma=["BLL Compras"])
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_bll.id
+    assert r["sem_match"][0]["plataforma"] == "BLL Compras"
+
+
 def test_sem_match_respeita_filtro_de_uf():
     """Achado real: selecionar um estado e depois buscar por um item trazia
     editais de QUALQUER estado no bloco "sem análise automática ainda" — essa
@@ -434,3 +466,17 @@ def test_sem_match_respeita_filtro_de_data_ate():
 
     assert len(r["sem_match"]) == 1
     assert r["sem_match"][0]["edital_id"] == ed_antes.id
+
+
+def test_listar_plataformas_devolve_valores_distintos_ordenados_sem_nulos():
+    from app.main import listar_plataformas
+    db = _sessao()
+    u = _usuario(db)
+    _edital_sem_match(db, "ed1", plataforma="ComprasNet")
+    _edital_sem_match(db, "ed2", plataforma="BLL Compras")
+    _edital_sem_match(db, "ed3", plataforma="ComprasNet")   # duplicado, não repete
+    _edital_sem_match(db, "ed4", plataforma=None)           # sem plataforma, fica de fora
+
+    r = listar_plataformas(user=u, db=db)
+
+    assert r["plataformas"] == ["BLL Compras", "ComprasNet"]

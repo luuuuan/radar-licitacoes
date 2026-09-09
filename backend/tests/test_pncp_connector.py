@@ -17,7 +17,7 @@ fake com uma fila de respostas. Rode com:  cd backend && pytest
 """
 from datetime import date
 
-from app.connectors.pncp import PNCPConnector, _parse_data
+from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link
 
 
 class _RespostaFake:
@@ -260,3 +260,62 @@ def test_coletar_itens_paralelo_chama_progresso_cb_por_edital():
     # sem cnpj/ano/sequencial válidos, _coletar_itens devolve [] sem request
     c._coletar_itens_paralelo(editais)
     assert sorted(chamadas) == [(1, 3), (2, 3), (3, 3)]
+
+
+# --------- _plataforma_de_link / plataforma no _mapear_edital --------- #
+# Achado real (pedido do usuário: filtro por plataforma na listagem):
+# linkSistemaOrigem (campo da própria API do PNCP) já identifica o
+# sistema/plataforma onde a disputa acontece -- não precisa de Análise por
+# IA (que só roda por pedido do usuário, com a própria chave, e só pega o
+# que o PDF menciona). Rode com:  cd backend && pytest
+
+def test_plataforma_de_link_none_devolve_none():
+    assert _plataforma_de_link(None) is None
+    assert _plataforma_de_link("") is None
+
+
+def test_plataforma_de_link_reconhece_bll():
+    assert _plataforma_de_link("https://bll.org.br/pregao/123") == "BLL Compras"
+
+
+def test_plataforma_de_link_reconhece_comprasnet():
+    assert _plataforma_de_link("https://www.comprasnet.gov.br/pregao/123") == "ComprasNet"
+
+
+def test_plataforma_de_link_remove_www():
+    assert _plataforma_de_link("https://www.bllcompras.com/x") == "BLL Compras"
+
+
+def test_plataforma_de_link_dominio_desconhecido_usa_o_proprio_dominio():
+    """Não força um "Outro" genérico -- o domínio já identifica o sistema
+    pra quem está acostumado, e cobre plataformas municipais/estaduais que
+    a lista de nomes bonitos não vai conhecer."""
+    assert _plataforma_de_link("https://compras.prefeiturax.sp.gov.br/edital/1") == "compras.prefeiturax.sp.gov.br"
+
+
+def test_plataforma_de_link_url_invalida_nao_quebra():
+    assert _plataforma_de_link("nao e uma url") is None or isinstance(_plataforma_de_link("nao e uma url"), str)
+
+
+def _reg_pncp(link_sistema_origem=None, **over):
+    reg = {
+        "numeroControlePNCP": "1",
+        "orgaoEntidade": {"cnpj": "123", "razaoSocial": "Órgão"},
+        "unidadeOrgao": {"ufSigla": "SP", "nomeUnidade": "Unidade"},
+        "anoCompra": 2026, "sequencialCompra": 1,
+        "linkSistemaOrigem": link_sistema_origem,
+    }
+    reg.update(over)
+    return reg
+
+
+def test_mapear_edital_preenche_plataforma_a_partir_do_link_sistema_origem():
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(link_sistema_origem="https://bll.org.br/x"), modalidade=6)
+    assert ec.plataforma == "BLL Compras"
+
+
+def test_mapear_edital_sem_link_sistema_origem_plataforma_none():
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(link_sistema_origem=None), modalidade=6)
+    assert ec.plataforma is None

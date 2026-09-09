@@ -1330,10 +1330,26 @@ def _inicio_hoje_utc() -> datetime:
     return inicio.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 
+@app.get("/api/editais/plataformas")
+def listar_plataformas(user: Usuario = Depends(_auth.get_current_user),
+                       db: Session = Depends(get_session)):
+    """Valores distintos de Edital.plataforma já vistos na coleta (ver
+    _plataforma_de_link em connectors/pncp.py) -- alimenta o filtro por
+    plataforma/sistema na listagem. Ao contrário do filtro de UF (lista fixa
+    de 27 estados), não dá pra saber de antemão quais sistemas existem, então
+    a lista de opções vem do que já foi coletado, não de algo fixo no código."""
+    valores = db.execute(
+        select(Edital.plataforma).where(Edital.plataforma.is_not(None))
+        .distinct().order_by(Edital.plataforma)
+    ).scalars().all()
+    return {"plataformas": valores}
+
+
 @app.get("/api/editais")
 def listar_editais(
     nivel: str | None = Query(None),
     uf: list[str] | None = Query(None),
+    plataforma: list[str] | None = Query(None),
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
@@ -1357,6 +1373,8 @@ def listar_editais(
         filtro.append(Match.nivel == nivel)
     if uf:
         filtro.append(Edital.uf.in_([u.upper() for u in uf]))
+    if plataforma:
+        filtro.append(Edital.plataforma.in_(plataforma))
     if status:
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
@@ -1481,6 +1499,7 @@ def listar_editais(
             "match_id": match.id, "edital_id": ed.id,
             "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
             "municipio": ed.municipio, "modalidade": ed.modalidade,
+            "plataforma": ed.plataforma,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "dias_restantes": dias, "link": ed.link,
@@ -1523,6 +1542,8 @@ def listar_editais(
         # editais não têm Match).
         if uf:
             q_sem_match = q_sem_match.where(Edital.uf.in_([u.upper() for u in uf]))
+        if plataforma:
+            q_sem_match = q_sem_match.where(Edital.plataforma.in_(plataforma))
         if tipo != "todos":
             prefixo_sm = "m" if tipo == "produtos" else "s"
             q_sem_match = q_sem_match.where(
@@ -1553,6 +1574,7 @@ def listar_editais(
             sem_match.append({
                 "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
                 "municipio": ed.municipio, "modalidade": ed.modalidade,
+                "plataforma": ed.plataforma,
                 "valor_estimado": ed.valor_estimado,
                 "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
                 "dias_restantes": dias, "link": ed.link, "itens_batem": itens_batem,

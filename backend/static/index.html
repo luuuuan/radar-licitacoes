@@ -1092,6 +1092,12 @@
           </div>
         </div>
         <div class="field">
+          <label>Plataforma / sistema
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum edital coletado.</span></span>
+          </label>
+          <div class="uf-checks" id="f-plataforma-checks"></div>
+        </div>
+        <div class="field">
           <label>Tipo de contratação</label>
           <select id="f-tipo" onchange="loadEditais()">
             <option value="todos">Produtos e serviços</option>
@@ -2504,10 +2510,24 @@ function _pesquisarItem(){
   _atualizarBuscaPorScroll();   // recolapsa só se realmente não estiver no topo
 }
 
+// Opções do filtro de plataforma vêm do que já foi visto na coleta (ao
+// contrário da UF, uma lista fixa de 27 estados já escrita no HTML) --
+// carregado 1x na abertura do app, não a cada loadEditais().
+async function _carregarFiltroPlataformas(){
+  const cont = $('#f-plataforma-checks');
+  if(!cont) return;
+  try{
+    const r = await api('/api/editais/plataformas');
+    cont.innerHTML = (r.plataformas||[]).map(p =>
+      `<label><input type="checkbox" value="${esc(p)}" onchange="loadEditais()"> ${esc(p)}</label>`).join('');
+  } catch(e){ /* filtro só não aparece; resto da tela funciona normalmente */ }
+}
+
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
 function limparFiltros(){
   $('#f-nivel').value = '';
   document.querySelectorAll('#f-uf-checks input:checked').forEach(c=>c.checked=false);
+  document.querySelectorAll('#f-plataforma-checks input:checked').forEach(c=>c.checked=false);
   $('#f-tipo').value = 'todos';
   $('#f-status').value = '';
   $('#f-porpag').value = '20';
@@ -2527,6 +2547,7 @@ async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value,
         ufs=[...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
+        plataformas=[...document.querySelectorAll('#f-plataforma-checks input:checked')].map(c=>c.value),
         st=$('#f-status').value, nl=$('#f-naolidos').checked,
         hoje=$('#f-hoje') && $('#f-hoje').checked,
         tipo=$('#f-tipo') ? $('#f-tipo').value : 'todos',
@@ -2537,13 +2558,14 @@ async function loadEditais(resetPagina=true){
         date_=$('#f-data-ate') ? $('#f-data-ate').value : '';
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
-  const temFiltroAtivo = !!(nivel || ufs.length || st || nl || hoje ||
+  const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || st || nl || hoje ||
     tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
   const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
   if(nivel)qs.set('nivel',nivel);
   ufs.forEach(u=>qs.append('uf',u));
+  plataformas.forEach(p=>qs.append('plataforma',p));
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   if(hoje) qs.set('hoje','true');
@@ -5420,6 +5442,7 @@ async function sair(){
   // entrando direto num edital): PRODUTOS_COUNT (dentro de loadResumo)
   // alimenta o estado vazio da aba Editais, e pré-carregar a lista deixa
   // a troca pra lá mais rápida quando o usuário voltar do edital.
+  _carregarFiltroPlataformas();
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });

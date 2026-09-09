@@ -123,3 +123,42 @@ def test_edital_ja_existente_atualiza_valor_estimado_mesmo_zero():
 
     ed = db.query(Edital).filter_by(id_externo="e1").one()
     assert ed.valor_estimado == 0.0
+
+
+def test_edital_novo_grava_plataforma():
+    db = _sessao()
+    _persistir_edital(db, _ec(plataforma="BLL Compras"))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.plataforma == "BLL Compras"
+
+
+def test_edital_existente_sem_plataforma_e_completado_na_proxima_coleta():
+    """Achado real (pedido do usuário: filtro por plataforma): a 1ª coleta de
+    um edital ainda ativo pode não ter conseguido reconhecer a plataforma
+    (ex.: linkSistemaOrigem ausente naquela resposta) -- a próxima coleta
+    (edital ainda dentro do prazo, o PNCP continua devolvendo ele) preenche
+    sozinha, sem precisar de backfill manual -- mesmo padrão já usado pra
+    orgao/data_encerramento/link."""
+    db = _sessao()
+    _persistir_edital(db, _ec(plataforma=None))
+    db.commit()
+
+    _persistir_edital(db, _ec(plataforma="ComprasNet"))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.plataforma == "ComprasNet"
+
+
+def test_edital_existente_com_plataforma_nao_e_apagada_quando_coleta_nova_vem_sem():
+    db = _sessao()
+    _persistir_edital(db, _ec(plataforma="BLL Compras"))
+    db.commit()
+
+    _persistir_edital(db, _ec(plataforma=None))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.plataforma == "BLL Compras"

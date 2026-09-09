@@ -23,6 +23,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta, datetime
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -67,6 +68,43 @@ def _parse_data(valor: str | None) -> date | None:
         return datetime.fromisoformat(valor.replace("Z", "")).date()
     except (ValueError, TypeError):
         return None
+
+
+# Nomes "bonitos" só pros domínios que a gente reconhece com confiança —
+# pra qualquer outro, usa o próprio domínio (ver _plataforma_de_link) em vez
+# de esconder atrás de um "Outro" genérico: o domínio já identifica o
+# sistema pra quem está acostumado com ele, e novos sistemas aparecem no
+# filtro sozinhos, sem precisar atualizar esta lista pra cada um.
+_NOMES_PLATAFORMA = {
+    "bll.org.br": "BLL Compras",
+    "bllcompras.com": "BLL Compras",
+    "comprasnet.gov.br": "ComprasNet",
+    "compras.gov.br": "Compras.gov.br",
+    "portaldecompraspublicas.com.br": "Portal de Compras Públicas",
+    "licitanet.com.br": "Licitanet",
+    "bbmnetlicitacoes.com.br": "BBMNET Licitações",
+    "licitacoes-e.com.br": "Licitações-e (Banco do Brasil)",
+    "bec.sp.gov.br": "BEC/SP",
+}
+
+
+def _plataforma_de_link(link_sistema_origem: str | None) -> str | None:
+    """Nome da plataforma/sistema onde a disputa acontece, a partir do
+    domínio de linkSistemaOrigem (campo da própria API do PNCP) -- acha na
+    coleta, sem depender da Análise por IA (que só roda por pedido do
+    usuário, com a própria chave Gemini, e só pega o que o PDF menciona)."""
+    if not link_sistema_origem:
+        return None
+    try:
+        host = urlparse(link_sistema_origem).netloc.lower()
+    except ValueError:
+        return None
+    host = host.split("@")[-1].split(":")[0]   # remove usuário/porta, se vier
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return None
+    return _NOMES_PLATAFORMA.get(host, host)
 
 
 class PNCPConnector(BaseConnector):
@@ -278,6 +316,7 @@ class PNCPConnector(BaseConnector):
             data_abertura=_parse_data(reg.get("dataAberturaProposta")),
             data_encerramento=_parse_data(reg.get("dataEncerramentoProposta")),
             link=self._montar_link(reg),
+            plataforma=_plataforma_de_link(reg.get("linkSistemaOrigem")),
             categoria_pncp=str(reg.get("codigoCategoriaProcesso") or reg.get("categoriaProcesso") or ""),
             # NÃO guardamos o JSON inteiro do PNCP (inflaria o banco com milhares
             # de editais). Só uma referência temporária para buscar os itens.
