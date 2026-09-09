@@ -1710,10 +1710,22 @@ def _e_unidade_embalagem_pncp(unidade_medida: str | None) -> bool:
 # mais que o produto do catálogo já tivesse itens_por_unidade=50 certinho: a
 # confirmação era simplesmente impossível de alcançar, não importava o que o
 # usuário cadastrasse. Mesma lista de palavras de embalagem, procurando
-# "<palavra> [com/de/c/] <número>" na descrição.
+# "<palavra> [contendo/com/de/c/] <número>" na descrição.
+#
+# Achado real (auditoria code-reviewer/debugger na Inteligência de Preço,
+# que reaproveita esta mesma função): "contendo" (fraseado comum em editais,
+# ex. CATMAT: "Caixa contendo 100 unidades") não batia, só "com"/"c" — e o
+# \d+ sem `\b` deixava o motor de regex "recuar" pra um prefixo do número
+# (ex. "500" -> "50") só pra escapar do bloqueio de peso/volume/prazo
+# abaixo, gerando uma quantidade errada em vez de simplesmente não achar
+# nada. "Pacote 500 g"/"pacote 500 ml"/"kit 12 meses de garantia" não são
+# embalagem de peça nenhuma (é peso, volume ou prazo) — sem o bloqueio
+# abaixo, "500 g" virava "500 peças" e distorcia o valor por peça em até
+# 500x.
 _RE_QTD_EMBALAGEM_DESCRICAO = re.compile(
     r"(?:" + "|".join(sorted(_UNIDADES_EMBALAGEM_PNCP, key=len, reverse=True)) +
-    r")s?\s*(?:com|de|c)?\s*(\d+)")
+    r")s?\s*(?:contendo|com|de|c)?\s*(\d+)\b"
+    r"(?!\s*(?:g|gr|grs|kg|mg|ml|l|litros?|mes(?:es)?|anos?|dias?|horas?)\b)")
 
 
 def _qtd_embalagem_descricao(descricao: str | None) -> int | None:
@@ -4107,36 +4119,47 @@ def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_use
 
 
 # --------------------------- Inteligência de preço -------------------- #
-# Detecta quando a descrição do item deixa claro que a unidade cotada é uma
-# EMBALAGEM com várias peças dentro (ex.: "caixa com 250 unidades", "(100
-# UND)") — sem isso, a Inteligência de Preço comparava "preço de 1 peça
-# avulsa" com "preço de uma caixa de 250" como se fossem a mesma grandeza,
-# distorcendo mediana/mínimo/máximo em até 100x+. Achado real em produção:
-# "Envelope Kraft" variava de R$0,84 a R$164,80 só por causa dessa mistura
-# de escala entre editais que cotam por unidade e editais que cotam por caixa.
-_RE_MULTIPLICADOR_EMBALAGEM = re.compile(
-    r"(?:caixa|cx|pacote|pct|kit|fardo|embalagem)\s*(?:com|c/)?\s*(?P<n1>\d+)\s*"
-    r"(?:unidades?|und?|un\.?|pe[cç]as?|folhas?)?\b"
-    r"|(?:com|c/)\s*(?P<n2>\d+)\s*(?:unidades?|und?|un\.?|pe[cç]as?|folhas?)\b"
-    r"|\(\s*(?P<n3>\d+)\s*(?:unidades?|und?|un\.?)\s*\)",
-    re.IGNORECASE,
-)
+# Detecta quando a descrição/unidade do item deixa claro que a unidade
+# cotada é uma EMBALAGEM com várias peças dentro (ex.: "caixa com 250
+# unidades", "(100 UND)") — sem isso, a Inteligência de Preço comparava
+# "preço de 1 peça avulsa" com "preço de uma caixa de 250" como se fossem
+# a mesma grandeza, distorcendo mediana/mínimo/máximo em até 100x+. Achado
+# real em produção: "Envelope Kraft" variava de R$0,84 a R$164,80 só por
+# causa dessa mistura de escala entre editais que cotam por unidade e
+# editais que cotam por caixa.
+#
+# Achado real (auditoria code-reviewer): esta função reimplementava do
+# zero (com regex e lista de palavras bem mais estreitas) o mesmo problema
+# que _qtd_embalagem_pncp/_qtd_embalagem_descricao já resolvem de forma
+# mais completa pra Cotação/margem (_custo_e_margem) -- inclusive olhando
+# primeiro o campo ESTRUTURADO unidadeMedida do PNCP, que a versão antiga
+# desta função nem recebia. Resultado prático: o MESMO item podia ser
+# normalizado diferente nas duas telas. Reaproveita a lógica já madura em
+# vez de manter uma segunda regex mais fraca -- só o formato parentético
+# ("(100 UND)", sem nenhuma palavra de embalagem antes) continua sendo um
+# fallback à parte, porque não é um padrão que faça sentido em
+# unidadeMedida nem vale generalizar pra _qtd_embalagem_descricao.
+_RE_QTD_PARENTETICA = re.compile(r"\(\s*(\d+)\s*(?:unidades?|und?|un\.?)\s*\)", re.IGNORECASE)
 
 
 def _valor_unitario_normalizado(item: ItemEdital) -> float | None:
-    """Valor unitário do item, dividido pelo multiplicador de embalagem
-    quando a descrição deixa claro que a unidade cotada é uma caixa/pacote
+    """Valor unitário do item, dividido pelo tamanho da embalagem quando a
+    unidade/descrição deixa claro que a unidade cotada é uma caixa/pacote
     com várias peças — pra comparar "preço por peça" com "preço por peça"
     na Inteligência de Preço, não misturar escalas diferentes. Sem isso, um
     item cotado "caixa com 250" e outro cotado por unidade avulsa entravam
     na mesma amostra como se fossem o mesmo tipo de valor."""
     if item.valor_unitario is None or item.valor_unitario <= 0:
         return None
-    m = _RE_MULTIPLICADOR_EMBALAGEM.search(item.descricao or "")
-    if m:
-        n = int(m.group("n1") or m.group("n2") or m.group("n3"))
-        if n > 1:
-            return item.valor_unitario / n
+    n = _qtd_embalagem_pncp(item.unidade_medida)
+    if n is None:
+        n = _qtd_embalagem_descricao(item.descricao)
+    if n is None:
+        m = _RE_QTD_PARENTETICA.search(item.descricao or "")
+        if m:
+            n = int(m.group(1))
+    if n is not None and n > 1:
+        return item.valor_unitario / n
     return item.valor_unitario
 
 
@@ -4268,8 +4291,23 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
     itens_map = {(it.edital_id, it.numero): it for it in db.execute(
         select(ItemEdital).where(ItemEdital.edital_id.in_(edital_ids))).scalars()}
 
-    valores_validos = [v for it in itens_map.values()
-                       if (v := _valor_unitario_normalizado(it)) is not None]
+    # Achado real (auditoria code-reviewer/debugger): itens_map tem TODOS os
+    # itens dos editais em edital_ids (qualquer produto), mas a banda de
+    # outlier tem que ser calculada só em cima dos valores deste produto —
+    # mesmo escopo de `referencias`, o mesmo que inteligencia_preco() usa
+    # pra montar valores_por_produto[produto_id]. Sem esse filtro, um item
+    # de outro produto no MESMO edital (ex.: uma cadeira de R$4500 num
+    # edital de material de escritório) contaminava a mediana bruta usada
+    # pra decidir a faixa aceitável, fazendo o motivo de exclusão mostrado
+    # aqui divergir do que a tela principal realmente usou no cálculo.
+    valores_validos = []
+    for edital_id, numero in referencias:
+        it = itens_map.get((edital_id, numero))
+        if it is None:
+            continue
+        v = _valor_unitario_normalizado(it)
+        if v is not None:
+            valores_validos.append(v)
     banda = _banda_outlier_preco(valores_validos)
 
     linhas = []
