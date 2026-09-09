@@ -1358,9 +1358,19 @@ def listar_plataformas(user: Usuario = Depends(_auth.get_current_user),
     _plataforma_de_link em connectors/pncp.py) -- alimenta o filtro por
     plataforma/sistema na listagem. Ao contrário do filtro de UF (lista fixa
     de 27 estados), não dá pra saber de antemão quais sistemas existem, então
-    a lista de opções vem do que já foi coletado, não de algo fixo no código."""
+    a lista de opções vem do que já foi coletado, não de algo fixo no código.
+
+    Achado real: antes escaneava TODOS os editais do sistema (de qualquer
+    usuário), não só os que têm Match com o usuário logado -- oferecia
+    plataformas no filtro que nunca tinham um resultado pra mostrar (a
+    listagem em GET /api/editais é sempre restrita a Match.usuario_id ==
+    user.id), um beco sem saída: usuário marcava a opção e caía sempre em
+    "nenhum edital encontrado". Agora só entra plataforma de edital que já
+    tem Match com este usuário -- o mesmo universo que a listagem usa."""
     valores = db.execute(
-        select(Edital.plataforma).where(Edital.plataforma.is_not(None))
+        select(Edital.plataforma)
+        .join(Match, Match.edital_id == Edital.id)
+        .where(Match.usuario_id == user.id, Edital.plataforma.is_not(None))
         .distinct().order_by(Edital.plataforma)
     ).scalars().all()
     return {"plataformas": valores}

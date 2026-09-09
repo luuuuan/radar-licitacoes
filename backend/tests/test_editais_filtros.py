@@ -472,11 +472,32 @@ def test_listar_plataformas_devolve_valores_distintos_ordenados_sem_nulos():
     from app.main import listar_plataformas
     db = _sessao()
     u = _usuario(db)
-    _edital_sem_match(db, "ed1", plataforma="ComprasNet")
-    _edital_sem_match(db, "ed2", plataforma="BLL Compras")
-    _edital_sem_match(db, "ed3", plataforma="ComprasNet")   # duplicado, não repete
-    _edital_sem_match(db, "ed4", plataforma=None)           # sem plataforma, fica de fora
+    _edital_com_match(db, u, "ed1", plataforma="ComprasNet")
+    _edital_com_match(db, u, "ed2", plataforma="BLL Compras")
+    _edital_com_match(db, u, "ed3", plataforma="ComprasNet")   # duplicado, não repete
+    _edital_com_match(db, u, "ed4", plataforma=None)           # sem plataforma, fica de fora
 
     r = listar_plataformas(user=u, db=db)
 
     assert r["plataformas"] == ["BLL Compras", "ComprasNet"]
+
+
+def test_listar_plataformas_nao_oferece_plataforma_sem_match_do_usuario():
+    """Achado real: o filtro oferecia plataformas de editais que nunca
+    apareceriam na listagem do usuário (sem Match nenhum, ou Match de OUTRO
+    usuário) -- marcar a opção sempre dava "nenhum edital encontrado". A
+    lista de opções agora reflete só o que o próprio usuário pode ver."""
+    from app.main import listar_plataformas
+    db = _sessao()
+    u = _usuario(db)
+    outro = Usuario(nome="Outro", email="outro@t.com", senha_hash="x")
+    db.add(outro)
+    db.commit()
+
+    _edital_com_match(db, u, "ed-meu", plataforma="ComprasNet")
+    _edital_sem_match(db, "ed-orfao", plataforma="BLL Compras")            # sem Match nenhum
+    _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")    # Match de outro usuário
+
+    r = listar_plataformas(user=u, db=db)
+
+    assert r["plataformas"] == ["ComprasNet"]
