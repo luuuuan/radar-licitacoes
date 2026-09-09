@@ -96,6 +96,10 @@ class Fornecedor(Base):
     site: Mapped[str | None] = mapped_column(String(255), nullable=True)
     observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # fornecedor de confiança do usuário -- pedido: destacar/filtrar os
+    # fornecedores que ele já sabe que são bons, sem precisar abrir cada um
+    # pra lembrar. Não afeta nada do motor/cálculo, é só organização.
+    favorito: Mapped[bool] = mapped_column(Boolean, default=False)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

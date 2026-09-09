@@ -809,19 +809,40 @@ class FornecedorIn(BaseModel):
     observacao: str | None = None
 
 
-def _fornecedor_dict(f: Fornecedor) -> dict:
+def _fornecedor_dict(f: Fornecedor, produtos_count: int = 0) -> dict:
     return {"id": f.id, "nome": f.nome, "telefone": f.telefone,
             "whatsapp": f.whatsapp, "email": f.email, "site": f.site,
-            "observacao": f.observacao}
+            "observacao": f.observacao, "favorito": f.favorito,
+            "produtos_count": produtos_count}
 
 
 @app.get("/api/fornecedores")
 def listar_fornecedores(user: Usuario = Depends(_auth.get_current_user),
                         db: Session = Depends(get_session)):
     fs = db.execute(select(Fornecedor).where(Fornecedor.usuario_id == user.id,
-                    Fornecedor.ativo == True).order_by(Fornecedor.nome.asc())  # noqa: E712
+                    Fornecedor.ativo == True)  # noqa: E712
+                    .order_by(Fornecedor.favorito.desc(), Fornecedor.nome.asc())
                     ).scalars().all()
-    return [_fornecedor_dict(f) for f in fs]
+    # 1 query pra contar produtos vinculados de todos os fornecedores da
+    # página, em vez de 1 SELECT COUNT por fornecedor num loop (N+1) --
+    # achado real: pedido do usuário foi "mostrar quantos produtos por
+    # fornecedor", direto uma contagem em lote é barata e evita esse custo.
+    contagens = dict(db.execute(
+        select(Produto.fornecedor_id, func.count(Produto.id))
+        .where(Produto.usuario_id == user.id, Produto.ativo == True,  # noqa: E712
+              Produto.fornecedor_id.in_([f.id for f in fs]))
+        .group_by(Produto.fornecedor_id)
+    ).all())
+    return [_fornecedor_dict(f, contagens.get(f.id, 0)) for f in fs]
+
+
+@app.post("/api/fornecedores/{fid}/favorito")
+def alternar_favorito_fornecedor(fid: int, user: Usuario = Depends(_auth.get_current_user),
+                                 db: Session = Depends(get_session)):
+    f = _fornecedor_do_usuario(db, fid, user)
+    f.favorito = not f.favorito
+    db.commit()
+    return {"id": f.id, "favorito": f.favorito}
 
 
 @app.post("/api/fornecedores")

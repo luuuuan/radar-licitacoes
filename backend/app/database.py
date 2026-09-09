@@ -72,6 +72,7 @@ _COLUNAS_NOVAS = {
         ("plataforma", "VARCHAR(120)"),
     ],
     "produtos_user": [("usuario_id", "INTEGER")],
+    "fornecedores": [("favorito", "BOOLEAN DEFAULT FALSE")],
 }
 # adiciona usuario_id às tabelas que passam a ser por-usuário
 for _t in ("produtos", "matches", "documentos", "regras_exclusao", "propostas"):

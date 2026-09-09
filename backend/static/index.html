@@ -1309,7 +1309,7 @@
       </div>
     </div>
 
-    <table><thead><tr><th>Nome</th><th>Telefone</th><th>WhatsApp</th><th>E-mail</th><th>Site</th><th></th></tr></thead>
+    <table><thead><tr><th></th><th>Nome</th><th>Produtos</th><th>Telefone</th><th>WhatsApp</th><th>E-mail</th><th>Site</th><th></th></tr></thead>
       <tbody id="lista-fornecedores"></tbody></table>
   </section>
 
@@ -1387,8 +1387,14 @@
     <div class="card">
       <h3 style="margin-top:0">Inteligência de preço</h3>
       <p class="muted" style="font-size:12px;margin-top:0">Referência de mercado por produto, com base no <strong>valor unitário do item</strong> nos editais já coletados em que cada produto apareceu. Quanto mais coletas, mais confiável. Use como apoio para precificar seus lances.</p>
+      <p style="font-size:12px;margin:8px 0 0;padding:8px 10px;border-radius:8px;background:rgba(59,130,246,.12);color:var(--accent,#3b82f6);display:flex;gap:6px;align-items:flex-start">
+        <span aria-hidden="true">ℹ</span>
+        <span>Estes valores são o que o <strong>órgão estimou pagar</strong> pelo item na publicação do edital — não o preço que de fato venceu a disputa (o sistema ainda não acompanha o resultado/homologação do PNCP). É um indicativo do que o mercado costuma orçar, não uma garantia do preço vencedor.</span>
+      </p>
     </div>
-    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th><th>Mediana</th><th>Máximo</th><th>Seu preço</th><th></th></tr></thead>
+    <table><thead><tr><th>Produto</th><th>Ocorrências</th><th>Mínimo</th>
+      <th>Mediana <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Valor estimado pelo órgão (não o preço vencedor real) — veja o aviso acima.</span></span></th>
+      <th>Máximo</th><th>Seu preço</th><th></th></tr></thead>
       <tbody id="lista-precos"></tbody></table>
   </section>
 
@@ -1519,6 +1525,7 @@
           <label class="switch"><input type="checkbox" id="c-ia" onchange="salvarConfig()"><span class="slider"></span></label>
           <span id="ia-status" class="muted" style="font-size:12px"></span>
         </div>
+        <p class="muted" style="font-size:11px;margin:6px 0 0">Isso afeta só o motor automático que casa editais com seu catálogo (capacidade compartilhada entre usuários, por isso pode ficar temporariamente indisponível). A <strong>Análise por IA</strong> de cada edital é separada — usa a sua própria chave Gemini, sem esse limite.</p>
       </div>
     </div>
 
@@ -3042,12 +3049,15 @@ let _fornecedores=[];   // cache local pra editarFornecedor(id) não precisar em
 async function loadFornecedores(){
   const fs = await api('/api/fornecedores');
   _fornecedores = fs;
-  if(!fs.length){ $('#lista-fornecedores').innerHTML='<tr><td colspan=6 class="muted">Nenhum fornecedor cadastrado.</td></tr>'; return; }
+  if(!fs.length){ $('#lista-fornecedores').innerHTML='<tr><td colspan=8 class="muted">Nenhum fornecedor cadastrado.</td></tr>'; return; }
   $('#lista-fornecedores').innerHTML = fs.map(f=>{
     const site = f.site ? linkSeguro(f.site.startsWith('http')?f.site:'https://'+f.site) : '';
     const wpp = f.whatsapp ? linkWhatsapp(f.whatsapp) : '';
     return `<tr>
-    <td>${esc(f.nome)}</td><td>${esc(f.telefone||'—')}</td>
+    <td><button class="btn ghost discreto" style="padding:4px 8px;${f.favorito?'color:var(--accent)':''}" onclick="toggleFavoritoFornecedor(${f.id})" title="${f.favorito?'Remover dos favoritos':'Marcar como fornecedor de confiança'}">${f.favorito?ICN.estrela:ICN.estrelaVazia}</button></td>
+    <td>${esc(f.nome)}</td>
+    <td class="muted">${f.produtos_count} produto${f.produtos_count===1?'':'s'}</td>
+    <td>${esc(f.telefone||'—')}</td>
     <td>${wpp?`<a class="btn ghost" href="${esc(wpp)}" target="_blank">WhatsApp ↗</a>`:'—'}</td>
     <td>${esc(f.email||'—')}</td>
     <td>${site?`<a class="btn ghost" href="${esc(site)}" target="_blank">Site ↗</a>`:'—'}</td>
@@ -3056,6 +3066,10 @@ async function loadFornecedores(){
       <button class="btn ghost discreto" onclick="delFornecedor(${f.id})">excluir</button>
     </td></tr>`;
   }).join('');
+}
+async function toggleFavoritoFornecedor(id){
+  await api(`/api/fornecedores/${id}/favorito`, {method:'POST'});
+  loadFornecedores();
 }
 function abrirFormFornecedor(){
   cancelarEdicaoForn();
@@ -4348,6 +4362,7 @@ async function _acompanharCompletarDescricao(id, ativo, avisar, cancelamento){
 
 function _corpoAnaliseIntro(){
   return `<p class="muted" style="margin-top:0;max-width:560px">A análise por IA lê o texto do edital publicado no PNCP e resume documentos exigidos, requisitos técnicos, prazos e pontos de atenção.</p>
+    <p class="muted" style="font-size:11px;max-width:560px;margin-top:-6px">Usa a <strong>sua própria chave Gemini</strong> (cadastrada em Conta) — sem limite compartilhado com outros usuários; o custo/cota é da sua conta Google AI Studio, não do sistema.</p>
     <button class="btn" onclick="_rodarAnaliseEdital(false)">${ICN.ia||''} Realizar análise com IA</button>`;
 }
 
@@ -5022,11 +5037,43 @@ async function _montarPropostaEdital(id, ativo){
   // "adicionar item" (propAbrirModalAdd), restrito ao que existe no edital.
   window._propItensEdital = p.itens_edital||[];
   _propObsAtual = p.observacoes||'';
+  _propDocsAviso = [];   // zera antes de buscar -- não mostra aviso da proposta anterior por um instante
   _renderizarPropostaEdital();
+  _carregarAvisoDocumentosProposta(id);
+}
+
+// Achado real (pedido do usuário): montar a proposta sem lembrar que um
+// documento de habilitação está vencido/vencendo é fácil de esquecer até
+// a hora de enviar. Não depende da Análise por IA ter rodado pra este
+// edital (o checklist por exigência, _anexar_checklist_documentos, só
+// existe DEPOIS da análise) -- é um lembrete geral sobre o cadastro do
+// usuário, sempre disponível. Mesmo limiar de "vence em breve" (15 dias)
+// já usado na aba Documentos (ver loadDocumentos).
+let _propDocsAviso = [];
+async function _carregarAvisoDocumentosProposta(id){
+  let docs;
+  try{ docs = await api('/api/documentos'); }catch(e){ return; }
+  if(_propEditalId !== id) return;   // usuário já saiu do edital enquanto buscava
+  _propDocsAviso = docs.filter(d => d.ativo && d.dias_para_vencer!=null && d.dias_para_vencer<=15);
+  _renderizarAvisoDocumentosProposta();
+}
+function _renderizarAvisoDocumentosProposta(){
+  const mount = $('#prop-aviso-docs');
+  if(!mount) return;
+  if(!_propDocsAviso.length){ mount.innerHTML=''; return; }
+  const vencidos = _propDocsAviso.filter(d=>d.dias_para_vencer<0).length;
+  const txt = vencidos
+    ? `${vencidos} documento${vencidos===1?'':'s'} de habilitação vencido${vencidos===1?'':'s'}${_propDocsAviso.length>vencidos?` (e mais ${_propDocsAviso.length-vencidos} vencendo em breve)`:''}`
+    : `${_propDocsAviso.length} documento${_propDocsAviso.length===1?'':'s'} de habilitação vencendo em breve`;
+  mount.innerHTML = `<p style="margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    ⚠ ${esc(txt)} — confira antes de enviar a proposta.
+    <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="tab('documentos')">ver documentos</button>
+  </p>`;
 }
 function _renderizarPropostaEdital(){
   $('#edital-conteudo').innerHTML = `
     <p class="muted" style="font-size:12px;margin-top:0">Preencha custo e preço por item. Totais e margem são calculados automaticamente.</p>
+    <div id="prop-aviso-docs"></div>
     <div id="prop-tabela"></div>
     <div class="field" style="margin-top:10px"><label>Observações</label>
       <textarea id="prop-obs" style="width:100%;min-height:50px" oninput="_propObsAtual=this.value">${esc(_propObsAtual)}</textarea></div>
@@ -5036,6 +5083,10 @@ function _renderizarPropostaEdital(){
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
     </div>`;
+  // reabrir a aba (cache-hit em _montarPropostaEdital) recria o HTML do
+  // zero -- se já tínhamos calculado o aviso numa carga anterior deste
+  // mesmo edital, mostra na hora, sem esperar buscar /api/documentos de novo.
+  _renderizarAvisoDocumentosProposta();
   renderProposta();
 }
 
