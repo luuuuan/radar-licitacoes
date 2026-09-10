@@ -2561,6 +2561,7 @@ function _capturarFiltroAtual(){
     valorMax: $('#f-valor-max') ? $('#f-valor-max').value : '',
     dataDe: $('#f-data-de') ? $('#f-data-de').value : '',
     dataAte: $('#f-data-ate') ? $('#f-data-ate').value : '',
+    buscaItem: $('#f-busca-item') ? $('#f-busca-item').value : '',
   };
 }
 
@@ -2594,6 +2595,7 @@ function _aplicarFiltroSalvo(){
   if($('#f-valor-max')) $('#f-valor-max').value = f.valorMax || '';
   if($('#f-data-de')) $('#f-data-de').value = f.dataDe || '';
   if($('#f-data-ate')) $('#f-data-ate').value = f.dataAte || '';
+  if($('#f-busca-item')) $('#f-busca-item').value = f.buscaItem || '';
   _plataformasParaMarcar = f.plataformas || [];
 }
 
@@ -5691,7 +5693,12 @@ async function sair(){
   // alimenta o estado vazio da aba Editais, e pré-carregar a lista deixa
   // a troca pra lá mais rápida quando o usuário voltar do edital.
   _aplicarFiltroSalvo();   // antes de carregar plataformas/editais, pros filtros já saírem aplicados
-  _carregarFiltroPlataformas();
+  // achado real (code-reviewer): sem o await, loadEditais() (linha abaixo)
+  // rodava ANTES das checkboxes de plataforma existirem no DOM -- um filtro
+  // salvo com plataforma marcada perdia essa parte silenciosamente na
+  // primeira busca (as checkboxes apareciam marcadas segundos depois, mas
+  // a lista já tinha sido buscada sem esse filtro).
+  await _carregarFiltroPlataformas();
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });

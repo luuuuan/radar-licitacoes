@@ -7,7 +7,7 @@ Rode com:  cd backend && pytest
 """
 from datetime import date, timedelta
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.main import listar_editais
@@ -617,3 +617,56 @@ def test_todos_editais_respeita_vista_ativos():
 
     ids = {x["edital_id"] for x in r["resultados"]}
     assert ids == {ed_ativo.id}
+
+
+def test_todos_editais_com_apenas_nao_lidos_nao_exclui_edital_sem_match():
+    """Achado do code-reviewer: edital sem Match nenhum é, por definição,
+    não lido também (nunca apareceu pro usuário) -- "Todos os editais" +
+    "só não lidos" não pode escondê-lo, senão a combinação contradiz a
+    própria promessa do checkbox "Todos os editais"."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_sem = _edital_sem_match(db, "ed-sem", plataforma="BLL Compras")
+    ed_lido = _edital_com_match(db, u, "ed-lido", plataforma="ComprasNet")
+    ed_lido_match = db.execute(select(Match).where(Match.edital_id == ed_lido.id)).scalar_one()
+    ed_lido_match.lido = True
+    db.commit()
+
+    r = _listar(db, u, todos_editais=True, apenas_nao_lidos=True)
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_sem.id}
+
+
+def test_todos_editais_com_apenas_nao_lidos_false_nao_muda_comportamento_padrao():
+    """Garante que o ajuste acima não afeta o modo normal (todos_editais
+    desligado) -- Match sempre existe nesse modo, então a condição extra
+    (IS NULL) nunca deveria bater com nada."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_lido = _edital_com_match(db, u, "ed-lido")
+    ed_nao_lido = _edital_com_match(db, u, "ed-nao-lido")
+    m_lido = db.execute(select(Match).where(Match.edital_id == ed_lido.id)).scalar_one()
+    m_lido.lido = True
+    db.commit()
+
+    r = _listar(db, u, todos_editais=False, apenas_nao_lidos=True)
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_nao_lido.id}
+
+
+def test_todos_editais_com_busca_item_e_nao_lido_acha_edital_sem_match():
+    """Cenário composto que o code-reviewer apontou como regressão em
+    potencial: busca por item + todos_editais + apenas_nao_lidos não pode
+    perder um edital sem Match que bate no termo buscado (antes desse
+    fix, o filtro de "não lido" excluía silenciosamente qualquer edital
+    sem Match, e sem_match fica desligado quando todos_editais=True)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_sem = _edital_sem_match(db, "ed-sem", itens=["Grampeador de mesa"])
+
+    r = _listar(db, u, todos_editais=True, apenas_nao_lidos=True, busca_item="grampeador")
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_sem.id}

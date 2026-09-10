@@ -1429,7 +1429,15 @@ def listar_editais(
     if status:
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
-        filtro.append(Match.lido == False)  # noqa: E712
+        # edital sem Match nenhum (só possível com todos_editais=True) é,
+        # por definição, não lido também -- "nunca apareceu pro usuário" é a
+        # forma mais forte de "não lido" que existe. Sem o IS NULL, marcar
+        # "Todos os editais" + "só não lidos" excluía silenciosamente
+        # qualquer edital sem Match, contradizendo o que a própria opção
+        # promete (achado do code-reviewer). Com Match sempre presente
+        # (todos_editais=False), Match.lido nunca é NULL, então isso não
+        # muda o comportamento de hoje.
+        filtro.append(Match.lido.is_(None) | (Match.lido == False))  # noqa: E712
     if apenas_interessantes:
         filtro.append(Match.interessante == True)  # noqa: E712
     if hoje:
@@ -1473,6 +1481,10 @@ def listar_editais(
         filtro.append((prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje_data))
     elif vista == "encerrados":
         # prazo passou E eu participei (proposta enviada / ganho / perdido)
+        # -- exige Match.status, então todos_editais=True não muda nada
+        # nesta vista (edital sem Match nunca teve "participação" pra
+        # contar): a diferença entre os dois modos só aparece em vista
+        # "ativos"/"todos", que não dependem de status nenhum.
         filtro.append(prazo_efetivo < hoje_data)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
