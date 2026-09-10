@@ -5685,6 +5685,18 @@ async function exigirLogin(){
   }catch(e){ _loginComNext(); return false; }
 }
 async function sair(){
+  // achado do debugger: "última aba"/"última sub-aba do edital" ficavam em
+  // localStorage sem nenhum vínculo com o usuário -- numa máquina
+  // compartilhada, a próxima pessoa a logar (conta diferente) podia cair
+  // direto na Cotação de um edital que ELA nunca tinha aberto, só porque
+  // foi onde a conta anterior parou. Limpa no logout pra cada sessão
+  // começar do zero. NÃO limpa o filtro salvo (radar-filtro-editais) nem o
+  // tema -- esses dois são deliberadamente "deste navegador", não da
+  // sessão (ver tooltip do botão "Salvar filtro").
+  try{
+    localStorage.removeItem('radar-ultima-aba');
+    localStorage.removeItem('radar-ultima-aba-edital');
+  }catch(e){}
   await fetch('/api/auth/logout', {method:'POST'});
   location.href='/login';
 }
