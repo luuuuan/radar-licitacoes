@@ -1095,10 +1095,10 @@
           <label>Plataforma / sistema
             <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum dos SEUS editais (ative "Todos os editais" abaixo pra também poder filtrar plataformas que ainda não te deram nenhuma correspondência).</span></span>
           </label>
-          <div class="uf-checks" id="f-plataforma-checks"></div>
+          <button type="button" class="btn ghost" id="btn-filtro-plataformas" onclick="abrirModalPlataformas()" style="width:100%;text-align:left">Todas as plataformas</button>
         </div>
         <label class="chk">
-          <input type="checkbox" id="f-todos-editais" onchange="_carregarFiltroPlataformas();loadEditais()"> Todos os editais
+          <input type="checkbox" id="f-todos-editais" onchange="loadEditais()"> Todos os editais
           <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Por padrão, só aparecem editais que o motor de compatibilidade já avaliou como correspondência com o seu catálogo. Marque aqui pra ver QUALQUER edital coletado, mesmo sem correspondência nenhuma — útil pra explorar uma plataforma específica ou conferir editais que o motor ainda não analisou. Sem correspondência automática, os editais aparecem sem pontuação/nível, mas ainda dá pra marcar status, favoritar e abrir a página normalmente.</span></span>
         </label>
         <div class="field">
@@ -2555,7 +2555,7 @@ function _capturarFiltroAtual(){
   return {
     nivel: $('#f-nivel') ? $('#f-nivel').value : '',
     ufs: [...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
-    plataformas: [...document.querySelectorAll('#f-plataforma-checks input:checked')].map(c=>c.value),
+    plataformas: _plataformasSelecionadas,
     status: $('#f-status') ? $('#f-status').value : '',
     tipo: $('#f-tipo') ? $('#f-tipo').value : 'todos',
     porPag: $('#f-porpag') ? $('#f-porpag').value : '20',
@@ -2577,12 +2577,6 @@ function salvarFiltroAtual(){
   }catch(e){ toast('Não foi possível salvar o filtro agora.', 'erro'); }
 }
 
-// Lido 1x na inicialização do app (ver o IIFE no fim do arquivo), ANTES de
-// _carregarFiltroPlataformas()/loadEditais() -- as checkboxes de UF/tipo/
-// etc. já existem prontas no HTML, mas plataforma é montada depois (vem da
-// API), então as plataformas salvas ficam pendentes em _plataformasParaMarcar
-// até _carregarFiltroPlataformas() montar a lista de verdade.
-let _plataformasParaMarcar = null;
 function _aplicarFiltroSalvo(){
   let f;
   try{ f = JSON.parse(localStorage.getItem(_CHAVE_FILTRO_SALVO) || 'null'); }
@@ -2601,38 +2595,69 @@ function _aplicarFiltroSalvo(){
   if($('#f-data-de')) $('#f-data-de').value = f.dataDe || '';
   if($('#f-data-ate')) $('#f-data-ate').value = f.dataAte || '';
   if($('#f-busca-item')) $('#f-busca-item').value = f.buscaItem || '';
-  _plataformasParaMarcar = f.plataformas || [];
+  _plataformasSelecionadas = f.plataformas || [];
+  _atualizarBotaoPlataformas();
 }
 
-// Opções do filtro de plataforma vêm do que já foi visto na coleta (ao
-// contrário da UF, uma lista fixa de 27 estados já escrita no HTML) --
-// carregado na abertura do app, e de novo sempre que "Todos os editais"
-// muda (o universo de plataformas disponíveis muda junto: só as que já
-// deram match, ou qualquer uma já coletada).
-async function _carregarFiltroPlataformas(){
-  const cont = $('#f-plataforma-checks');
-  if(!cont) return;
-  const marcadasAntes = new Set([...cont.querySelectorAll('input:checked')].map(c=>c.value));
-  if(_plataformasParaMarcar){ _plataformasParaMarcar.forEach(p=>marcadasAntes.add(p)); _plataformasParaMarcar = null; }
+// Pedido do usuário: em vez de uma pilha de checkboxes sempre visível na
+// barra lateral, um botão abre um modal com as opções -- a seleção só vira
+// filtro de verdade ao clicar "Aplicar filtro" (Cancelar descarta). A
+// lista de opções é buscada de novo toda vez que o modal abre (reflete o
+// estado atual de "Todos os editais" na hora, sem precisar de um refresh
+// à parte quando esse checkbox muda).
+let _plataformasSelecionadas = [];
+
+function _atualizarBotaoPlataformas(){
+  const btn = $('#btn-filtro-plataformas');
+  if(!btn) return;
+  const n = _plataformasSelecionadas.length;
+  btn.textContent = n ? `${n} plataforma${n>1?'s':''} selecionada${n>1?'s':''}` : 'Todas as plataformas';
+}
+
+async function abrirModalPlataformas(){
   const todosEd = $('#f-todos-editais') && $('#f-todos-editais').checked;
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:420px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Plataforma / sistema</h2>
+      <div id="modal-plataformas-lista" style="margin-top:12px"><p class="muted" style="font-size:12px">Carregando...</p></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost discreto" onclick="fecharModal()">Cancelar</button>
+        <button class="btn" onclick="_aplicarFiltroPlataformasModal()">Aplicar filtro</button>
+      </div>
+    </div>
+  </div>`;
+  let plataformas = [];
   try{
     const r = await api('/api/editais/plataformas' + (todosEd ? '?todos_editais=true' : ''));
-    cont.innerHTML = (r.plataformas||[]).map(p =>
-      `<label><input type="checkbox" value="${esc(p)}"${marcadasAntes.has(p)?' checked':''} onchange="loadEditais()"> ${esc(p)}</label>`).join('');
-  } catch(e){ /* filtro só não aparece; resto da tela funciona normalmente */ }
+    plataformas = r.plataformas || [];
+  }catch(e){ /* lista fica vazia; mensagem abaixo cobre esse caso */ }
+  const lista = $('#modal-plataformas-lista');
+  if(!lista) return;   // modal fechado antes da resposta chegar
+  lista.innerHTML = plataformas.length
+    ? plataformas.map(p => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <input type="checkbox" value="${esc(p)}"${_plataformasSelecionadas.includes(p)?' checked':''}> ${esc(p)}</label>`).join('')
+    : '<p class="muted" style="font-size:12px">Nenhuma plataforma disponível ainda.</p>';
+}
+
+function _aplicarFiltroPlataformasModal(){
+  _plataformasSelecionadas = [...document.querySelectorAll('#modal-plataformas-lista input:checked')].map(c=>c.value);
+  _atualizarBotaoPlataformas();
+  fecharModal();
+  loadEditais();
 }
 
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
 function limparFiltros(){
   $('#f-nivel').value = '';
   document.querySelectorAll('#f-uf-checks input:checked').forEach(c=>c.checked=false);
-  document.querySelectorAll('#f-plataforma-checks input:checked').forEach(c=>c.checked=false);
+  _plataformasSelecionadas = [];
+  _atualizarBotaoPlataformas();
   $('#f-tipo').value = 'todos';
   $('#f-status').value = '';
   $('#f-porpag').value = '20';
   $('#f-naolidos').checked = false;
   $('#f-hoje').checked = false;
-  const marcouTodosEd = $('#f-todos-editais') && $('#f-todos-editais').checked;
   if($('#f-todos-editais')) $('#f-todos-editais').checked = false;
   $('#f-busca-item').value = '';
   $('#f-valor-min').value = '';
@@ -2640,7 +2665,6 @@ function limparFiltros(){
   $('#f-data-de').value = '';
   $('#f-data-ate').value = '';
   _atualizarBuscaPorScroll();
-  if(marcouTodosEd) _carregarFiltroPlataformas();
   loadEditais();
   fecharFiltrosMobile();
 }
@@ -2649,7 +2673,7 @@ async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const nivel=$('#f-nivel').value,
         ufs=[...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
-        plataformas=[...document.querySelectorAll('#f-plataforma-checks input:checked')].map(c=>c.value),
+        plataformas=_plataformasSelecionadas,
         st=$('#f-status').value, nl=$('#f-naolidos').checked,
         hoje=$('#f-hoje') && $('#f-hoje').checked,
         todosEd=$('#f-todos-editais') && $('#f-todos-editais').checked,
@@ -5742,13 +5766,10 @@ async function sair(){
   // entrando direto num edital): PRODUTOS_COUNT (dentro de loadResumo)
   // alimenta o estado vazio da aba Editais, e pré-carregar a lista deixa
   // a troca pra lá mais rápida quando o usuário voltar do edital.
-  _aplicarFiltroSalvo();   // antes de carregar plataformas/editais, pros filtros já saírem aplicados
-  // achado real (code-reviewer): sem o await, loadEditais() (linha abaixo)
-  // rodava ANTES das checkboxes de plataforma existirem no DOM -- um filtro
-  // salvo com plataforma marcada perdia essa parte silenciosamente na
-  // primeira busca (as checkboxes apareciam marcadas segundos depois, mas
-  // a lista já tinha sido buscada sem esse filtro).
-  await _carregarFiltroPlataformas();
+  // antes de loadEditais() abaixo, pros filtros salvos (incluindo
+  // plataformas, que não dependem mais de nenhuma chamada assíncrona --
+  // a lista de opções só é buscada quando o modal abre) já saírem aplicados.
+  _aplicarFiltroSalvo();
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
