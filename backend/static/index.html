@@ -2628,18 +2628,38 @@ async function abrirModalPlataformas(){
     </div>
   </div>`;
   let plataformas = [];
+  // achado do error-detective: api() nunca checa o status HTTP (nem esta
+  // chamada, nem nenhuma outra do app) -- uma sessão expirada no meio da
+  // navegação (401) resolve a promise normalmente, só que sem a chave
+  // "plataformas" no corpo. Sem distinguir isso de "carregou e realmente
+  // não tem nada", as duas situações caiam na mesma mensagem
+  // ("Nenhuma plataforma disponível ainda."), e um bug real vira
+  // indistinguível de um estado vazio genuíno num print de suporte.
+  let falhouCarregar = false;
   try{
     const r = await api('/api/editais/plataformas' + (todosEd ? '?todos_editais=true' : ''));
-    plataformas = r.plataformas || [];
-  }catch(e){ /* lista fica vazia; mensagem abaixo cobre esse caso */ }
+    if(r && Array.isArray(r.plataformas)) plataformas = r.plataformas;
+    else falhouCarregar = true;
+  }catch(e){ falhouCarregar = true; }
   const lista = $('#modal-plataformas-lista');
   if(!lista) return;   // modal fechado antes da resposta chegar
-  lista.innerHTML = plataformas.length
-    ? plataformas.map(p => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0">
-        <input type="checkbox" value="${esc(p)}"${_plataformasSelecionadas.includes(p)?' checked':''}> ${esc(p)}</label>`).join('')
-    : '<p class="muted" style="font-size:12px">Nenhuma plataforma disponível ainda.</p>';
+  lista.innerHTML = falhouCarregar
+    ? '<p class="muted" style="font-size:12px">Não foi possível carregar as plataformas agora. Feche e tente de novo.</p>'
+    : plataformas.length
+      ? plataformas.map(p => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0">
+          <input type="checkbox" value="${esc(p)}"${_plataformasSelecionadas.includes(p)?' checked':''}> ${esc(p)}</label>`).join('')
+      : '<p class="muted" style="font-size:12px">Nenhuma plataforma disponível ainda.</p>';
 }
 
+// Achado (code-reviewer + architect-reviewer + debugger, independentemente):
+// "Aplicar filtro" sempre SUBSTITUI a seleção pelo que está marcado nas
+// checkboxes VISÍVEIS no momento -- uma plataforma aplicada antes que não
+// apareça na lista atual (ex.: só existia com "Todos os editais" ligado, e
+// esse checkbox foi desligado depois) é descartada silenciosamente. Não é
+// regressão (o mecanismo antigo tinha a mesma limitação, só que de um jeito
+// mais frágil/racy) e é um comportamento defensável -- não faz sentido
+// manter aplicado um filtro por uma plataforma que nem está mais entre as
+// opções --, mas fica documentado aqui pra não parecer um bug esquecido.
 function _aplicarFiltroPlataformasModal(){
   _plataformasSelecionadas = [...document.querySelectorAll('#modal-plataformas-lista input:checked')].map(c=>c.value);
   _atualizarBotaoPlataformas();
