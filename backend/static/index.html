@@ -4204,9 +4204,22 @@ function _fecharPaginaEdital(){
   $('#t-edital').classList.add('hidden');
   tab('editais');
 }
+// Sub-aba lembrada (ver abaEdital()) só reaproveitada quando é do MESMO
+// edital -- o valor salvo é {id, aba}, não só o nome, porque tanto o F5
+// quanto abrir um edital DIFERENTE por link (notificação do Telegram etc.)
+// passam pelo mesmo caminho de carga; sem checar o id, o usuário caía na
+// sub-aba de outro edital que nunca tinha visto antes.
+function _abaEditalSalvaPara(editalId){
+  try{
+    const salvo = JSON.parse(localStorage.getItem('radar-ultima-aba-edital') || 'null');
+    if(salvo && salvo.id === editalId &&
+       ['itens','documentos','analise','cotacao','proposta'].includes(salvo.aba)) return salvo.aba;
+  }catch(e){}
+  return 'itens';
+}
 window.addEventListener('popstate', ev=>{
   const st = ev.state;
-  if(st && st.view==='edital') _renderPaginaEdital(st.editalId, 'itens');
+  if(st && st.view==='edital') _renderPaginaEdital(st.editalId, _abaEditalSalvaPara(st.editalId));
   else _fecharPaginaEdital();
 });
 
@@ -4306,7 +4319,13 @@ async function abaEdital(nome, forcar){
   // mesma lógica de tab() -- /edital/{id} não carrega a sub-aba na URL,
   // então lembra em localStorage pra um F5 dentro do edital continuar na
   // mesma sub-aba (ver uso em _renderPaginaEdital/IIFE de inicialização).
-  try{ localStorage.setItem('radar-ultima-aba-edital', nome); }catch(e){}
+  // Achado do code-reviewer: guardar só o NOME da sub-aba (sem o edital)
+  // vazava pra qualquer edital aberto depois -- abrir um edital diferente
+  // (ex.: link de notificação do Telegram) caía direto na Cotação/Proposta
+  // de outro edital que nunca teve nada a ver com esse, só porque foi a
+  // última sub-aba vista em QUALQUER edital. Guarda o par {id, aba} e só
+  // reaproveita quando o id bate com o edital sendo aberto.
+  try{ localStorage.setItem('radar-ultima-aba-edital', JSON.stringify({id: _paginaEditalId, aba: nome})); }catch(e){}
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===nome));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
@@ -5690,18 +5709,10 @@ async function sair(){
   const mEdital = location.pathname.match(/^\/edital\/(\d+)$/);
   if(mEdital){
     history.replaceState({view:'edital', editalId:+mEdital[1]}, '', location.pathname);
-    // pedido do usuário: um F5 tem que continuar na mesma tela, não só ao
-    // entrar num edital compartilhado por link. A sub-aba do edital (itens/
-    // documentos/análise/cotação/proposta) não tem URL própria, então usa a
-    // última lembrada por abaEdital() em localStorage -- valida contra a
-    // lista real de sub-abas antes de usar, pra um valor velho/inválido não
-    // quebrar silenciosamente.
-    let abaEditalSalva = 'itens';
-    try{
-      const v = localStorage.getItem('radar-ultima-aba-edital');
-      if(['itens','documentos','analise','cotacao','proposta'].includes(v)) abaEditalSalva = v;
-    }catch(e){}
-    _renderPaginaEdital(+mEdital[1], abaEditalSalva);
+    // pedido do usuário: um F5 tem que continuar na mesma tela -- usa a
+    // sub-aba lembrada (ver _abaEditalSalvaPara, mesma função do popstate
+    // acima) só quando é do MESMO edital.
+    _renderPaginaEdital(+mEdital[1], _abaEditalSalvaPara(+mEdital[1]));
   } else {
     // Início é a aba padrão, mas um F5 continua na última aba visitada (ver
     // tab(), que grava em localStorage a cada troca) -- valida contra a
