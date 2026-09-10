@@ -1093,7 +1093,7 @@
         </div>
         <div class="field">
           <label>Plataforma / sistema
-            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum dos SEUS editais (ative "Todos os editais" abaixo pra também poder filtrar plataformas que ainda não te deram nenhuma correspondência).</span></span>
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum dos SEUS editais (ative "Todos os editais" abaixo pra também poder filtrar plataformas que ainda não te deram nenhuma correspondência) — e que também batem nos demais filtros já marcados aqui do lado (UF, valor, data etc.).</span></span>
           </label>
           <button type="button" class="btn ghost" id="btn-filtro-plataformas" onclick="abrirModalPlataformas()" style="width:100%;text-align:left">Todas as plataformas</button>
         </div>
@@ -2614,8 +2614,52 @@ function _atualizarBotaoPlataformas(){
   btn.textContent = n ? `${n} plataforma${n>1?'s':''} selecionada${n>1?'s':''}` : 'Todas as plataformas';
 }
 
+// Lê o estado atual de todos os filtros do painel lateral (exceto
+// plataforma, que tem sua própria variável -- _plataformasSelecionadas).
+// Compartilhado entre loadEditais() e abrirModalPlataformas() -- achado
+// real, pedido do usuário: o filtro de plataforma tem que respeitar os
+// OUTROS filtros já ativos (ex.: marcar UF SP/PR/SC e abrir o filtro de
+// plataforma só pode oferecer plataformas que aparecem em editais desses
+// estados, não o catálogo inteiro do usuário ignorando o resto da tela).
+function _lerFiltrosAtivos(){
+  return {
+    nivel: $('#f-nivel').value,
+    ufs: [...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
+    st: $('#f-status').value,
+    nl: $('#f-naolidos').checked,
+    hoje: $('#f-hoje') && $('#f-hoje').checked,
+    todosEd: $('#f-todos-editais') && $('#f-todos-editais').checked,
+    tipo: $('#f-tipo') ? $('#f-tipo').value : 'todos',
+    busca: $('#f-busca-item') ? $('#f-busca-item').value.trim() : '',
+    vmin: $('#f-valor-min') ? $('#f-valor-min').value : '',
+    vmax: $('#f-valor-max') ? $('#f-valor-max').value : '',
+    dde: $('#f-data-de') ? $('#f-data-de').value : '',
+    date_: $('#f-data-ate') ? $('#f-data-ate').value : '',
+  };
+}
+
+// Querystring com os filtros comuns entre GET /api/editais e GET
+// /api/editais/plataformas -- cada chamador ainda acrescenta o que for
+// específico dele (pagina/por_pagina/plataforma/vista).
+function _qsFiltrosAtivos(f){
+  const qs = new URLSearchParams();
+  if(f.nivel) qs.set('nivel', f.nivel);
+  f.ufs.forEach(u=>qs.append('uf', u));
+  if(f.st) qs.set('status', f.st);
+  if(f.nl) qs.set('apenas_nao_lidos', 'true');
+  if(f.hoje) qs.set('hoje', 'true');
+  if(f.todosEd) qs.set('todos_editais', 'true');
+  if(f.tipo!=='todos') qs.set('tipo', f.tipo);
+  if(f.busca) qs.set('busca_item', f.busca);
+  if(f.vmin!=='') qs.set('valor_min', f.vmin);
+  if(f.vmax!=='') qs.set('valor_max', f.vmax);
+  if(f.dde!=='') qs.set('data_de', f.dde);
+  if(f.date_!=='') qs.set('data_ate', f.date_);
+  return qs;
+}
+
 async function abrirModalPlataformas(){
-  const todosEd = $('#f-todos-editais') && $('#f-todos-editais').checked;
+  const f = _lerFiltrosAtivos();
   $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
     <div class="modal-card" style="max-width:420px">
       <button class="close-x" onclick="fecharModal()">×</button>
@@ -2637,7 +2681,9 @@ async function abrirModalPlataformas(){
   // indistinguível de um estado vazio genuíno num print de suporte.
   let falhouCarregar = false;
   try{
-    const r = await api('/api/editais/plataformas' + (todosEd ? '?todos_editais=true' : ''));
+    const qs = _qsFiltrosAtivos(f);
+    qs.set('vista', 'ativos');   // mesmo padrão fixo de loadEditais()
+    const r = await api('/api/editais/plataformas?'+qs);
     if(r && Array.isArray(r.plataformas)) plataformas = r.plataformas;
     else falhouCarregar = true;
   }catch(e){ falhouCarregar = true; }
@@ -2691,38 +2737,20 @@ function limparFiltros(){
 
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
-  const nivel=$('#f-nivel').value,
-        ufs=[...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
-        plataformas=_plataformasSelecionadas,
-        st=$('#f-status').value, nl=$('#f-naolidos').checked,
-        hoje=$('#f-hoje') && $('#f-hoje').checked,
-        todosEd=$('#f-todos-editais') && $('#f-todos-editais').checked,
-        tipo=$('#f-tipo') ? $('#f-tipo').value : 'todos',
-        busca=$('#f-busca-item') ? $('#f-busca-item').value.trim() : '',
-        vmin=$('#f-valor-min') ? $('#f-valor-min').value : '',
-        vmax=$('#f-valor-max') ? $('#f-valor-max').value : '',
-        dde=$('#f-data-de') ? $('#f-data-de').value : '',
-        date_=$('#f-data-ate') ? $('#f-data-ate').value : '';
+  const f = _lerFiltrosAtivos();
+  const {nivel, ufs, st, nl, hoje, todosEd, tipo, busca, vmin, vmax, dde, date_} = f;
+  const plataformas = _plataformasSelecionadas;
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
   const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || st || nl || hoje || todosEd ||
     tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
-  const qs=new URLSearchParams({pagina:paginaEditais, por_pagina:porPag, vista:'ativos'});
-  if(nivel)qs.set('nivel',nivel);
-  ufs.forEach(u=>qs.append('uf',u));
+  const qs = _qsFiltrosAtivos(f);
+  qs.set('pagina', paginaEditais);
+  qs.set('por_pagina', porPag);
+  qs.set('vista', 'ativos');
   plataformas.forEach(p=>qs.append('plataforma',p));
-  if(st)qs.set('status',st);
-  if(nl)qs.set('apenas_nao_lidos','true');
-  if(hoje) qs.set('hoje','true');
-  if(todosEd) qs.set('todos_editais','true');
-  if(tipo!=='todos') qs.set('tipo',tipo);
-  if(busca) qs.set('busca_item',busca);
-  if(vmin!=='') qs.set('valor_min',vmin);
-  if(vmax!=='') qs.set('valor_max',vmax);
-  if(dde!=='') qs.set('data_de',dde);
-  if(date_!=='') qs.set('data_ate',date_);
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   const semMatch = r.sem_match||[];

@@ -1351,55 +1351,27 @@ def _inicio_hoje_utc() -> datetime:
     return inicio.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 
-@app.get("/api/editais/plataformas")
-def listar_plataformas(todos_editais: bool = Query(False),
-                       user: Usuario = Depends(_auth.get_current_user),
-                       db: Session = Depends(get_session)):
-    """Valores distintos de Edital.plataforma já vistos na coleta (ver
-    _plataforma_de_link em connectors/pncp.py) -- alimenta o filtro por
-    plataforma/sistema na listagem. Ao contrário do filtro de UF (lista fixa
-    de 27 estados), não dá pra saber de antemão quais sistemas existem, então
-    a lista de opções vem do que já foi coletado, não de algo fixo no código.
-
-    Achado real: antes escaneava TODOS os editais do sistema (de qualquer
-    usuário), não só os que têm Match com o usuário logado -- oferecia
-    plataformas no filtro que nunca tinham um resultado pra mostrar (a
-    listagem em GET /api/editais é sempre restrita a Match.usuario_id ==
-    user.id), um beco sem saída: usuário marcava a opção e caía sempre em
-    "nenhum edital encontrado". Por padrão só entra plataforma de edital que
-    já tem Match com este usuário -- o mesmo universo que a listagem usa.
-    todos_editais=True (mesmo parâmetro de GET /api/editais) devolve TODAS
-    as plataformas do sistema, pro usuário poder filtrar mesmo o que nunca
-    deu match, já que nesse modo a listagem também mostra qualquer edital."""
-    q = select(Edital.plataforma).where(Edital.plataforma.is_not(None))
-    if not todos_editais:
-        q = q.join(Match, Match.edital_id == Edital.id).where(Match.usuario_id == user.id)
-    valores = db.execute(q.distinct().order_by(Edital.plataforma)).scalars().all()
-    return {"plataformas": valores}
-
-
-@app.get("/api/editais")
-def listar_editais(
-    nivel: str | None = Query(None),
-    uf: list[str] | None = Query(None),
-    plataforma: list[str] | None = Query(None),
-    status: str | None = Query(None),
-    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
-    apenas_nao_lidos: bool = Query(False),
-    apenas_interessantes: bool = Query(False),
-    hoje: bool = Query(False),
-    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
-    valor_min: float | None = Query(None, ge=0),
-    valor_max: float | None = Query(None, ge=0),
-    data_de: date | None = Query(None),   # filtra por data_abertura (início de recebimento de propostas)
-    data_ate: date | None = Query(None),
-    busca_item: str | None = Query(None),
-    todos_editais: bool = Query(False),
-    pagina: int = Query(1, ge=1),
-    por_pagina: int = Query(50, ge=1, le=200),
-    user: Usuario = Depends(_auth.get_current_user),
-    db: Session = Depends(get_session),
+def _query_editais_filtrada(
+    user: Usuario, todos_editais: bool, nivel: str | None, uf: list[str] | None,
+    plataforma: list[str] | None, status: str | None, apenas_nao_lidos: bool,
+    apenas_interessantes: bool, hoje: bool, tipo: str, valor_min: float | None,
+    valor_max: float | None, data_de: date | None, data_ate: date | None,
+    busca_item: str | None, vista: str, db: Session,
 ):
+    """Select(Match, Edital) com todos os filtros da tela de Editais já
+    aplicados (WHERE) -- compartilhado entre GET /api/editais e GET
+    /api/editais/plataformas. Achado real (pedido do usuário): a lista de
+    plataformas disponíveis pro filtro tinha só o parâmetro todos_editais,
+    ignorando os OUTROS filtros já ativos na tela -- filtrar por UF SP/PR/SC
+    e abrir o filtro de plataforma continuava oferecendo TODAS as
+    plataformas do usuário, não só as que aparecem em editais desses
+    estados. Ao extrair a mesma montagem de filtro pras duas rotas, a lista
+    de plataformas passa a refletir exatamente o que a listagem (com os
+    demais filtros aplicados) mostraria. `plataforma` normalmente vem None
+    de quem monta as OPÇÕES do próprio filtro de plataforma (não faz
+    sentido filtrar pela plataforma que ainda está sendo escolhida).
+    Devolve (base, prazo_efetivo) -- quem chama decide as colunas
+    selecionadas (via with_only_columns), ordenação e paginação."""
     hoje_data = date.today()
     if todos_editais:
         # Pedido do usuário: o filtro de plataforma (e a listagem em geral)
@@ -1489,6 +1461,86 @@ def listar_editais(
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
+    return base, prazo_efetivo
+
+
+@app.get("/api/editais/plataformas")
+def listar_plataformas(
+    nivel: str | None = Query(None),
+    uf: list[str] | None = Query(None),
+    status: str | None = Query(None),
+    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
+    apenas_nao_lidos: bool = Query(False),
+    apenas_interessantes: bool = Query(False),
+    hoje: bool = Query(False),
+    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
+    valor_min: float | None = Query(None, ge=0),
+    valor_max: float | None = Query(None, ge=0),
+    data_de: date | None = Query(None),
+    data_ate: date | None = Query(None),
+    busca_item: str | None = Query(None),
+    todos_editais: bool = Query(False),
+    user: Usuario = Depends(_auth.get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Valores distintos de Edital.plataforma já vistos na coleta (ver
+    _plataforma_de_link em connectors/pncp.py) -- alimenta o filtro por
+    plataforma/sistema na listagem. Ao contrário do filtro de UF (lista fixa
+    de 27 estados), não dá pra saber de antemão quais sistemas existem, então
+    a lista de opções vem do que já foi coletado, não de algo fixo no código.
+
+    Aceita os MESMOS filtros de GET /api/editais (exceto plataforma/pagina) —
+    achado real, pedido do usuário: filtrar por UF SP/PR/SC e abrir o filtro
+    de plataforma tem que oferecer só as plataformas que aparecem nos
+    editais desses estados, não o universo inteiro do usuário ignorando o
+    resto dos filtros já escolhidos na tela. `vista` fixa "ativos" no
+    front (mesmo padrão de loadEditais) mas fica aceitando o parâmetro
+    pra não engessar quem quiser reaproveitar esta rota noutro contexto.
+
+    Por padrão só entra plataforma de edital que já tem Match com este
+    usuário -- o mesmo universo que a listagem usa. todos_editais=True
+    (mesmo parâmetro de GET /api/editais) devolve TODAS as plataformas do
+    sistema que batem nos demais filtros, pro usuário poder filtrar mesmo o
+    que nunca deu match, já que nesse modo a listagem também mostra
+    qualquer edital."""
+    base, _ = _query_editais_filtrada(
+        user, todos_editais, nivel, uf, None, status, apenas_nao_lidos,
+        apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
+        data_ate, busca_item, vista, db)
+    q = (base.where(Edital.plataforma.is_not(None))
+         .with_only_columns(Edital.plataforma).distinct().order_by(Edital.plataforma))
+    valores = db.execute(q).scalars().all()
+    return {"plataformas": valores}
+
+
+@app.get("/api/editais")
+def listar_editais(
+    nivel: str | None = Query(None),
+    uf: list[str] | None = Query(None),
+    plataforma: list[str] | None = Query(None),
+    status: str | None = Query(None),
+    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
+    apenas_nao_lidos: bool = Query(False),
+    apenas_interessantes: bool = Query(False),
+    hoje: bool = Query(False),
+    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
+    valor_min: float | None = Query(None, ge=0),
+    valor_max: float | None = Query(None, ge=0),
+    data_de: date | None = Query(None),   # filtra por data_abertura (início de recebimento de propostas)
+    data_ate: date | None = Query(None),
+    busca_item: str | None = Query(None),
+    todos_editais: bool = Query(False),
+    pagina: int = Query(1, ge=1),
+    por_pagina: int = Query(50, ge=1, le=200),
+    user: Usuario = Depends(_auth.get_current_user),
+    db: Session = Depends(get_session),
+):
+    hoje_data = date.today()   # reusado mais abaixo no bloco de sem_match
+    eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
+    base, prazo_efetivo = _query_editais_filtrada(
+        user, todos_editais, nivel, uf, plataforma, status, apenas_nao_lidos,
+        apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
+        data_ate, busca_item, vista, db)
 
     total = db.scalar(
         select(func.count()).select_from(base.subquery())

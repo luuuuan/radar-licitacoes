@@ -29,9 +29,9 @@ def _usuario(db):
 
 
 def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
-                      data_abertura=None, data_encerramento=None, plataforma=None):
+                      data_abertura=None, data_encerramento=None, plataforma=None, uf="SP"):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
-                objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
+                objeto="Aquisicao", uf=uf, valor_estimado=valor_estimado,
                 data_abertura=data_abertura, data_encerramento=data_encerramento,
                 plataforma=plataforma)
     db.add(ed)
@@ -65,6 +65,16 @@ def _listar(db, user, **kwargs):
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
     return listar_editais(user=user, db=db, **padrao)
+
+
+def _plataformas(db, user, **kwargs):
+    from app.main import listar_plataformas
+    padrao = dict(nivel=None, uf=None, status=None, vista="ativos",
+                  apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
+                  tipo="todos", valor_min=None, valor_max=None,
+                  data_de=None, data_ate=None, busca_item=None, todos_editais=False)
+    padrao.update(kwargs)
+    return listar_plataformas(user=user, db=db, **padrao)
 
 
 def test_valor_min_exclui_editais_abaixo_do_piso():
@@ -469,7 +479,6 @@ def test_sem_match_respeita_filtro_de_data_ate():
 
 
 def test_listar_plataformas_devolve_valores_distintos_ordenados_sem_nulos():
-    from app.main import listar_plataformas
     db = _sessao()
     u = _usuario(db)
     _edital_com_match(db, u, "ed1", plataforma="ComprasNet")
@@ -477,7 +486,7 @@ def test_listar_plataformas_devolve_valores_distintos_ordenados_sem_nulos():
     _edital_com_match(db, u, "ed3", plataforma="ComprasNet")   # duplicado, não repete
     _edital_com_match(db, u, "ed4", plataforma=None)           # sem plataforma, fica de fora
 
-    r = listar_plataformas(todos_editais=False, user=u, db=db)
+    r = _plataformas(db, u, todos_editais=False)
 
     assert r["plataformas"] == ["BLL Compras", "ComprasNet"]
 
@@ -487,7 +496,6 @@ def test_listar_plataformas_nao_oferece_plataforma_sem_match_do_usuario():
     apareceriam na listagem do usuário (sem Match nenhum, ou Match de OUTRO
     usuário) -- marcar a opção sempre dava "nenhum edital encontrado". A
     lista de opções agora reflete só o que o próprio usuário pode ver."""
-    from app.main import listar_plataformas
     db = _sessao()
     u = _usuario(db)
     outro = Usuario(nome="Outro", email="outro@t.com", senha_hash="x")
@@ -498,7 +506,7 @@ def test_listar_plataformas_nao_oferece_plataforma_sem_match_do_usuario():
     _edital_sem_match(db, "ed-orfao", plataforma="BLL Compras")            # sem Match nenhum
     _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")    # Match de outro usuário
 
-    r = listar_plataformas(todos_editais=False, user=u, db=db)
+    r = _plataformas(db, u, todos_editais=False)
 
     assert r["plataformas"] == ["ComprasNet"]
 
@@ -507,7 +515,6 @@ def test_listar_plataformas_com_todos_editais_devolve_tudo():
     """todos_editais=True (mesmo espírito do parâmetro em GET /api/editais):
     o usuário quer poder filtrar por uma plataforma mesmo que ela nunca
     tenha dado match nenhum com o catálogo dele."""
-    from app.main import listar_plataformas
     db = _sessao()
     u = _usuario(db)
     outro = Usuario(nome="Outro", email="outro3@t.com", senha_hash="x")
@@ -518,9 +525,67 @@ def test_listar_plataformas_com_todos_editais_devolve_tudo():
     _edital_sem_match(db, "ed-orfao", plataforma="BLL Compras")
     _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")
 
-    r = listar_plataformas(todos_editais=True, user=u, db=db)
+    r = _plataformas(db, u, todos_editais=True)
 
     assert r["plataformas"] == ["BLL Compras", "ComprasNet", "Licitanet"]
+
+
+def test_listar_plataformas_respeita_filtro_de_uf():
+    """Achado real (pedido do usuário): filtrar por UF SP/PR/SC e abrir o
+    filtro de plataforma tem que oferecer só as plataformas que aparecem
+    nos editais desses estados -- antes o parâmetro `uf` nem existia nessa
+    rota, então o filtro de plataforma sempre mostrava TODAS as plataformas
+    do usuário, mesmo com outros filtros (UF, valor, data...) já ativos."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-sp", plataforma="ComprasNet", uf="SP")
+    _edital_com_match(db, u, "ed-pr", plataforma="BLL Compras", uf="PR")
+    _edital_com_match(db, u, "ed-rj", plataforma="Licitanet", uf="RJ")
+
+    r = _plataformas(db, u, uf=["SP", "PR", "SC"])
+
+    assert r["plataformas"] == ["BLL Compras", "ComprasNet"]
+
+
+def test_listar_plataformas_respeita_filtro_de_valor():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-barato", plataforma="ComprasNet", valor_estimado=1000.0)
+    _edital_com_match(db, u, "ed-caro", plataforma="BLL Compras", valor_estimado=90000.0)
+
+    r = _plataformas(db, u, valor_min=10000)
+
+    assert r["plataformas"] == ["BLL Compras"]
+
+
+def test_listar_plataformas_respeita_busca_item():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-grampeador", plataforma="ComprasNet",
+                      itens=["Grampeador de mesa 26/6"])
+    _edital_com_match(db, u, "ed-caneta", plataforma="BLL Compras",
+                      itens=["Caneta esferografica azul"])
+
+    r = _plataformas(db, u, busca_item="grampeador")
+
+    assert r["plataformas"] == ["ComprasNet"]
+
+
+def test_listar_plataformas_combina_todos_editais_com_filtro_de_uf():
+    """todos_editais=True e o filtro de UF continuam combinando entre si --
+    não é "ou um ou outro"."""
+    db = _sessao()
+    u = _usuario(db)
+    outro = Usuario(nome="Outro", email="outro4@t.com", senha_hash="x")
+    db.add(outro)
+    db.commit()
+    _edital_com_match(db, outro, "ed-outro-sp", plataforma="Licitanet", uf="SP")
+    _edital_sem_match(db, "ed-sem-match-pr", plataforma="BLL Compras", uf="PR")
+    _edital_sem_match(db, "ed-sem-match-rj", plataforma="ComprasNet", uf="RJ")
+
+    r = _plataformas(db, u, todos_editais=True, uf=["SP", "PR"])
+
+    assert r["plataformas"] == ["BLL Compras", "Licitanet"]
 
 
 def test_todos_editais_inclui_edital_sem_match():
