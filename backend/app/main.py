@@ -3375,38 +3375,16 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
     return " - ".join([abrev] + partes) if abrev else " - ".join(partes)
 
 
-@app.get("/api/editais/{edital_id}/cotacao.xlsx")
-def cotacao_edital(edital_id: int, itens: str | None = Query(None),
-                   fretes: str | None = Query(None),
-                   incluir_custo: bool = Query(True),
-                   user: Usuario = Depends(_auth.get_current_user),
-                   db: Session = Depends(get_session)):
-    """Planilha de cotação (mesmo modelo usado no dia do pregão): só os itens
-    compatíveis com o catálogo, com fabricante/marca/modelo e valor mínimo
-    (custo cadastrado + frete de entrada/saída, informados por ITEM — cada
-    item pode ter vindo de um fornecedor diferente, então não dá pra ratear
-    um frete único entre eles). Alguns campos do cabeçalho (plataforma,
-    horário da sessão) só saem preenchidos se a análise por IA já tiver
-    rodado pra este edital — o resto funciona sem ela.
-    `itens`: números separados por vírgula (ex.: "3,4") — o usuário escolhe
-    quais itens compatíveis entram na planilha; sem o parâmetro, entram
-    todos (mantém o link antigo funcionando).
-    `fretes`: JSON {"<numero_item>": {"entrada": valor_total, "saida": valor_total}}
-    — valor TOTAL do frete daquele item (fornecedor→você e você→órgão),
-    informado na hora da cotação; dividido pela quantidade do item pra virar
-    custo por unidade. Não fica salvo em lugar nenhum.
-    `incluir_custo`: quando falso, as colunas de valor mínimo (custo) saem em
-    branco na planilha (a coluna continua lá, só sem os valores) — pra quando
-    ela vai ser compartilhada com alguém que não deve ver a margem, ex. o
-    próprio fornecedor. Default true (comportamento de sempre)."""
-    import openpyxl
-    from openpyxl.styles import Font, Alignment
-    import json as _json
-
-    ed = db.get(Edital, edital_id)
-    if not ed:
-        raise HTTPException(404, "Edital não encontrado")
-
+def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Session) -> list[tuple[ItemEdital, Produto]]:
+    """Itens do edital compatíveis com o catálogo do usuário (produto
+    confirmado de fato: confiança alta ou confirmado manualmente -- item de
+    confiança média ainda não confirmado é só sugestão, não entra), na
+    ordem do edital. `itens`: números separados por vírgula pra restringir
+    aos que o usuário selecionou na tela; sem o parâmetro, entram todos os
+    compatíveis. Compartilhado entre a planilha de cotação completa
+    (cotacao.xlsx) e a planilha simplificada pro fornecedor
+    (cotacao-fornecedor.xlsx) -- as duas partem do MESMO conjunto de itens,
+    só mudam quais colunas mostram."""
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
     mapa_produto: dict[int, int] = {}
@@ -3440,6 +3418,42 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
              and (numeros_selecionados is None or it.numero in numeros_selecionados)]
     if not linhas:
         raise HTTPException(400, "Nenhum item selecionado bate com o seu catálogo — não há o que cotar.")
+    return linhas
+
+
+@app.get("/api/editais/{edital_id}/cotacao.xlsx")
+def cotacao_edital(edital_id: int, itens: str | None = Query(None),
+                   fretes: str | None = Query(None),
+                   incluir_custo: bool = Query(True),
+                   user: Usuario = Depends(_auth.get_current_user),
+                   db: Session = Depends(get_session)):
+    """Planilha de cotação (mesmo modelo usado no dia do pregão): só os itens
+    compatíveis com o catálogo, com fabricante/marca/modelo e valor mínimo
+    (custo cadastrado + frete de entrada/saída, informados por ITEM — cada
+    item pode ter vindo de um fornecedor diferente, então não dá pra ratear
+    um frete único entre eles). Alguns campos do cabeçalho (plataforma,
+    horário da sessão) só saem preenchidos se a análise por IA já tiver
+    rodado pra este edital — o resto funciona sem ela.
+    `itens`: números separados por vírgula (ex.: "3,4") — o usuário escolhe
+    quais itens compatíveis entram na planilha; sem o parâmetro, entram
+    todos (mantém o link antigo funcionando).
+    `fretes`: JSON {"<numero_item>": {"entrada": valor_total, "saida": valor_total}}
+    — valor TOTAL do frete daquele item (fornecedor→você e você→órgão),
+    informado na hora da cotação; dividido pela quantidade do item pra virar
+    custo por unidade. Não fica salvo em lugar nenhum.
+    `incluir_custo`: quando falso, as colunas de valor mínimo (custo) saem em
+    branco na planilha (a coluna continua lá, só sem os valores) — pra quando
+    ela vai ser compartilhada com alguém que não deve ver a margem, ex. o
+    próprio fornecedor. Default true (comportamento de sempre)."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment
+    import json as _json
+
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+
+    linhas = _linhas_cotacao(edital_id, itens, user, db)
 
     fretes_por_item: dict[int, dict[str, float]] = {}
     if fretes:
@@ -3556,6 +3570,86 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
 
     numero = _numero_processo_pncp(ed).replace("/", "-")
     nome_arquivo = f"Cotacao_{numero}.xlsx" if numero else f"Cotacao_edital_{edital_id}.xlsx"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
+
+
+@app.get("/api/editais/{edital_id}/cotacao-fornecedor.xlsx")
+def cotacao_fornecedor_edital(edital_id: int, itens: str | None = Query(None),
+                              user: Usuario = Depends(_auth.get_current_user),
+                              db: Session = Depends(get_session)):
+    """Planilha ENXUTA de cotação -- pedido do usuário, formato dado por ele
+    mesmo (exemplo em img/Cotacao_118-2026.xlsx). É um SEGUNDO modelo de
+    cotação, ao lado de cotacao.xlsx (que continua existindo do jeito que
+    está) -- não substitui, complementa: cotacao.xlsx tem fabricante/marca/
+    modelo/valor mínimo (custo) pro uso interno; esta aqui só tem código do
+    item, descrição (ItemEdital.descricao, a mesma que cotacao.xlsx já usa
+    -- sem nenhum enriquecimento à parte), quantidade, valor unitário EM
+    BRANCO (pra preencher na hora de cotar) com o total calculado por
+    fórmula (quantidade × valor unitário, recalcula sozinho ao digitar o
+    preço) e o link do fornecedor cadastrado pro produto (Produto.
+    fornecedor_site) — pra conferir/atualizar o preço direto na página do
+    fornecedor enquanto preenche. Mesmo conjunto de itens de cotacao.xlsx
+    (via _linhas_cotacao).
+
+    Cabeçalho minimalista por pedido explícito do usuário: só os dois
+    números de referência do edital (o ID interno do app e o número
+    oficial da PNCP), sem nome do órgão/CNPJ nem nenhum bloco de
+    observações (validade da proposta/prazo de entrega/pontos de atenção,
+    que cotacao.xlsx tem)."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment
+
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+
+    linhas = _linhas_cotacao(edital_id, itens, user, db)
+    numero_pncp = _numero_processo_pncp(ed)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cotação"
+    negrito = Font(bold=True)
+    quebra = Alignment(wrap_text=True, vertical="top")
+
+    ws.append(["ID:", edital_id])
+    ws["A1"].font = negrito
+    ws.append([f" Nº {numero_pncp}" if numero_pncp else ""])
+    ws.append([])
+
+    cabec = ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL", "LINK"]
+    ws.append(cabec)
+    linha_cabec = ws.max_row
+    for c in ws[linha_cabec]:
+        c.font = negrito
+    col_link = len(cabec)  # última coluna (F)
+
+    linha = linha_cabec + 1
+    for it, prod in linhas:
+        link_item = (prod.fornecedor_site or "").strip()
+        ws.append([it.numero, it.descricao, it.quantidade, None, f"=C{linha}*D{linha}", link_item])
+        ws.cell(row=linha, column=2).alignment = quebra
+        ws[f"D{linha}"].number_format = 'R$ #,##0.00'
+        ws[f"E{linha}"].number_format = 'R$ #,##0.00'
+        if link_item.startswith(("http://", "https://")):
+            cel_link = ws.cell(row=linha, column=col_link)
+            cel_link.hyperlink = link_item
+            cel_link.font = Font(color="0563C1", underline="single")
+        linha += 1
+
+    larguras = {"A": 8, "B": 55, "C": 10, "D": 14, "E": 14, "F": 30}
+    for col, larg in larguras.items():
+        ws.column_dimensions[col].width = larg
+
+    numero_arquivo = numero_pncp.replace("/", "-")
+    nome_arquivo = f"Cotacao_Fornecedor_{numero_arquivo}.xlsx" if numero_arquivo else f"Cotacao_Fornecedor_edital_{edital_id}.xlsx"
 
     buf = io.BytesIO()
     wb.save(buf)

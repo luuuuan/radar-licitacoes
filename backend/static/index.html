@@ -5066,14 +5066,18 @@ async function _corpoCotacaoEdital(id){
 // sem recriar a tabela inteira (o que apagaria seleção de itens e fretes já
 // preenchidos pelo usuário).
 function _corpoCotacaoAcoes(analisado){
+  // planilha fornecedor não depende de análise por IA (não tem plataforma/
+  // data_sessao) -- fica disponível sempre, nos 3 estados.
+  const btnFornecedor = `<button class="btn ghost" onclick="baixarCotacaoFornecedor()">${ICN.baixar||''} Planilha fornecedor (.xlsx)</button>`;
   if(analisado){
-    return `<button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>`;
+    return `<button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button> ${btnFornecedor}`;
   }
   if(_analiseEmAndamento && _analiseEmAndamentoId === _paginaEditalId){
     return `<div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente).</p>
       <div class="toolbar">
         <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
+        ${btnFornecedor}
         <button class="btn ghost" onclick="_verificarAnaliseEAtualizarCotacao()">${ICN.ia||''} Verificar análise</button>
       </div>`;
   }
@@ -5081,6 +5085,7 @@ function _corpoCotacaoAcoes(analisado){
     <p class="muted" style="font-size:12px;margin:0 0 10px">Sem ela, a plataforma de disputa e o horário exato da sessão não aparecem na planilha (o resto sai normalmente). Gere assim mesmo ou rode a análise primeiro.</p>
     <div class="toolbar">
       <button class="btn ghost" onclick="baixarCotacao()">Gerar mesmo assim</button>
+      ${btnFornecedor}
       <button class="btn" onclick="abaEdital('analise', true)">${ICN.ia||''} Realizar análise com IA</button>
     </div>`;
 }
@@ -5245,6 +5250,18 @@ function baixarCotacao(){
   const chkCusto = $('#chk-cotacao-incluir-custo');
   if(chkCusto && !chkCusto.checked) params.set('incluir_custo', 'false');
   window.open(`/api/editais/${_paginaEditalId}/cotacao.xlsx?${params.toString()}`, '_blank');
+}
+
+// 2º modelo de cotação (pedido do usuário, formato dele mesmo): planilha
+// enxuta -- só código/descrição/qtd./valor unit. em branco (pra preencher
+// na hora)/total por fórmula/link do fornecedor, sem custo/fabricante/
+// marca/modelo nem o bloco de observações que a cotação completa tem. Não
+// tem frete/incluir_custo -- não existem nesse modelo.
+function baixarCotacaoFornecedor(){
+  const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
+  if(!selecionados.length){ toast('Selecione ao menos um item para cotar.', 'erro'); return; }
+  const params = new URLSearchParams({itens: selecionados.join(',')});
+  window.open(`/api/editais/${_paginaEditalId}/cotacao-fornecedor.xlsx?${params.toString()}`, '_blank');
 }
 
 async function _verificarAnaliseEAtualizarCotacao(){

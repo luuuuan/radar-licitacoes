@@ -12,7 +12,7 @@ import openpyxl
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import cotacao_edital, exportar_produtos
+from app.main import cotacao_edital, cotacao_fornecedor_edital, exportar_produtos
 from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto
 
 
@@ -222,6 +222,126 @@ def test_cotacao_xlsx_incluir_custo_true_mantem_comportamento_padrao():
                           "FABRICANTE", "MARCA", "MODELO", "LINK"]
     assert ws["F6"].value == 32.5
     assert ws["G6"].value == "=F6*C6"
+
+
+# --------- cotacao-fornecedor.xlsx: 2º modelo de cotação, enxuto --------- #
+# Pedido do usuário, formato dado por ele mesmo (img/Cotacao_118-2026.xlsx):
+# cabeçalho só com ID do app + nº PNCP (sem órgão/CNPJ/observações), colunas
+# ITEM/DESCRIÇÃO/QTD./VALOR UNI. (em branco)/VALOR TOTAL (fórmula)/LINK. É um
+# SEGUNDO modelo, ao lado de cotacao.xlsx -- não substitui.
+
+def test_cotacao_fornecedor_xlsx_cabecalho_so_tem_id_do_app_e_numero_pncp():
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)
+
+    response = cotacao_fornecedor_edital(ed.id, itens=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    assert ws["A1"].value == "ID:"
+    assert ws["B1"].value == ed.id
+    # sem numeroControlePNCP estruturado (id_externo simples "ed1" no teste),
+    # _numero_processo_pncp não acha nada -- linha fica vazia, sem quebrar.
+    assert not ws["A2"].value
+
+
+def test_cotacao_fornecedor_xlsx_colunas_e_formula_do_total():
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)
+
+    response = cotacao_fornecedor_edital(ed.id, itens=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    # linha 4 é o cabeçalho da tabela (ID/Nº/branco ocupam as 3 primeiras)
+    assert [c.value for c in ws[4]] == ["ITEM", "DESCRIÇÃO", "QTD.", "VALOR UNI.", "VALOR TOTAL", "LINK"]
+    linha = 5
+    assert ws[f"A{linha}"].value == 1          # ITEM = número do item no edital
+    assert ws[f"B{linha}"].value == "Papel A4 75g"   # descrição do PNCP, sem enriquecimento
+    assert ws[f"C{linha}"].value == 10          # QTD.
+    assert ws[f"D{linha}"].value is None        # VALOR UNI. em branco -- pra preencher na hora
+    assert ws[f"E{linha}"].value == f"=C{linha}*D{linha}"   # TOTAL recalcula sozinho
+    assert ws[f"D{linha}"].number_format == "R$ #,##0.00"
+    assert ws[f"E{linha}"].number_format == "R$ #,##0.00"
+    assert ws[f"F{linha}"].value == prod.fornecedor_site
+    assert ws[f"F{linha}"].hyperlink.target == prod.fornecedor_site
+
+
+def test_cotacao_fornecedor_xlsx_nao_tem_custo_fabricante_nem_observacoes():
+    """Diferença central pro cotacao.xlsx: nada de valor mínimo (custo),
+    fabricante/marca/modelo, nem o bloco de observações (validade da
+    proposta/prazo de entrega/pontos de atenção)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)
+    ed.cnpj_orgao = "12.345.678/0001-90"
+    db.commit()
+
+    response = cotacao_fornecedor_edital(ed.id, itens=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    todos_os_valores = [c.value for row in ws.iter_rows() for c in row]
+    assert prod.fabricante not in todos_os_valores
+    assert prod.marca not in todos_os_valores
+    assert ed.orgao not in todos_os_valores
+    assert ed.cnpj_orgao not in todos_os_valores
+
+
+def test_cotacao_fornecedor_xlsx_respeita_selecao_de_itens():
+    """Mesmo mecanismo de seleção de cotacao.xlsx (parâmetro `itens`) --
+    as duas rotas compartilham _linhas_cotacao."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod1 = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=32.5)
+    prod2 = Produto(usuario_id=u.id, descricao="Caneta azul", preco_custo=1.5)
+    db.add_all([prod1, prod2])
+    db.commit()
+    db.add_all([
+        ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10, valor_unitario=50.0),
+        ItemEdital(edital_id=ed.id, numero=2, descricao="Caneta esferografica azul", quantidade=100, valor_unitario=2.0),
+    ])
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte", detalhe={"itens": [
+        {"item": 1, "produto_id": prod1.id, "confianca": "alta"},
+        {"item": 2, "produto_id": prod2.id, "confianca": "alta"},
+    ]}))
+    db.commit()
+
+    response = cotacao_fornecedor_edital(ed.id, itens="2", user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    assert ws["A5"].value == 2
+    assert ws["B5"].value == "Caneta esferografica azul"
+    assert ws["A6"].value is None   # só o item 2 selecionado, nenhuma outra linha
+
+
+def test_cotacao_fornecedor_xlsx_edital_nao_encontrado_da_404():
+    from fastapi import HTTPException
+    import pytest
+    db = _sessao()
+    u = _usuario(db)
+    with pytest.raises(HTTPException) as exc:
+        cotacao_fornecedor_edital(999, itens=None, user=u, db=db)
+    assert exc.value.status_code == 404
+
+
+def test_cotacao_fornecedor_xlsx_sem_item_compativel_da_400():
+    from fastapi import HTTPException
+    import pytest
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        cotacao_fornecedor_edital(ed.id, itens=None, user=u, db=db)
+    assert exc.value.status_code == 400
 
 
 def test_catalogo_xlsx_formata_preco_custo_e_venda_como_moeda():
