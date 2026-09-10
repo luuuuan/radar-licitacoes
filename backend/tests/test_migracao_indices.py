@@ -12,6 +12,14 @@ no modelo DEPOIS que a tabela já existia (ver _COLUNAS_NOVAS em
 database.py) -- um banco que já tinha produtos/matches/documentos/
 regras_exclusao/propostas/usuarios antes dessas colunas existirem nunca
 ganhou o índice sozinho.
+
+Achado real #3 (auditoria do agente database-optimizer): com
+todos_editais=True, GET /api/editais e GET /api/editais/plataformas
+filtram Edital.uf/Edital.plataforma direto contra a tabela editais
+inteira (sem Match.usuario_id pra restringir o ponto de partida), sem
+nenhum índice de apoio -- fica mais relevante desde que
+/api/editais/plataformas passou a ser chamado a cada abertura do modal
+de filtro, não só ocasionalmente.
 """
 from sqlalchemy import create_engine, text
 
@@ -28,6 +36,8 @@ _INDICES_NOVOS = [
     ("propostas", "ix_propostas_usuario_id"),
     ("usuarios", "ix_usuarios_telegram_codigo"),
     ("usuarios", "ix_usuarios_telegram_codigo_2"),
+    ("editais", "ix_editais_plataforma"),
+    ("editais", "ix_editais_uf"),
 ]
 
 

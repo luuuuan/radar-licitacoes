@@ -230,7 +230,17 @@ def _migrar_indices_novos() -> None:
     create_all() só cria índice pra tabela NOVA, então um banco que já
     tinha essas tabelas antes da coluna existir nunca ganhou o índice
     sozinho -- toda consulta por usuário nessas tabelas (a MAIORIA das
-    consultas do app) varre a tabela inteira em vez de usar um índice."""
+    consultas do app) varre a tabela inteira em vez de usar um índice.
+
+    Achado real #3 (auditoria do agente database-optimizer): com
+    todos_editais=True (GET /api/editais e GET /api/editais/plataformas,
+    ver _query_editais_filtrada em main.py), a consulta não tem mais
+    Match.usuario_id pra restringir o ponto de partida -- filtra
+    Edital.uf/Edital.plataforma direto contra a tabela editais inteira,
+    sem índice de apoio nenhum. Fica mais importante desde que
+    /api/editais/plataformas passou a ser chamado a cada abertura do
+    modal de filtro (antes só no boot do app), não só ocasionalmente
+    como GET /api/editais."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     indices = [
         "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
@@ -242,6 +252,8 @@ def _migrar_indices_novos() -> None:
         "CREATE INDEX IF NOT EXISTS ix_propostas_usuario_id ON propostas (usuario_id)",
         "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo ON usuarios (telegram_codigo)",
         "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo_2 ON usuarios (telegram_codigo_2)",
+        "CREATE INDEX IF NOT EXISTS ix_editais_plataforma ON editais (plataforma)",
+        "CREATE INDEX IF NOT EXISTS ix_editais_uf ON editais (uf)",
     ]
     with engine.connect() as conn:
         for sql in indices:

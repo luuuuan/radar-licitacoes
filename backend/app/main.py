@@ -1371,7 +1371,13 @@ def _query_editais_filtrada(
     de quem monta as OPÇÕES do próprio filtro de plataforma (não faz
     sentido filtrar pela plataforma que ainda está sendo escolhida).
     Devolve (base, prazo_efetivo) -- quem chama decide as colunas
-    selecionadas (via with_only_columns), ordenação e paginação."""
+    selecionadas (via with_only_columns), ordenação e paginação.
+
+    Achado do backend-architect: um filtro novo adicionado direto numa das
+    duas rotas (em vez de aqui) nunca gera erro -- só fica silenciosamente
+    faltando na OUTRA rota. Filtro novo entra AQUI, nunca só num dos dois
+    endpoints (ver test_listar_plataformas_concorda_com_listar_editais_no_
+    mesmo_filtro em test_editais_filtros.py, que fixa esse contrato)."""
     hoje_data = date.today()
     if todos_editais:
         # Pedido do usuário: o filtro de plataforma (e a listagem em geral)

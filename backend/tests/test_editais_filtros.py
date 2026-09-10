@@ -571,6 +571,71 @@ def test_listar_plataformas_respeita_busca_item():
     assert r["plataformas"] == ["ComprasNet"]
 
 
+def test_listar_plataformas_respeita_filtro_de_nivel():
+    """Achado do code-reviewer: os testes anteriores só cobriam filtros
+    NATIVOS do Edital (uf/valor/busca_item) -- nivel é um campo do Match, a
+    classe de filtro mais arriscada pra quebrar silenciosamente com
+    with_only_columns (WHERE referenciando uma tabela que não está mais no
+    SELECT)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_forte = _edital_com_match(db, u, "ed-forte", plataforma="ComprasNet")
+    ed_fraco = _edital_com_match(db, u, "ed-fraco", plataforma="BLL Compras")
+    db.execute(select(Match).where(Match.edital_id == ed_forte.id)).scalar_one().nivel = "forte"
+    db.execute(select(Match).where(Match.edital_id == ed_fraco.id)).scalar_one().nivel = "fraco"
+    db.commit()
+
+    r = _plataformas(db, u, nivel="forte")
+
+    assert r["plataformas"] == ["ComprasNet"]
+
+
+def test_listar_plataformas_respeita_apenas_nao_lidos():
+    db = _sessao()
+    u = _usuario(db)
+    ed_lido = _edital_com_match(db, u, "ed-lido", plataforma="ComprasNet")
+    _edital_com_match(db, u, "ed-nao-lido", plataforma="BLL Compras")
+    db.execute(select(Match).where(Match.edital_id == ed_lido.id)).scalar_one().lido = True
+    db.commit()
+
+    r = _plataformas(db, u, apenas_nao_lidos=True)
+
+    assert r["plataformas"] == ["BLL Compras"]
+
+
+def test_listar_plataformas_respeita_filtro_de_status():
+    db = _sessao()
+    u = _usuario(db)
+    ed_participando = _edital_com_match(db, u, "ed-participando", plataforma="ComprasNet")
+    _edital_com_match(db, u, "ed-novo", plataforma="BLL Compras")
+    m = db.execute(select(Match).where(Match.edital_id == ed_participando.id)).scalar_one()
+    m.status = "vou_participar"
+    db.commit()
+
+    r = _plataformas(db, u, status="vou_participar")
+
+    assert r["plataformas"] == ["ComprasNet"]
+
+
+def test_listar_plataformas_concorda_com_listar_editais_no_mesmo_filtro():
+    """Achado do architect-reviewer: as duas rotas compartilham
+    _query_editais_filtrada, mas nada além do docstring garante que
+    continuam de acordo se alguém mudar o comportamento de um filtro numa
+    rota sem lembrar da outra -- fixa esse contrato num teste executável
+    em vez de só documentado em prosa."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-sp-barato", plataforma="ComprasNet", uf="SP", valor_estimado=500.0)
+    _edital_com_match(db, u, "ed-sp-caro", plataforma="BLL Compras", uf="SP", valor_estimado=50000.0)
+    _edital_com_match(db, u, "ed-rj-caro", plataforma="Licitanet", uf="RJ", valor_estimado=50000.0)
+
+    r_editais = _listar(db, u, uf=["SP"], valor_min=10000)
+    r_plataformas = _plataformas(db, u, uf=["SP"], valor_min=10000)
+
+    plataformas_via_editais = {e["plataforma"] for e in r_editais["resultados"]}
+    assert plataformas_via_editais == set(r_plataformas["plataformas"]) == {"BLL Compras"}
+
+
 def test_listar_plataformas_combina_todos_editais_com_filtro_de_uf():
     """todos_editais=True e o filtro de UF continuam combinando entre si --
     não é "ou um ou outro"."""
