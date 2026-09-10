@@ -1860,6 +1860,11 @@ function fecharFiltrosMobile(){
 }
 
 function tab(name){
+  // lembra a aba atual (localStorage) pra continuar nela depois de um F5 --
+  // não tem URL própria pra essas abas (só /edital/{id} tem), então sem
+  // isso um refresh sempre voltava pro Início. Ver uso no IIFE de
+  // inicialização, no fim do arquivo.
+  try{ localStorage.setItem('radar-ultima-aba', name); }catch(e){}
   document.querySelectorAll('nav button[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
   // destaca o botão "Meu negócio"/"Conta" quando a aba ativa está dentro dele
   // (repete pros dois menus — o normal e a cópia compacta do cabeçalho)
@@ -4298,6 +4303,10 @@ async function abaEdital(nome, forcar){
   const meuToken = ++_abaEditalToken;
   const ativo = () => meuToken === _abaEditalToken;
   _abaEditalAtual = nome;
+  // mesma lógica de tab() -- /edital/{id} não carrega a sub-aba na URL,
+  // então lembra em localStorage pra um F5 dentro do edital continuar na
+  // mesma sub-aba (ver uso em _renderPaginaEdital/IIFE de inicialização).
+  try{ localStorage.setItem('radar-ultima-aba-edital', nome); }catch(e){}
   document.querySelectorAll('.edital-abas button').forEach(b=>b.classList.toggle('active', b.dataset.aba===nome));
   const cont = $('#edital-conteudo');
   const id = _paginaEditalId;
@@ -5672,21 +5681,39 @@ async function sair(){
   // inclusive o link "Abrir edital" das notificações) — mesmo padrão do
   // login.html: decide pela URL. Usa replaceState (não pushState) pra não
   // empilhar um estado de história duplicado da mesma URL. PRECISA vir
-  // antes do tab('inicio') abaixo: achado real -- tab() reescreve a URL
+  // antes do tab(abaSalva) abaixo: achado real -- tab() reescreve a URL
   // pra "/" toda vez que a aba ativa não é a página de um edital (ver
   // dentro de tab(), pensado pra sair de dentro de /edital/{id} navegando
-  // pelo menu). Chamando tab('inicio') primeiro, a URL já virava "/" antes
+  // pelo menu). Chamando tab(...) primeiro, a URL já virava "/" antes
   // do teste abaixo rodar, e o regex nunca mais casava -- o link da
   // notificação abria e caía direto no painel Início, silenciosamente.
   const mEdital = location.pathname.match(/^\/edital\/(\d+)$/);
   if(mEdital){
     history.replaceState({view:'edital', editalId:+mEdital[1]}, '', location.pathname);
-    _renderPaginaEdital(+mEdital[1], 'itens');
+    // pedido do usuário: um F5 tem que continuar na mesma tela, não só ao
+    // entrar num edital compartilhado por link. A sub-aba do edital (itens/
+    // documentos/análise/cotação/proposta) não tem URL própria, então usa a
+    // última lembrada por abaEdital() em localStorage -- valida contra a
+    // lista real de sub-abas antes de usar, pra um valor velho/inválido não
+    // quebrar silenciosamente.
+    let abaEditalSalva = 'itens';
+    try{
+      const v = localStorage.getItem('radar-ultima-aba-edital');
+      if(['itens','documentos','analise','cotacao','proposta'].includes(v)) abaEditalSalva = v;
+    }catch(e){}
+    _renderPaginaEdital(+mEdital[1], abaEditalSalva);
   } else {
-    // Início é a aba padrão (tab() cuida de marcar o botão certo como
-    // ativo, esconder as outras seções e carregar o painel do dia — mesma
-    // função usada pra qualquer troca de aba, sem duplicar lógica aqui).
-    tab('inicio');
+    // Início é a aba padrão, mas um F5 continua na última aba visitada (ver
+    // tab(), que grava em localStorage a cada troca) -- valida contra a
+    // lista real de abas antes de usar. tab() cuida de marcar o botão certo
+    // como ativo, esconder as outras seções e carregar o conteúdo — mesma
+    // função usada pra qualquer troca de aba, sem duplicar lógica aqui.
+    let abaSalva = 'inicio';
+    try{
+      const v = localStorage.getItem('radar-ultima-aba');
+      if(['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].includes(v)) abaSalva = v;
+    }catch(e){}
+    tab(abaSalva);
   }
   // loadEditais() continua rodando na carga inicial mesmo assim (mesmo
   // entrando direto num edital): PRODUTOS_COUNT (dentro de loadResumo)
