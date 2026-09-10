@@ -3290,6 +3290,21 @@ def _numero_processo_pncp(ed: Edital) -> str:
     return ""
 
 
+def _link_edital_app(ed: Edital) -> str:
+    """Link de volta pra página deste edital dentro do próprio site.
+    Achado real (pedido do usuário): o nome do arquivo da cotação usa o
+    número oficial do processo na PNCP (ex.: "Cotacao_118-2026.xlsx"),
+    de propósito -- é o número que o ÓRGÃO reconhece, não o id interno do
+    app (que aparece na URL, ex. /edital/122390). Sem alguma referência de
+    volta, não dava pra saber a qual edital do app aquela planilha
+    pertencia. Mesmo fallback de _link_edital em notifications/formato.py:
+    sem APP_BASE_URL configurado (dev local), cai pro link do portal de
+    origem, pra nunca devolver uma URL relativa quebrada."""
+    if settings.APP_BASE_URL:
+        return f"{settings.APP_BASE_URL.rstrip('/')}/edital/{ed.id}"
+    return ed.link or ""
+
+
 def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
     from .matching.engine import normalizar
     abrev = _MODALIDADE_ABREV.get(normalizar(ed.modalidade or ""), (ed.modalidade or "").upper())
@@ -3396,6 +3411,16 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     ws.append([f"CLIENTE: {ed.orgao or ''}  CNPJ: {ed.cnpj_orgao or ''}"])
     ws["A1"].font = negrito
     ws.append([_linha_cabecalho_cotacao(ed, analise)])
+    # rastreabilidade: liga de volta pra este edital dentro do app -- o
+    # nome do arquivo/número acima é o do PNCP (o que o órgão reconhece),
+    # não o id interno do app, então sem isso não dava pra saber de qual
+    # edital do app essa planilha veio.
+    link_app = _link_edital_app(ed)
+    ws.append([f"EDITAL NO APP: {link_app}" if link_app else ""])
+    if link_app.startswith(("http://", "https://")):
+        cel_link_app = ws.cell(row=ws.max_row, column=1)
+        cel_link_app.hyperlink = link_app
+        cel_link_app.font = Font(color="0563C1", underline="single")
     ws.append([])
     # colunas sempre na mesma posição (independente de incluir_custo) — só o
     # CONTEÚDO das colunas de custo fica em branco quando desmarcado, pra
@@ -3405,11 +3430,12 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
              "VALOR MÍNIMO UNI.", "VALOR MÍNIMO TOTAL",
              "FABRICANTE", "MARCA", "MODELO", "LINK"]
     ws.append(cabec)
-    for c in ws[4]:
+    linha_cabec = ws.max_row
+    for c in ws[linha_cabec]:
         c.font = negrito
     col_link = len(cabec)  # última coluna (K)
 
-    linha = 5
+    linha = linha_cabec + 1
     for it, prod in linhas:
         qtd = it.quantidade or 0.0
         frete_item = fretes_por_item.get(it.numero, {})
