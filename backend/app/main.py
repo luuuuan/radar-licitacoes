@@ -918,6 +918,21 @@ def listar_produtos(
     }
 
 
+def _resposta_xlsx(wb, nome_arquivo: str) -> StreamingResponse:
+    """Serializa um Workbook (openpyxl) em memória e devolve como download.
+    Achado do architect-reviewer: esse trio BytesIO/StreamingResponse/
+    media-type (com o mesmo content-type de 78 caracteres) estava
+    triplicado, igual, em toda rota de exportação .xlsx do app -- extraído
+    aqui pra não copiar uma 4ª vez a cada planilha nova."""
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
+
+
 @app.get("/api/produtos/modelo.xlsx")
 def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     """Planilha-modelo para importação de produtos."""
@@ -952,13 +967,7 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=modelo_produtos.xlsx"})
+    return _resposta_xlsx(wb, "modelo_produtos.xlsx")
 
 
 @app.get("/api/produtos/exportar.xlsx")
@@ -1004,14 +1013,7 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
     for col in ws.columns:
         larg = max(len(str(c.value or "")) for c in col) + 2
         ws.column_dimensions[col[0].column_letter].width = min(larg, 40)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    nome_arquivo = f"catalogo_{date.today().isoformat()}.xlsx"
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={nome_arquivo}"})
+    return _resposta_xlsx(wb, f"catalogo_{date.today().isoformat()}.xlsx")
 
 
 def _produto_do_usuario(db, produto_id, user) -> Produto:
@@ -3570,14 +3572,7 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
 
     numero = _numero_processo_pncp(ed).replace("/", "-")
     nome_arquivo = f"Cotacao_{numero}.xlsx" if numero else f"Cotacao_edital_{edital_id}.xlsx"
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
+    return _resposta_xlsx(wb, nome_arquivo)
 
 
 @app.get("/api/editais/{edital_id}/cotacao-fornecedor.xlsx")
@@ -3650,14 +3645,7 @@ def cotacao_fornecedor_edital(edital_id: int, itens: str | None = Query(None),
 
     numero_arquivo = numero_pncp.replace("/", "-")
     nome_arquivo = f"Cotacao_Fornecedor_{numero_arquivo}.xlsx" if numero_arquivo else f"Cotacao_Fornecedor_edital_{edital_id}.xlsx"
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
+    return _resposta_xlsx(wb, nome_arquivo)
 
 
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])

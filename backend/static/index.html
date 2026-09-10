@@ -5233,9 +5233,19 @@ async function confirmarItemEdital(numero){
   }
 }
 
-function baixarCotacao(){
+// Lê quais itens estão marcados na tabela da Cotação, com o mesmo aviso de
+// "nada selecionado" nos dois botões de baixar planilha -- mesmo espírito
+// de _lerFiltrosAtivos() (extraído antes nesta sessão pro mesmo motivo:
+// achado do architect-reviewer, evita duas cópias do aviso divergindo).
+function _itensCotacaoSelecionados(){
   const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
-  if(!selecionados.length){ toast('Selecione ao menos um item para cotar.', 'erro'); return; }
+  if(!selecionados.length){ toast('Selecione ao menos um item para cotar.', 'erro'); return null; }
+  return selecionados;
+}
+
+function baixarCotacao(){
+  const selecionados = _itensCotacaoSelecionados();
+  if(!selecionados) return;
   const fretes = {};
   document.querySelectorAll('.cot-frete-entrada-item, .cot-frete-saida-item').forEach(el=>{
     const numero = el.dataset.numero;
@@ -5258,8 +5268,8 @@ function baixarCotacao(){
 // marca/modelo nem o bloco de observações que a cotação completa tem. Não
 // tem frete/incluir_custo -- não existem nesse modelo.
 function baixarCotacaoFornecedor(){
-  const selecionados = Array.from(document.querySelectorAll('.chk-cotacao-item:checked')).map(el=>el.value);
-  if(!selecionados.length){ toast('Selecione ao menos um item para cotar.', 'erro'); return; }
+  const selecionados = _itensCotacaoSelecionados();
+  if(!selecionados) return;
   const params = new URLSearchParams({itens: selecionados.join(',')});
   window.open(`/api/editais/${_paginaEditalId}/cotacao-fornecedor.xlsx?${params.toString()}`, '_blank');
 }

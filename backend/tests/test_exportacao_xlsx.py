@@ -269,6 +269,22 @@ def test_cotacao_fornecedor_xlsx_colunas_e_formula_do_total():
     assert ws[f"F{linha}"].hyperlink.target == prod.fornecedor_site
 
 
+def test_cotacao_fornecedor_xlsx_sem_link_de_fornecedor_cadastrado_fica_em_branco():
+    """Achado do code-reviewer: paridade com o mesmo teste que já existe
+    pra cotacao.xlsx -- sem fornecedor_site cadastrado, a coluna LINK fica
+    em branco, sem hyperlink quebrado."""
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u, link_fornecedor=None)
+
+    response = cotacao_fornecedor_edital(ed.id, itens=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    assert not ws["F5"].value
+    assert ws["F5"].hyperlink is None
+
+
 def test_cotacao_fornecedor_xlsx_nao_tem_custo_fabricante_nem_observacoes():
     """Diferença central pro cotacao.xlsx: nada de valor mínimo (custo),
     fabricante/marca/modelo, nem o bloco de observações (validade da
