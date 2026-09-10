@@ -304,7 +304,7 @@
   input.campo-valor::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   input.campo-valor[type=number]{-moz-appearance:textfield}
   .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;
-    border-radius:7px;cursor:pointer;font-size:13px;display:inline-block}
+    border-radius:7px;cursor:pointer;font-size:13px;display:inline-block;text-decoration:none}
   /* <button> já é inline-block por padrão do navegador, mas <a class="btn">
      (11 usos no app) é "inline" por padrão — sem isso, texto longo (ex.:
      "abrir página do item ↗") podia quebrar NO MEIO do botão em telas
@@ -1093,10 +1093,14 @@
         </div>
         <div class="field">
           <label>Plataforma / sistema
-            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum edital coletado.</span></span>
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Sistema onde a disputa acontece (ex.: BLL, ComprasNet), identificado a partir do link publicado no PNCP. Só aparecem aqui plataformas já vistas em algum dos SEUS editais (ative "Todos os editais" abaixo pra também poder filtrar plataformas que ainda não te deram nenhuma correspondência).</span></span>
           </label>
           <div class="uf-checks" id="f-plataforma-checks"></div>
         </div>
+        <label class="chk">
+          <input type="checkbox" id="f-todos-editais" onchange="_carregarFiltroPlataformas();loadEditais()"> Todos os editais
+          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Por padrão, só aparecem editais que o motor de compatibilidade já avaliou como correspondência com o seu catálogo. Marque aqui pra ver QUALQUER edital coletado, mesmo sem correspondência nenhuma — útil pra explorar uma plataforma específica ou conferir editais que o motor ainda não analisou. Sem correspondência automática, os editais aparecem sem pontuação/nível, mas ainda dá pra marcar status, favoritar e abrir a página normalmente.</span></span>
+        </label>
         <div class="field">
           <label>Tipo de contratação</label>
           <select id="f-tipo" onchange="loadEditais()">
@@ -1128,6 +1132,9 @@
         <label class="chk"><input type="checkbox" id="f-naolidos" onchange="loadEditais()"> só não lidos</label>
         <label class="chk"><input type="checkbox" id="f-hoje" onchange="loadEditais()"> editais do dia</label>
         <button class="btn ghost" onclick="loadEditais();fecharFiltrosMobile()">Filtrar</button>
+        <button class="btn ghost discreto" onclick="salvarFiltroAtual()">Salvar filtro
+          <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Guarda esta combinação de filtros neste navegador e aplica ela automaticamente da próxima vez que você abrir a aba Editais.</span></span>
+        </button>
         <button class="btn ghost" onclick="limparFiltros()">Limpar filtros</button>
         <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
       </aside>
@@ -2533,16 +2540,78 @@ function _pesquisarItem(){
   _atualizarBuscaPorScroll();   // recolapsa só se realmente não estiver no topo
 }
 
+// Filtro salvo (pedido do usuário): guarda a combinação de filtros da aba
+// Editais no navegador (localStorage, sem backend -- é só conveniência
+// pessoal, não precisa sincronizar entre dispositivos) e reaplica sozinho
+// na próxima vez que a aba abrir.
+const _CHAVE_FILTRO_SALVO = 'radar-filtro-editais';
+
+function _capturarFiltroAtual(){
+  return {
+    nivel: $('#f-nivel') ? $('#f-nivel').value : '',
+    ufs: [...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
+    plataformas: [...document.querySelectorAll('#f-plataforma-checks input:checked')].map(c=>c.value),
+    status: $('#f-status') ? $('#f-status').value : '',
+    tipo: $('#f-tipo') ? $('#f-tipo').value : 'todos',
+    porPag: $('#f-porpag') ? $('#f-porpag').value : '20',
+    naolidos: !!($('#f-naolidos') && $('#f-naolidos').checked),
+    hoje: !!($('#f-hoje') && $('#f-hoje').checked),
+    todosEditais: !!($('#f-todos-editais') && $('#f-todos-editais').checked),
+    valorMin: $('#f-valor-min') ? $('#f-valor-min').value : '',
+    valorMax: $('#f-valor-max') ? $('#f-valor-max').value : '',
+    dataDe: $('#f-data-de') ? $('#f-data-de').value : '',
+    dataAte: $('#f-data-ate') ? $('#f-data-ate').value : '',
+  };
+}
+
+function salvarFiltroAtual(){
+  try{
+    localStorage.setItem(_CHAVE_FILTRO_SALVO, JSON.stringify(_capturarFiltroAtual()));
+    toast('Filtro salvo — vai ser aplicado sozinho da próxima vez que você abrir os editais neste navegador.', 'ok');
+  }catch(e){ toast('Não foi possível salvar o filtro agora.', 'erro'); }
+}
+
+// Lido 1x na inicialização do app (ver o IIFE no fim do arquivo), ANTES de
+// _carregarFiltroPlataformas()/loadEditais() -- as checkboxes de UF/tipo/
+// etc. já existem prontas no HTML, mas plataforma é montada depois (vem da
+// API), então as plataformas salvas ficam pendentes em _plataformasParaMarcar
+// até _carregarFiltroPlataformas() montar a lista de verdade.
+let _plataformasParaMarcar = null;
+function _aplicarFiltroSalvo(){
+  let f;
+  try{ f = JSON.parse(localStorage.getItem(_CHAVE_FILTRO_SALVO) || 'null'); }
+  catch(e){ f = null; }
+  if(!f) return;
+  if($('#f-nivel')) $('#f-nivel').value = f.nivel || '';
+  document.querySelectorAll('#f-uf-checks input').forEach(c => c.checked = (f.ufs||[]).includes(c.value));
+  if($('#f-status')) $('#f-status').value = f.status || '';
+  if($('#f-tipo')) $('#f-tipo').value = f.tipo || 'todos';
+  if($('#f-porpag') && f.porPag) $('#f-porpag').value = f.porPag;
+  if($('#f-naolidos')) $('#f-naolidos').checked = !!f.naolidos;
+  if($('#f-hoje')) $('#f-hoje').checked = !!f.hoje;
+  if($('#f-todos-editais')) $('#f-todos-editais').checked = !!f.todosEditais;
+  if($('#f-valor-min')) $('#f-valor-min').value = f.valorMin || '';
+  if($('#f-valor-max')) $('#f-valor-max').value = f.valorMax || '';
+  if($('#f-data-de')) $('#f-data-de').value = f.dataDe || '';
+  if($('#f-data-ate')) $('#f-data-ate').value = f.dataAte || '';
+  _plataformasParaMarcar = f.plataformas || [];
+}
+
 // Opções do filtro de plataforma vêm do que já foi visto na coleta (ao
 // contrário da UF, uma lista fixa de 27 estados já escrita no HTML) --
-// carregado 1x na abertura do app, não a cada loadEditais().
+// carregado na abertura do app, e de novo sempre que "Todos os editais"
+// muda (o universo de plataformas disponíveis muda junto: só as que já
+// deram match, ou qualquer uma já coletada).
 async function _carregarFiltroPlataformas(){
   const cont = $('#f-plataforma-checks');
   if(!cont) return;
+  const marcadasAntes = new Set([...cont.querySelectorAll('input:checked')].map(c=>c.value));
+  if(_plataformasParaMarcar){ _plataformasParaMarcar.forEach(p=>marcadasAntes.add(p)); _plataformasParaMarcar = null; }
+  const todosEd = $('#f-todos-editais') && $('#f-todos-editais').checked;
   try{
-    const r = await api('/api/editais/plataformas');
+    const r = await api('/api/editais/plataformas' + (todosEd ? '?todos_editais=true' : ''));
     cont.innerHTML = (r.plataformas||[]).map(p =>
-      `<label><input type="checkbox" value="${esc(p)}" onchange="loadEditais()"> ${esc(p)}</label>`).join('');
+      `<label><input type="checkbox" value="${esc(p)}"${marcadasAntes.has(p)?' checked':''} onchange="loadEditais()"> ${esc(p)}</label>`).join('');
   } catch(e){ /* filtro só não aparece; resto da tela funciona normalmente */ }
 }
 
@@ -2556,12 +2625,15 @@ function limparFiltros(){
   $('#f-porpag').value = '20';
   $('#f-naolidos').checked = false;
   $('#f-hoje').checked = false;
+  const marcouTodosEd = $('#f-todos-editais') && $('#f-todos-editais').checked;
+  if($('#f-todos-editais')) $('#f-todos-editais').checked = false;
   $('#f-busca-item').value = '';
   $('#f-valor-min').value = '';
   $('#f-valor-max').value = '';
   $('#f-data-de').value = '';
   $('#f-data-ate').value = '';
   _atualizarBuscaPorScroll();
+  if(marcouTodosEd) _carregarFiltroPlataformas();
   loadEditais();
   fecharFiltrosMobile();
 }
@@ -2573,6 +2645,7 @@ async function loadEditais(resetPagina=true){
         plataformas=[...document.querySelectorAll('#f-plataforma-checks input:checked')].map(c=>c.value),
         st=$('#f-status').value, nl=$('#f-naolidos').checked,
         hoje=$('#f-hoje') && $('#f-hoje').checked,
+        todosEd=$('#f-todos-editais') && $('#f-todos-editais').checked,
         tipo=$('#f-tipo') ? $('#f-tipo').value : 'todos',
         busca=$('#f-busca-item') ? $('#f-busca-item').value.trim() : '',
         vmin=$('#f-valor-min') ? $('#f-valor-min').value : '',
@@ -2581,7 +2654,7 @@ async function loadEditais(resetPagina=true){
         date_=$('#f-data-ate') ? $('#f-data-ate').value : '';
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
-  const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || st || nl || hoje ||
+  const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || st || nl || hoje || todosEd ||
     tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
@@ -2592,6 +2665,7 @@ async function loadEditais(resetPagina=true){
   if(st)qs.set('status',st);
   if(nl)qs.set('apenas_nao_lidos','true');
   if(hoje) qs.set('hoje','true');
+  if(todosEd) qs.set('todos_editais','true');
   if(tipo!=='todos') qs.set('tipo',tipo);
   if(busca) qs.set('busca_item',busca);
   if(vmin!=='') qs.set('valor_min',vmin);
@@ -2627,7 +2701,10 @@ async function loadEditais(resetPagina=true){
           <div class="acoes-vazio"><button class="btn" onclick="tab('catalogo')">Cadastrar produto</button></div></div>`;
     return;
   }
-  $('#lista-editais').innerHTML = eds.map(cardEdital).join('') + navPaginacao(r,'mudarPagina',paginaEditais) + blocoSemMatch;
+  // todos_editais=true traz editais sem Match misturados com os que têm --
+  // cada um usa o card certo (sem Match não tem score/nível pra mostrar).
+  $('#lista-editais').innerHTML = eds.map(e => e.match_id ? cardEdital(e) : cardEditalSemMatch(e)).join('')
+    + navPaginacao(r,'mudarPagina',paginaEditais) + blocoSemMatch;
 }
 // Card mais simples que cardEdital: edital achado só pela busca por item,
 // sem Match nenhum (nível/score/lido/interessante/status não existem —
@@ -5613,6 +5690,7 @@ async function sair(){
   // entrando direto num edital): PRODUTOS_COUNT (dentro de loadResumo)
   // alimenta o estado vazio da aba Editais, e pré-carregar a lista deixa
   // a troca pra lá mais rápida quando o usuário voltar do edital.
+  _aplicarFiltroSalvo();   // antes de carregar plataformas/editais, pros filtros já saírem aplicados
   _carregarFiltroPlataformas();
   Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);

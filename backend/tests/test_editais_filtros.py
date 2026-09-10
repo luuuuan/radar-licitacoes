@@ -61,7 +61,7 @@ def _listar(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
-                  data_de=None, data_ate=None, busca_item=None,
+                  data_de=None, data_ate=None, busca_item=None, todos_editais=False,
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
     return listar_editais(user=user, db=db, **padrao)
@@ -477,7 +477,7 @@ def test_listar_plataformas_devolve_valores_distintos_ordenados_sem_nulos():
     _edital_com_match(db, u, "ed3", plataforma="ComprasNet")   # duplicado, não repete
     _edital_com_match(db, u, "ed4", plataforma=None)           # sem plataforma, fica de fora
 
-    r = listar_plataformas(user=u, db=db)
+    r = listar_plataformas(todos_editais=False, user=u, db=db)
 
     assert r["plataformas"] == ["BLL Compras", "ComprasNet"]
 
@@ -498,6 +498,122 @@ def test_listar_plataformas_nao_oferece_plataforma_sem_match_do_usuario():
     _edital_sem_match(db, "ed-orfao", plataforma="BLL Compras")            # sem Match nenhum
     _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")    # Match de outro usuário
 
-    r = listar_plataformas(user=u, db=db)
+    r = listar_plataformas(todos_editais=False, user=u, db=db)
 
     assert r["plataformas"] == ["ComprasNet"]
+
+
+def test_listar_plataformas_com_todos_editais_devolve_tudo():
+    """todos_editais=True (mesmo espírito do parâmetro em GET /api/editais):
+    o usuário quer poder filtrar por uma plataforma mesmo que ela nunca
+    tenha dado match nenhum com o catálogo dele."""
+    from app.main import listar_plataformas
+    db = _sessao()
+    u = _usuario(db)
+    outro = Usuario(nome="Outro", email="outro3@t.com", senha_hash="x")
+    db.add(outro)
+    db.commit()
+
+    _edital_com_match(db, u, "ed-meu", plataforma="ComprasNet")
+    _edital_sem_match(db, "ed-orfao", plataforma="BLL Compras")
+    _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")
+
+    r = listar_plataformas(todos_editais=True, user=u, db=db)
+
+    assert r["plataformas"] == ["BLL Compras", "ComprasNet", "Licitanet"]
+
+
+def test_todos_editais_inclui_edital_sem_match():
+    """Achado real (pedido do usuário, depois do fix acima): o usuário não
+    queria só um filtro "honesto" -- queria ENXERGAR editais de plataformas
+    que nunca deram match (ex.: BLL), não só ter essa opção escondida do
+    filtro. todos_editais=True muda o universo da listagem pra "qualquer
+    edital coletado", com ou sem Match."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_com = _edital_com_match(db, u, "ed-com", plataforma="ComprasNet")
+    ed_sem = _edital_sem_match(db, "ed-sem", plataforma="BLL Compras")
+
+    r = _listar(db, u, todos_editais=True)
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_com.id, ed_sem.id}
+    assert r["total"] == 2
+
+
+def test_todos_editais_false_continua_restrito_a_match():
+    """Garante que o comportamento padrão (todos_editais=False) não mudou."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-com", plataforma="ComprasNet")
+    _edital_sem_match(db, "ed-sem", plataforma="BLL Compras")
+
+    r = _listar(db, u, todos_editais=False)
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["plataforma"] == "ComprasNet"
+
+
+def test_todos_editais_edital_sem_match_vem_com_campos_de_match_vazios():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_sem_match(db, "ed-sem", plataforma="BLL Compras")
+
+    r = _listar(db, u, todos_editais=True)
+
+    item = r["resultados"][0]
+    assert item["match_id"] is None
+    assert item["score"] is None
+    assert item["nivel"] is None
+    assert item["status"] is None
+    assert item["lido"] is False
+    assert item["interessante"] is False
+
+
+def test_todos_editais_nao_mostra_match_de_outro_usuario():
+    """O que faz um edital "ter match" em todos_editais=True continua sendo
+    só o Match DESTE usuário -- não pode vazar score/status/lido de outro."""
+    db = _sessao()
+    u = _usuario(db)
+    outro = Usuario(nome="Outro", email="outro2@t.com", senha_hash="x")
+    db.add(outro)
+    db.commit()
+    _edital_com_match(db, outro, "ed-de-outro", plataforma="Licitanet")
+
+    r = _listar(db, u, todos_editais=True)
+
+    assert len(r["resultados"]) == 1
+    assert r["resultados"][0]["match_id"] is None
+    assert r["resultados"][0]["score"] is None
+
+
+def test_todos_editais_com_filtro_de_plataforma_acha_edital_sem_match():
+    """O cenário exato reportado: filtrar por uma plataforma (BLL) que só
+    aparece em editais sem match não pode mais dar "nenhum edital
+    encontrado" quando todos_editais está ligado."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_bll = _edital_sem_match(db, "ed-bll", plataforma="BLL Compras")
+    _edital_com_match(db, u, "ed-cn", plataforma="ComprasNet")
+
+    r = _listar(db, u, todos_editais=True, plataforma=["BLL Compras"])
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed_bll.id
+
+
+def test_todos_editais_respeita_vista_ativos():
+    """Continua respeitando o filtro de vista (ativo/encerrado) mesmo sem
+    Match nenhum -- prazo_efetivo é sempre do Edital, nunca do Match."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    _edital_sem_match(db, "ed-vencido", plataforma="BLL Compras",
+                      data_abertura=hoje - timedelta(days=10))
+    ed_ativo = _edital_sem_match(db, "ed-ativo", plataforma="BLL Compras",
+                                 data_abertura=hoje + timedelta(days=5))
+
+    r = _listar(db, u, todos_editais=True, vista="ativos")
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_ativo.id}

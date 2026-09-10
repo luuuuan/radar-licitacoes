@@ -1352,7 +1352,8 @@ def _inicio_hoje_utc() -> datetime:
 
 
 @app.get("/api/editais/plataformas")
-def listar_plataformas(user: Usuario = Depends(_auth.get_current_user),
+def listar_plataformas(todos_editais: bool = Query(False),
+                       user: Usuario = Depends(_auth.get_current_user),
                        db: Session = Depends(get_session)):
     """Valores distintos de Edital.plataforma já vistos na coleta (ver
     _plataforma_de_link em connectors/pncp.py) -- alimenta o filtro por
@@ -1365,14 +1366,15 @@ def listar_plataformas(user: Usuario = Depends(_auth.get_current_user),
     plataformas no filtro que nunca tinham um resultado pra mostrar (a
     listagem em GET /api/editais é sempre restrita a Match.usuario_id ==
     user.id), um beco sem saída: usuário marcava a opção e caía sempre em
-    "nenhum edital encontrado". Agora só entra plataforma de edital que já
-    tem Match com este usuário -- o mesmo universo que a listagem usa."""
-    valores = db.execute(
-        select(Edital.plataforma)
-        .join(Match, Match.edital_id == Edital.id)
-        .where(Match.usuario_id == user.id, Edital.plataforma.is_not(None))
-        .distinct().order_by(Edital.plataforma)
-    ).scalars().all()
+    "nenhum edital encontrado". Por padrão só entra plataforma de edital que
+    já tem Match com este usuário -- o mesmo universo que a listagem usa.
+    todos_editais=True (mesmo parâmetro de GET /api/editais) devolve TODAS
+    as plataformas do sistema, pro usuário poder filtrar mesmo o que nunca
+    deu match, já que nesse modo a listagem também mostra qualquer edital."""
+    q = select(Edital.plataforma).where(Edital.plataforma.is_not(None))
+    if not todos_editais:
+        q = q.join(Match, Match.edital_id == Edital.id).where(Match.usuario_id == user.id)
+    valores = db.execute(q.distinct().order_by(Edital.plataforma)).scalars().all()
     return {"plataformas": valores}
 
 
@@ -1392,14 +1394,32 @@ def listar_editais(
     data_de: date | None = Query(None),   # filtra por data_abertura (início de recebimento de propostas)
     data_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
+    todos_editais: bool = Query(False),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
     user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
 ):
     hoje_data = date.today()
-    base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
-    filtro = [Match.usuario_id == user.id]
+    if todos_editais:
+        # Pedido do usuário: o filtro de plataforma (e a listagem em geral)
+        # sempre foi restrito a Match.usuario_id == user.id -- oferecer uma
+        # plataforma que o motor de match nunca aprovou pra este usuário
+        # (ex.: BLL Compras, visto em editais de outros usuários/sem match
+        # nenhum) sempre caía em "nenhum edital encontrado", um beco sem
+        # saída. Em vez de esconder essas plataformas do filtro, este modo
+        # troca pra OUTER JOIN: traz qualquer edital que bata nos demais
+        # filtros, tenha Match ou não. Sem Match, os campos que vêm dele
+        # (score/nivel/lido/interessante/status/detalhe) saem None/False no
+        # resultado (ver guarda "if match" no loop abaixo) -- o front já sabe
+        # renderizar esse caso com cardEditalSemMatch, mesmo padrão já usado
+        # pela busca por item.
+        base = select(Match, Edital).select_from(Edital).outerjoin(
+            Match, (Match.edital_id == Edital.id) & (Match.usuario_id == user.id))
+        filtro = []
+    else:
+        base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+        filtro = [Match.usuario_id == user.id]
     if nivel:
         filtro.append(Match.nivel == nivel)
     if uf:
@@ -1462,8 +1482,15 @@ def listar_editais(
         select(func.count()).select_from(base.subquery())
     ) or 0
 
-    ordem = (Match.score.desc(), prazo_efetivo.asc()) if vista == "ativos" \
-        else (prazo_efetivo.desc(),)
+    # sem Match não há score pra ordenar por relevância -- nesse modo usa
+    # sempre o prazo (igual ao que "encerrados" já fazia), senão editais
+    # sem Match (score nulo) ficariam espalhados de forma arbitrária pela
+    # ordenação por score.
+    if todos_editais:
+        ordem = (prazo_efetivo.asc(),) if vista == "ativos" else (prazo_efetivo.desc(),)
+    else:
+        ordem = (Match.score.desc(), prazo_efetivo.asc()) if vista == "ativos" \
+            else (prazo_efetivo.desc(),)
     q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
@@ -1476,6 +1503,8 @@ def listar_editais(
     # não 1 por item) pra não vazar N+1 numa lista de até 200 editais.
     ids_produto: set[int] = set()
     for match, _ed in linhas:
+        if not match:   # todos_editais=True: edital sem Match nenhum
+            continue
         for it in ((match.detalhe or {}).get("itens") or [])[:4]:
             if it.get("produto_id"):
                 ids_produto.add(it["produto_id"])
@@ -1503,8 +1532,8 @@ def listar_editais(
     out = []
     for match, ed in linhas:
         dias = _dias_restantes_edital(ed)
-        detalhe = match.detalhe
-        itens_compativeis = match.itens_compativeis
+        detalhe = match.detalhe if match else None
+        itens_compativeis = match.itens_compativeis if match else 0
         if detalhe and detalhe.get("itens"):
             itens_compativeis = sum(1 for it in detalhe["itens"] if _item_conta_como_compativel(it))
             # cópia (não mutar o dict rastreado pelo ORM) — só os 4 primeiros
@@ -1527,17 +1556,17 @@ def listar_editais(
                     }
             detalhe = {**detalhe, "itens": itens_copia}
         out.append({
-            "match_id": match.id, "edital_id": ed.id,
+            "match_id": match.id if match else None, "edital_id": ed.id,
             "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
             "municipio": ed.municipio, "modalidade": ed.modalidade,
             "plataforma": ed.plataforma,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "dias_restantes": dias, "link": ed.link,
-            "score": match.score, "nivel": match.nivel,
+            "score": match.score if match else None, "nivel": match.nivel if match else None,
             "itens_compativeis": itens_compativeis,
-            "lido": match.lido, "interessante": match.interessante,
-            "status": match.status,
+            "lido": match.lido if match else False, "interessante": match.interessante if match else False,
+            "status": match.status if match else None,
             "detalhe": detalhe,
         })
 
@@ -1548,9 +1577,11 @@ def listar_editais(
     # aprovou", inútil bem na hora em que o motor automático não está
     # disponível. Só computado quando a busca está ativa (evita custo extra
     # em toda listagem normal); limitado a 20 pra não virar outra lista
-    # gigante sem paginação.
+    # gigante sem paginação. Com todos_editais=True isso fica redundante --
+    # o "out" acima já inclui editais sem Match (com paginação de verdade),
+    # duplicar aqui só repetiria os mesmos editais nos dois blocos.
     sem_match: list[dict] = []
-    if busca_item and busca_item.strip():
+    if not todos_editais and busca_item and busca_item.strip():
         palavras_busca = [p for p in busca_item.strip().lower().split() if p]
         sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
         sub_itens_sm = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)

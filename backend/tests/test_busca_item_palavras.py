@@ -52,7 +52,7 @@ def _listar(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
-                  data_de=None, data_ate=None, busca_item=None,
+                  data_de=None, data_ate=None, busca_item=None, todos_editais=False,
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
     return listar_editais(user=user, db=db, **padrao)
