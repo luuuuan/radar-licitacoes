@@ -99,6 +99,20 @@ def test_tabela_de_itens_inclui_fabricante_marca_modelo():
     assert "A4 75g" in txt
 
 
+def test_ordem_das_colunas_und_qtd_valores_antes_de_fabricante_marca_modelo():
+    """Pedido do usuário: ordem fixa das colunas -- Nº/Descrição, depois UND/
+    Qtd./Valor unit./Valor total (o que monta o preço), só por último
+    Fabricante/Marca/Modelo (informação de referência do catálogo)."""
+    payload = dict(_PAYLOAD_BASE, itens=[
+        {"numero": 7, "descricao": "Papel A4", "quantidade": 10, "preco_unit": 25.0,
+         "unidade_medida": "Resma", "fabricante": "Suzano", "marca": "Chamex", "modelo": "A4 75g"},
+    ])
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload))
+    cabecalho = "Nº Descrição UND Qtd. Valor unit. Valor total Fabricante Marca Modelo"
+    assert cabecalho in txt.replace("\n", " ")
+    assert "Resma" in txt
+
+
 def test_descricao_longa_com_fabricante_marca_modelo_nao_quebra_layout():
     """Descrição de item do PNCP costuma vir bem longa (100-300+
     caracteres) -- a coluna Descrição perdeu espaço pras 3 novas

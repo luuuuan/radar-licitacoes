@@ -16,7 +16,6 @@ import re
 from fpdf import FPDF
 from fpdf.fonts import FontFace
 
-_COR_ACCENT = (37, 99, 235)
 _COR_MUTED = (91, 103, 112)
 _COR_TXT = (20, 25, 30)
 _COR_LINHA = (216, 222, 230)
@@ -126,7 +125,7 @@ class _PropostaPDF(FPDF):
                 x_texto = 15
         self.set_xy(x_texto, 14)
         self.set_font("Helvetica", "B", 13)
-        self.set_text_color(*_COR_ACCENT)
+        self.set_text_color(*_COR_TXT)
         self.cell(0, 6, remetente.get("nome") or "", new_x="LMARGIN", new_y="NEXT")
         if remetente.get("documento"):
             self.set_x(x_texto)
@@ -212,8 +211,11 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
     pdf.ln(2)
 
     # ---- tabela de itens ----
+    # Pedido do usuário: ordem fixa -- Nº/Descrição primeiro, depois
+    # unidade/quantidade/valores (o que importa pra montar o preço), e só
+    # por último fabricante/marca/modelo (informação de referência).
     itens = payload.get("itens") or []
-    linhas = [["Nº", "Descrição", "Fabricante", "Marca", "Modelo", "Qtd.", "Valor unit.", "Valor total"]]
+    linhas = [["Nº", "Descrição", "UND", "Qtd.", "Valor unit.", "Valor total", "Fabricante", "Marca", "Modelo"]]
     for it in itens:
         qtd = it.get("quantidade") or 0
         preco = it.get("preco_unit") or 0
@@ -221,15 +223,16 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
         linhas.append([
             str(numero) if numero is not None else "-",
             str(it.get("descricao") or ""),
-            str(it.get("fabricante") or ""), str(it.get("marca") or ""), str(it.get("modelo") or ""),
+            str(it.get("unidade_medida") or ""),
             f"{qtd:g}", _fmt_moeda(preco), _fmt_moeda(preco * qtd),
+            str(it.get("fabricante") or ""), str(it.get("marca") or ""), str(it.get("modelo") or ""),
         ])
     # Descrição costuma vir do PNCP com 100-300+ caracteres -- precisa
-    # continuar sendo a coluna dominante mesmo depois de ganhar 3 vizinhas
-    # novas (fabricante/marca/modelo são valores curtos de catálogo, não
+    # continuar sendo a coluna dominante mesmo com as outras 8 ao redor
+    # (fabricante/marca/modelo/UND são valores curtos de catálogo, não
     # precisam de tanto espaço quanto ela).
-    with pdf.table(linhas, col_widths=(8, 48, 22, 17, 17, 9, 18, 20),
-                   text_align=("CENTER", "LEFT", "LEFT", "LEFT", "LEFT", "CENTER", "RIGHT", "RIGHT"),
+    with pdf.table(linhas, col_widths=(8, 42, 20, 9, 17, 19, 19, 15, 15),
+                   text_align=("CENTER", "LEFT", "CENTER", "CENTER", "RIGHT", "RIGHT", "LEFT", "LEFT", "LEFT"),
                    headings_style=FontFace(emphasis="BOLD", fill_color=(240, 242, 245)),
                    line_height=6, padding=1.5):
         pass

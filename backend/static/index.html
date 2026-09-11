@@ -5463,7 +5463,6 @@ function renderProposta(){
       <td class="muted" style="white-space:nowrap;text-align:center">${esc(it.numero??'—')}</td>
       <td><input value="${esc(it.descricao||'')}" onchange="propSet(${idx},'descricao',this.value)" style="width:100%;min-width:160px"></td>
       <td class="muted" style="text-align:center" title="Quantidade fixada pelo edital — não pode ser alterada aqui">${esc(it.quantidade)}</td>
-      <td><input type="number" step="any" class="campo-valor" value="${it.custo_unit}" onchange="propSet(${idx},'custo_unit',this.value)" style="width:90px"></td>
       <td><input type="number" step="any" class="campo-valor" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
       <td style="white-space:nowrap;color:${margItem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margItem)}</td>
@@ -5472,8 +5471,8 @@ function renderProposta(){
   }).join('');
   const margem=tv-tc, pct=tv?(margem/tv*100):0;
   $('#prop-tabela').innerHTML=`<div style="overflow-x:auto"><table>
-    <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th>Custo un.</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
-    <tbody>${linhas||'<tr><td colspan="8" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
+    <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
+    <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
   </table></div>
   <button class="btn ghost" style="margin-top:8px" onclick="propAbrirModalAdd()">+ adicionar item</button>
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">

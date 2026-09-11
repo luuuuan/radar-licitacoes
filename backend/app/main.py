@@ -4052,11 +4052,16 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
     # numa próxima flush da sessão). Item sem "numero" (proposta salva
     # antes dessa referência existir, ou descrição digitada à mão) mantém
     # o texto salvo, sem como atualizar. Mesmo raciocínio agora vale pra
-    # fabricante/marca/modelo: nunca são enviados pelo front pro POST de
-    # salvar (window._propItens só carrega numero/descricao/quantidade/
-    # custo_unit/preco_unit) -- vêm sempre frescos daqui, do produto do
-    # catálogo hoje confirmado pra esse item, não do que foi salvo no JSON.
+    # fabricante/marca/modelo/unidade_medida: nunca são enviados pelo front
+    # pro POST de salvar (window._propItens só carrega numero/descricao/
+    # quantidade/custo_unit/preco_unit) -- vêm sempre frescos daqui, do
+    # produto do catálogo hoje confirmado pra esse item, não do que foi
+    # salvo no JSON. Custo unitário também: a coluna de editar na tela da
+    # Proposta foi removida (pedido do usuário) -- passa a vir sempre do
+    # preço de custo cadastrado no catálogo (Produto.preco_custo), senão a
+    # margem exibida ficaria sempre 100% (custo parado em 0 pra sempre).
     descricoes_atuais = {it.numero: it.descricao for it in ed.itens if it.numero is not None}
+    unidades_atuais = {it.numero: it.unidade_medida for it in ed.itens if it.numero is not None}
     produtos_atuais = (_produtos_confirmados_por_numero(ed.id, user, db)
                       if (user is not None and db is not None) else {})
 
@@ -4077,9 +4082,11 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
             numero = None
         prod = produtos_atuais.get(numero) if numero is not None else None
         return {**i, "descricao": descricoes_atuais.get(numero, i.get("descricao")),
+               "unidade_medida": unidades_atuais.get(numero, i.get("unidade_medida")),
                "fabricante": prod.fabricante if prod else i.get("fabricante"),
                "marca": prod.marca if prod else i.get("marca"),
-               "modelo": prod.modelo if prod else i.get("modelo")}
+               "modelo": prod.modelo if prod else i.get("modelo"),
+               "custo_unit": prod.preco_custo if (prod and prod.preco_custo is not None) else i.get("custo_unit")}
     itens = [_com_dados_atuais(i) for i in itens]
     # Pedido do usuário: a ordem dos itens (tela e PDF) segue o número do
     # item no edital, não a ordem em que foram adicionados à cotação/

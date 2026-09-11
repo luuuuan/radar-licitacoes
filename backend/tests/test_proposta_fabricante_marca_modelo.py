@@ -141,3 +141,68 @@ def test_numero_salvo_como_string_ainda_casa_com_produto_confirmado():
     payload = _proposta_payload(ed, prop, u, db)
     assert payload["itens"][0]["fabricante"] == "Suzano"
     assert payload["itens"][0]["marca"] == "Chamex"
+
+
+def test_unidade_medida_vem_sempre_atual_do_item_do_edital():
+    """Pedido do usuário: nova coluna UND no PDF -- unidade_medida vem
+    sempre fresca de ItemEdital, mesmo raciocínio já usado pra descrição."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g",
+                      quantidade=10, unidade_medida="Resma"))
+    db.commit()
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Papel A4 75g", "quantidade": 10, "custo_unit": 0, "preco_unit": 50.0},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+    assert payload["itens"][0]["unidade_medida"] == "Resma"
+
+
+def test_custo_unit_vem_automatico_do_preco_de_custo_do_produto():
+    """Pedido do usuário: a coluna "Custo un." editável saiu da tela da
+    Proposta -- o custo (usado só internamente pra calcular a margem) passa
+    a vir sempre do preço de custo cadastrado no catálogo (Produto.
+    preco_custo) pro produto confirmado, não mais de um valor digitado à
+    mão que ninguém mais consegue editar."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=32.5)
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+    # custo_unit salvo (0, valor antigo de quando a coluna era editável) --
+    # tem que ser sobrescrito pelo preco_custo do catálogo, não mantido.
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Papel A4 75g", "quantidade": 10, "custo_unit": 0, "preco_unit": 50.0},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+    assert payload["itens"][0]["custo_unit"] == 32.5
+
+
+def test_custo_unit_sem_produto_confirmado_mantem_valor_salvo():
+    """Item sem produto confirmado (nenhum catálogo pra puxar preco_custo)
+    não pode perder o custo que já estava salvo -- fica com o que tinha."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Item avulso", quantidade=1))
+    db.commit()
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Item avulso", "quantidade": 1, "custo_unit": 7.5, "preco_unit": 20.0},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+    assert payload["itens"][0]["custo_unit"] == 7.5
