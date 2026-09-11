@@ -114,3 +114,30 @@ def test_item_de_confianca_media_nao_confirmada_nao_traz_fabricante():
 
     payload = _proposta_payload(ed, prop, u, db)
     assert payload["itens"][0]["fabricante"] is None
+
+
+def test_numero_salvo_como_string_ainda_casa_com_produto_confirmado():
+    """Proposta.itens é uma coluna JSON sem validação de tipo (PropostaIn.
+    itens é list[dict] livre) -- um "numero" salvo como string ("1" em vez
+    de 1) não pode fazer o cruzamento com o produto confirmado (indexado
+    por int, vindo de ItemEdital.numero) falhar silenciosamente."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", fabricante="Suzano",
+                   marca="Chamex", modelo="A4 75g")
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": "1", "descricao": "Papel A4 75g", "quantidade": 10, "custo_unit": 0, "preco_unit": 50.0},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+    assert payload["itens"][0]["fabricante"] == "Suzano"
+    assert payload["itens"][0]["marca"] == "Chamex"

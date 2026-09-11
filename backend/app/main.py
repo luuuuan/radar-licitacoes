@@ -4031,10 +4031,24 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
     # custo_unit/preco_unit) -- vêm sempre frescos daqui, do produto do
     # catálogo hoje confirmado pra esse item, não do que foi salvo no JSON.
     descricoes_atuais = {it.numero: it.descricao for it in ed.itens if it.numero is not None}
-    produtos_atuais = _produtos_confirmados_por_numero(ed.id, user, db) if (user and db is not None) else {}
+    produtos_atuais = (_produtos_confirmados_por_numero(ed.id, user, db)
+                      if (user is not None and db is not None) else {})
 
     def _com_dados_atuais(i: dict) -> dict:
+        # "numero" vem de Proposta.itens, uma coluna JSON sem validação de
+        # tipo (PropostaIn.itens é list[dict] livre) -- normaliza pra int
+        # antes de cruzar com descricoes_atuais/produtos_atuais (ambos
+        # indexados pelo ItemEdital.numero, sempre int). Sem isso, um
+        # "numero" que chegasse como string (ex.: front antigo/alternativo,
+        # chamada manual à API) bateria em nenhuma das duas entradas e
+        # ficaria silenciosamente sem descrição/fabricante/marca/modelo
+        # atualizados -- mesmo formato do achado real com Query(...) desta
+        # sessão: bug silencioso, sem exceção, sem log.
         numero = i.get("numero")
+        try:
+            numero = int(numero) if numero is not None else None
+        except (TypeError, ValueError):
+            numero = None
         prod = produtos_atuais.get(numero) if numero is not None else None
         return {**i, "descricao": descricoes_atuais.get(numero, i.get("descricao")),
                "fabricante": prod.fabricante if prod else i.get("fabricante"),

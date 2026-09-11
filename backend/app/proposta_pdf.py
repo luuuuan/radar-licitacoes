@@ -224,7 +224,11 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
             str(it.get("fabricante") or ""), str(it.get("marca") or ""), str(it.get("modelo") or ""),
             f"{qtd:g}", _fmt_moeda(preco), _fmt_moeda(preco * qtd),
         ])
-    with pdf.table(linhas, col_widths=(8, 34, 20, 18, 18, 10, 20, 22),
+    # Descrição costuma vir do PNCP com 100-300+ caracteres -- precisa
+    # continuar sendo a coluna dominante mesmo depois de ganhar 3 vizinhas
+    # novas (fabricante/marca/modelo são valores curtos de catálogo, não
+    # precisam de tanto espaço quanto ela).
+    with pdf.table(linhas, col_widths=(8, 48, 22, 17, 17, 9, 18, 20),
                    text_align=("CENTER", "LEFT", "LEFT", "LEFT", "LEFT", "CENTER", "RIGHT", "RIGHT"),
                    headings_style=FontFace(emphasis="BOLD", fill_color=(240, 242, 245)),
                    line_height=6, padding=1.5):

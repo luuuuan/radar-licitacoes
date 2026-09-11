@@ -99,6 +99,31 @@ def test_tabela_de_itens_inclui_fabricante_marca_modelo():
     assert "A4 75g" in txt
 
 
+def test_descricao_longa_com_fabricante_marca_modelo_nao_quebra_layout():
+    """Descrição de item do PNCP costuma vir bem longa (100-300+
+    caracteres) -- a coluna Descrição perdeu espaço pras 3 novas
+    (Fabricante/Marca/Modelo), então precisa continuar dando conta de um
+    texto realista sem estourar a página nem lançar exceção."""
+    descricao_longa = (
+        "Papel Para Impressão Formatado tipo: sulfite/apergaminhado/ofício, "
+        "tamanho (c x l): 297 x 210, gramatura: 75, cor: branco, característica "
+        "adicional: ph alcalino Papel Ofício A4 Branco. Características e "
+        "Finalidade: Papel branco, formato A4 (210 x 297 mm), gramatura de 75 "
+        "g/m², indicado para impressão, cópias, comunicados, trabalhos "
+        "escolares e atividades administrativas em geral, compatível com "
+        "impressoras jato de tinta, laser e copiadoras."
+    )
+    payload = dict(_PAYLOAD_BASE, itens=[
+        {"descricao": descricao_longa, "quantidade": 200, "preco_unit": 30.57,
+         "fabricante": "Suzano", "marca": "Chamex", "modelo": "A4 75g"},
+    ])
+    pdf_bytes = gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload)
+    assert pdf_bytes[:4] == b"%PDF"
+    txt = _texto(pdf_bytes)
+    assert "Papel Para Impress" in txt
+    assert "Suzano" in txt
+
+
 def test_item_sem_fabricante_marca_modelo_nao_quebra():
     """Campos opcionais -- item sem produto do catálogo associado (ex.:
     descrição digitada à mão) não pode derrubar a exportação."""
