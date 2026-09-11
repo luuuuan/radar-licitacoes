@@ -3489,6 +3489,25 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         except ValueError:
             analise = None
 
+    # Pedido do usuário: VALOR UNI. reflete o preço que o usuário realmente
+    # vai cobrar (editável na aba Cotação, mesmo campo que a Proposta usa —
+    # preco_unit), não mais o valor de referência do órgão (ItemEdital.
+    # valor_unitario) congelado. Item que nunca foi tocado nem na Cotação
+    # nem na Proposta (sem entrada em Proposta.itens) cai pro valor do
+    # órgão, igual sempre foi.
+    precos_venda: dict[int, float] = {}
+    prop_atual = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
+                            .where(Proposta.usuario_id == user.id)).scalars().first()
+    if prop_atual and prop_atual.itens:
+        for i in prop_atual.itens:
+            numero = i.get("numero")
+            try:
+                numero = int(numero) if numero is not None else None
+            except (TypeError, ValueError):
+                numero = None
+            if numero is not None and i.get("preco_unit") is not None:
+                precos_venda[numero] = i["preco_unit"]
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Cotação"
@@ -3532,9 +3551,10 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         # item" do Catálogo (Produto.fornecedor_site), não o link do edital
         # no PNCP: cada item pode ter vindo de um fornecedor diferente.
         link_item = (prod.fornecedor_site or "").strip()
+        valor_uni = precos_venda.get(it.numero, it.valor_unitario)
         ws.append([
             it.numero, it.descricao, it.quantidade,
-            it.valor_unitario, f"=D{linha}*C{linha}",
+            valor_uni, f"=D{linha}*C{linha}",
             custo_com_frete if incluir_custo else None,
             f"=F{linha}*C{linha}" if incluir_custo else None,
             prod.fabricante, prod.marca, prod.modelo, link_item,
