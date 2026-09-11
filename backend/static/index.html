@@ -5177,6 +5177,7 @@ async function _sincronizarItemNaProposta(numero){
     if(jaTem) return;
     itens = [...itens, {numero: item.numero, descricao: item.descricao || '',
       quantidade: item.quantidade || 0, custo_unit: 0, preco_unit: item.valor_orgao || 0}];
+    _ordenarPropItensPorNumero(itens);
     const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({itens, observacoes})});
@@ -5304,6 +5305,22 @@ let _propEditalId = null;
 let _propostaCarregadaPara = null;
 let _propObsAtual = '';
 
+// Pedido do usuário: a ordem dos itens da proposta (tela e PDF) segue o
+// número do item no edital, não a ordem em que foram adicionados. Ordena
+// window._propItens IN-PLACE (não uma cópia) -- renderProposta() usa o
+// índice do array pra editar/excluir (propSet/propDel), então uma cópia
+// ordenada só pra exibir desalinharia esses índices com o array de
+// verdade. Item sem número válido vai pro fim, mantendo ordem relativa.
+function _ordenarPropItensPorNumero(itens){
+  (itens || window._propItens || []).sort((a,b) => {
+    const na = a.numero, nb = b.numero;
+    if(na==null && nb==null) return 0;
+    if(na==null) return 1;
+    if(nb==null) return -1;
+    return na - nb;
+  });
+}
+
 async function _montarPropostaEdital(id, ativo){
   if(_propostaCarregadaPara === id){
     _renderizarPropostaEdital();
@@ -5329,6 +5346,7 @@ async function _montarPropostaEdital(id, ativo){
   window._propItens = (itensIniciais||[]).map(i=>({
     numero: i.numero, descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
+  _ordenarPropItensPorNumero();
   // itens que o edital de fato pede — usado só pra montar o modal de
   // "adicionar item" (propAbrirModalAdd), restrito ao que existe no edital.
   window._propItensEdital = p.itens_edital||[];
@@ -5457,6 +5475,7 @@ function propAddDoEdital(numero){
   if(!it) return;
   window._propItens.push({numero: it.numero, descricao:it.descricao||'', quantidade:+it.quantidade||1,
     custo_unit:0, preco_unit:+it.valor_unitario||0});
+  _ordenarPropItensPorNumero();
   renderProposta();
   propAbrirModalAdd();  // re-render com o item recém-adicionado já fora da lista
 }

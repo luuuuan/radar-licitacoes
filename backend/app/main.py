@@ -4061,6 +4061,19 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
                "marca": prod.marca if prod else i.get("marca"),
                "modelo": prod.modelo if prod else i.get("modelo")}
     itens = [_com_dados_atuais(i) for i in itens]
+    # Pedido do usuário: a ordem dos itens (tela e PDF) segue o número do
+    # item no edital, não a ordem em que foram adicionados à cotação/
+    # proposta (Proposta.itens é uma lista JSON na ordem de inserção).
+    # Item sem número válido (digitado à mão, ou proposta salva antes dessa
+    # referência existir) vai pro fim, mantendo a ordem relativa entre si.
+    def _chave_ordenacao(i: dict):
+        numero = i.get("numero")
+        try:
+            numero = int(numero) if numero is not None else None
+        except (TypeError, ValueError):
+            numero = None
+        return (numero is None, numero if numero is not None else 0)
+    itens.sort(key=_chave_ordenacao)
     total_venda = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     margem = total_venda - total_custo

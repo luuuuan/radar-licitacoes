@@ -17,6 +17,42 @@ def _edital(itens):
     return ed
 
 
+def test_itens_da_proposta_saem_ordenados_pelo_numero_do_item():
+    """Pedido do usuário: a ordem dos itens (tela e PDF) segue o número do
+    item no edital, não a ordem em que foram adicionados à proposta --
+    Proposta.itens é uma lista JSON na ordem de inserção, que não bate
+    necessariamente com a ordem numérica."""
+    ed = _edital([
+        ItemEdital(numero=1, descricao="Item 1", quantidade=1, valor_unitario=1.0),
+        ItemEdital(numero=5, descricao="Item 5", quantidade=1, valor_unitario=1.0),
+        ItemEdital(numero=3, descricao="Item 3", quantidade=1, valor_unitario=1.0),
+    ])
+    # adicionados fora de ordem: 5, depois 1, depois 3
+    prop = Proposta(edital_id=1, itens=[
+        {"numero": 5, "descricao": "Item 5", "quantidade": 1, "custo_unit": 0, "preco_unit": 5.0},
+        {"numero": 1, "descricao": "Item 1", "quantidade": 1, "custo_unit": 0, "preco_unit": 1.0},
+        {"numero": 3, "descricao": "Item 3", "quantidade": 1, "custo_unit": 0, "preco_unit": 3.0},
+    ])
+    payload = _proposta_payload(ed, prop)
+    assert [i["numero"] for i in payload["itens"]] == [1, 3, 5]
+
+
+def test_item_sem_numero_vai_pro_fim_mantendo_ordem_relativa():
+    """Item sem número válido (digitado à mão, ou proposta salva antes dessa
+    referência existir) não pode quebrar a ordenação -- vai pro fim."""
+    ed = _edital([
+        ItemEdital(numero=1, descricao="Item 1", quantidade=1, valor_unitario=1.0),
+        ItemEdital(numero=2, descricao="Item 2", quantidade=1, valor_unitario=1.0),
+    ])
+    prop = Proposta(edital_id=1, itens=[
+        {"numero": 2, "descricao": "Item 2", "quantidade": 1, "custo_unit": 0, "preco_unit": 2.0},
+        {"descricao": "Item digitado à mão", "quantidade": 1, "custo_unit": 0, "preco_unit": 9.0},
+        {"numero": 1, "descricao": "Item 1", "quantidade": 1, "custo_unit": 0, "preco_unit": 1.0},
+    ])
+    payload = _proposta_payload(ed, prop)
+    assert [i.get("numero") for i in payload["itens"]] == [1, 2, None]
+
+
 def test_itens_edital_traz_todos_os_itens_do_edital_independente_da_proposta():
     ed = _edital([
         ItemEdital(numero=1, descricao="Papel A4", quantidade=100, valor_unitario=25.0),
