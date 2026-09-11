@@ -83,6 +83,32 @@ def test_marca_dagua_nao_quebra_com_imagem_corrompida():
     assert pdf_bytes[:4] == b"%PDF"
 
 
+def test_tabela_de_itens_inclui_fabricante_marca_modelo():
+    """Achado real: a tabela de itens da proposta em PDF não tinha as
+    colunas Fabricante/Marca/Modelo que a planilha de cotação (cotacao.xlsx)
+    já tem -- quem baixava a proposta pra anexar na licitação perdia essa
+    informação."""
+    payload = dict(_PAYLOAD_BASE, itens=[
+        {"descricao": "Papel A4", "quantidade": 10, "preco_unit": 25.0,
+         "fabricante": "Suzano", "marca": "Chamex", "modelo": "A4 75g"},
+    ])
+    txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload))
+    assert "Fabricante" in txt and "Marca" in txt and "Modelo" in txt
+    assert "Suzano" in txt
+    assert "Chamex" in txt
+    assert "A4 75g" in txt
+
+
+def test_item_sem_fabricante_marca_modelo_nao_quebra():
+    """Campos opcionais -- item sem produto do catálogo associado (ex.:
+    descrição digitada à mão) não pode derrubar a exportação."""
+    payload = dict(_PAYLOAD_BASE, itens=[
+        {"descricao": "Item avulso", "quantidade": 1, "preco_unit": 5.0},
+    ])
+    pdf_bytes = gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload)
+    assert pdf_bytes[:4] == b"%PDF"
+
+
 def test_muitos_itens_gera_mais_de_uma_pagina_sem_quebrar():
     payload = dict(_PAYLOAD_BASE, itens=[
         {"descricao": f"Item {i}", "quantidade": 1, "preco_unit": 10.0} for i in range(80)

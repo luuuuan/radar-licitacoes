@@ -3377,24 +3377,18 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
     return " - ".join([abrev] + partes) if abrev else " - ".join(partes)
 
 
-def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Session) -> list[tuple[ItemEdital, Produto]]:
-    """Itens do edital compatíveis com o catálogo do usuário (produto
-    confirmado de fato: confiança alta ou confirmado manualmente -- item de
-    confiança média ainda não confirmado é só sugestão, não entra), na
-    ordem do edital. `itens`: números separados por vírgula pra restringir
-    aos que o usuário selecionou na tela; sem o parâmetro, entram todos os
-    compatíveis. Compartilhado entre a planilha de cotação completa
-    (cotacao.xlsx) e a planilha simplificada pro fornecedor
-    (cotacao-fornecedor.xlsx) -- as duas partem do MESMO conjunto de itens,
-    só mudam quais colunas mostram."""
+def _produtos_confirmados_por_numero(edital_id: int, user: Usuario, db: Session) -> dict[int, Produto]:
+    """Produto CONFIRMADO de fato (confiança alta ou confirmado manualmente
+    -- item de confiança média ainda não confirmado é só sugestão, não
+    entra) por número de item do edital, pro usuário logado. Base do
+    cruzamento usado tanto pela cotação (_linhas_cotacao) quanto pela
+    proposta (fabricante/marca/modelo sempre atuais em _proposta_payload,
+    mesmo espírito de "descrição sempre atual" que essa função já tem)."""
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
     mapa_produto: dict[int, int] = {}
     if match and match.detalhe:
         for d in (match.detalhe.get("itens") or []):
-            # só entra na cotação o que é confiável de fato (código exato /
-            # score alto) ou que o usuário já confirmou manualmente — item
-            # de confiança média ainda não confirmado é só uma sugestão.
             if (d.get("item") is not None and d.get("produto_id")
                     and (d.get("confianca") == "alta" or d.get("confirmado_manualmente"))):
                 mapa_produto[d["item"]] = d["produto_id"]
@@ -3404,6 +3398,19 @@ def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Sessio
     if prod_ids:
         produtos = {p.id: p for p in db.execute(
             select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
+
+    return {numero: produtos[pid] for numero, pid in mapa_produto.items() if pid in produtos}
+
+
+def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Session) -> list[tuple[ItemEdital, Produto]]:
+    """Itens do edital compatíveis com o catálogo do usuário, na ordem do
+    edital. `itens`: números separados por vírgula pra restringir aos que o
+    usuário selecionou na tela; sem o parâmetro, entram todos os
+    compatíveis. Compartilhado entre a planilha de cotação completa
+    (cotacao.xlsx) e a planilha simplificada pro fornecedor
+    (cotacao-fornecedor.xlsx) -- as duas partem do MESMO conjunto de itens,
+    só mudam quais colunas mostram."""
+    mapa_produto = _produtos_confirmados_por_numero(edital_id, user, db)
 
     numeros_selecionados: set[int] | None = None
     if itens:
@@ -3415,8 +3422,8 @@ def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Sessio
     itens_edital = db.execute(
         select(ItemEdital).where(ItemEdital.edital_id == edital_id)
         .order_by(ItemEdital.numero.asc())).scalars().all()
-    linhas = [(it, produtos[mapa_produto[it.numero]]) for it in itens_edital
-             if it.numero in mapa_produto and mapa_produto[it.numero] in produtos
+    linhas = [(it, mapa_produto[it.numero]) for it in itens_edital
+             if it.numero in mapa_produto
              and (numeros_selecionados is None or it.numero in numeros_selecionados)]
     if not linhas:
         raise HTTPException(400, "Nenhum item selecionado bate com o seu catálogo — não há o que cotar.")
@@ -3994,7 +4001,8 @@ class PropostaIn(BaseModel):
     observacoes: str | None = None
 
 
-def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
+def _proposta_payload(ed: Edital, prop: Proposta | None,
+                      user: Usuario | None = None, db: Session | None = None) -> dict:
     if prop and prop.itens:
         itens = prop.itens
     else:
@@ -4017,9 +4025,22 @@ def _proposta_payload(ed: Edital, prop: Proposta | None) -> dict:
     # mutar prop.itens direto, pra não arriscar persistir sem intenção
     # numa próxima flush da sessão). Item sem "numero" (proposta salva
     # antes dessa referência existir, ou descrição digitada à mão) mantém
-    # o texto salvo, sem como atualizar.
+    # o texto salvo, sem como atualizar. Mesmo raciocínio agora vale pra
+    # fabricante/marca/modelo: nunca são enviados pelo front pro POST de
+    # salvar (window._propItens só carrega numero/descricao/quantidade/
+    # custo_unit/preco_unit) -- vêm sempre frescos daqui, do produto do
+    # catálogo hoje confirmado pra esse item, não do que foi salvo no JSON.
     descricoes_atuais = {it.numero: it.descricao for it in ed.itens if it.numero is not None}
-    itens = [{**i, "descricao": descricoes_atuais.get(i.get("numero"), i.get("descricao"))} for i in itens]
+    produtos_atuais = _produtos_confirmados_por_numero(ed.id, user, db) if (user and db is not None) else {}
+
+    def _com_dados_atuais(i: dict) -> dict:
+        numero = i.get("numero")
+        prod = produtos_atuais.get(numero) if numero is not None else None
+        return {**i, "descricao": descricoes_atuais.get(numero, i.get("descricao")),
+               "fabricante": prod.fabricante if prod else i.get("fabricante"),
+               "marca": prod.marca if prod else i.get("marca"),
+               "modelo": prod.modelo if prod else i.get("modelo")}
+    itens = [_com_dados_atuais(i) for i in itens]
     total_venda = sum((i.get("preco_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     total_custo = sum((i.get("custo_unit") or 0) * (i.get("quantidade") or 0) for i in itens)
     margem = total_venda - total_custo
@@ -4049,7 +4070,7 @@ def obter_proposta(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         raise HTTPException(404, "Edital não encontrado")
     prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
                       .where(Proposta.usuario_id == user.id)).scalars().first()
-    return _proposta_payload(ed, prop)
+    return _proposta_payload(ed, prop, user, db)
 
 
 @app.post("/api/editais/{edital_id}/proposta")
@@ -4068,7 +4089,7 @@ def salvar_proposta(edital_id: int, dados: PropostaIn,
     prop.observacoes = dados.observacoes
     db.commit()
     db.refresh(prop)
-    return _proposta_payload(ed, prop)
+    return _proposta_payload(ed, prop, user, db)
 
 
 def _dados_remetente(user: Usuario) -> dict:
@@ -4099,7 +4120,7 @@ def exportar_proposta_pdf(edital_id: int, user: Usuario = Depends(_auth.get_curr
         raise HTTPException(404, "Edital não encontrado")
     prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
                       .where(Proposta.usuario_id == user.id)).scalars().first()
-    p = _proposta_payload(ed, prop)
+    p = _proposta_payload(ed, prop, user, db)
     edital_info = {
         "orgao": ed.orgao, "objeto": ed.objeto, "modalidade": ed.modalidade,
         "municipio": ed.municipio, "uf": ed.uf, "id_externo": ed.id_externo,
