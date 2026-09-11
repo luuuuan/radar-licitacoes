@@ -70,6 +70,29 @@ def test_exportar_proposta_pdf_retorna_pdf_valido():
     assert corpo[:4] == b"%PDF"
 
 
+def test_pdf_nao_pode_ficar_em_cache_no_navegador():
+    """Achado real: usuário editava fabricante/marca no catálogo, exportava
+    a proposta de novo no mesmo link/aba e via o dado antigo -- sem
+    Cache-Control, o navegador podia devolver uma resposta salva de um
+    clique anterior em vez de pedir de novo ao servidor. A proposta é
+    gerada com dado ao vivo do catálogo a cada request, nunca pode ficar em
+    cache."""
+    db = _sessao()
+    u = Usuario(nome="Empresa Teste", email="e5@t.com", senha_hash="x")
+    db.add(u)
+    db.commit()
+    ed = Edital(fonte="PNCP", id_externo="ed5", orgao="Orgao Teste",
+               objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4",
+                      quantidade=10, valor_unitario=25.0))
+    db.commit()
+
+    resp = exportar_proposta_pdf(ed.id, user=u, db=db)
+    assert resp.headers.get("cache-control") == "no-store"
+
+
 def _texto_do_pdf(corpo: bytes) -> str:
     import io
     import pypdf

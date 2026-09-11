@@ -156,6 +156,18 @@ def _edital_com_item_e_match(db, u, link_fornecedor="https://fornecedor.exemplo.
     return ed, prod
 
 
+def test_cotacao_xlsx_nao_pode_ficar_em_cache_no_navegador():
+    """Achado real: sem Cache-Control, o navegador podia devolver uma
+    resposta salva pra um clique anterior no mesmo link -- toda exportação
+    aqui é gerada com dado ao vivo do catálogo, nunca pode ficar em cache."""
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)
+
+    response = cotacao_edital(ed.id, itens=None, fretes=None, user=u, db=db)
+    assert response.headers.get("cache-control") == "no-store"
+
+
 def test_cotacao_xlsx_inclui_coluna_de_link_do_fornecedor_por_item():
     db = _sessao()
     u = _usuario(db)

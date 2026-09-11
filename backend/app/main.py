@@ -930,7 +930,13 @@ def _resposta_xlsx(wb, nome_arquivo: str) -> StreamingResponse:
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
+        # Achado real: sem isso, o navegador podia servir uma resposta salva
+        # em cache pra um clique anterior no mesmo link (ex.: "Exportar
+        # proposta" clicado de novo na mesma aba antes/depois de editar o
+        # catálogo) -- toda exportação aqui é gerada na hora com dado ao
+        # vivo, nunca pode ficar em cache.
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"',
+                "Cache-Control": "no-store"})
 
 
 @app.get("/api/produtos/modelo.xlsx")
@@ -4144,8 +4150,13 @@ def exportar_proposta_pdf(edital_id: int, user: Usuario = Depends(_auth.get_curr
     from .proposta_pdf import gerar_pdf_proposta
     pdf_bytes = gerar_pdf_proposta(_dados_remetente(user), edital_info, p)
     nome = f"proposta_edital_{edital_id}.pdf"
+    # Achado real: sem Cache-Control, o navegador podia devolver uma resposta
+    # salva em cache pra um clique anterior no mesmo link -- proposta é
+    # gerada com dado ao vivo do catálogo a cada request, nunca pode ficar
+    # em cache (mesma correção aplicada em _resposta_xlsx).
     return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf",
-                             headers={"Content-Disposition": f"attachment; filename={nome}"})
+                             headers={"Content-Disposition": f"attachment; filename={nome}",
+                                     "Cache-Control": "no-store"})
 
 
 @app.get("/api/perfil/papel-timbrado.docx")
@@ -4158,7 +4169,8 @@ def exportar_papel_timbrado(user: Usuario = Depends(_auth.get_current_user)):
     return StreamingResponse(
         iter([docx_bytes]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": "attachment; filename=papel_timbrado.docx"})
+        headers={"Content-Disposition": "attachment; filename=papel_timbrado.docx",
+                "Cache-Control": "no-store"})
 
 
 @app.get("/api/export.csv")
@@ -4182,7 +4194,8 @@ def export_csv(nivel: str | None = None,
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=editais.csv"},
+        headers={"Content-Disposition": "attachment; filename=editais.csv",
+                "Cache-Control": "no-store"},
     )
 
 
