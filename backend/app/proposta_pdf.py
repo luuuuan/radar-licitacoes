@@ -39,6 +39,30 @@ def _fmt_moeda(v: float) -> str:
     return "R$ " + txt.replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+_ABREV_UNIDADE = {
+    "unidade": "UN", "caixa": "CX", "pacote": "PCT", "embalagem": "EMB",
+    "resma": "RM", "frasco": "FR", "rolo": "RL", "conjunto": "CJ",
+    "kit": "KIT", "par": "PAR", "duzia": "DZ", "dúzia": "DZ", "saco": "SC",
+    "galao": "GL", "galão": "GL", "bandeja": "BJ", "fardo": "FD",
+    "balde": "BD", "garrafa": "GF", "ampola": "AMP", "tubo": "TB",
+    "envelope": "ENV", "bloco": "BL", "jogo": "JG", "peca": "PC", "peça": "PC",
+}
+
+
+def _abreviar_unidade(unidade: str) -> str:
+    """PNCP manda a unidade de medida por extenso, às vezes com a
+    quantidade da embalagem junto (ex.: "Caixa 1000 UN", "Embalagem 500
+    FL") -- abrevia só a primeira palavra (o tipo de embalagem, que é a
+    parte longa); o resto (número + sigla, tipo "1000 UN") já vem curto o
+    suficiente. Palavra sem abreviação conhecida cai pras 4 primeiras
+    letras maiúsculas, em vez de aparecer por extenso mesmo."""
+    if not unidade:
+        return ""
+    primeira, _, resto = unidade.strip().partition(" ")
+    sigla = _ABREV_UNIDADE.get(primeira.lower(), primeira[:4].upper())
+    return f"{sigla} {resto}".strip()
+
+
 def _texto_seguro(valor):
     """A fonte core do fpdf2 (Helvetica) só aceita Latin-1 -- qualquer
     caractere fora disso (aspas curvas ' ", travessão —, bullet •, emoji...)
@@ -223,7 +247,7 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
         linhas.append([
             str(numero) if numero is not None else "-",
             str(it.get("descricao") or ""),
-            str(it.get("unidade_medida") or ""),
+            _abreviar_unidade(it.get("unidade_medida") or ""),
             f"{qtd:g}", _fmt_moeda(preco), _fmt_moeda(preco * qtd),
             str(it.get("fabricante") or ""), str(it.get("marca") or ""), str(it.get("modelo") or ""),
         ])
@@ -231,7 +255,7 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
     # continuar sendo a coluna dominante mesmo com as outras 8 ao redor
     # (fabricante/marca/modelo/UND são valores curtos de catálogo, não
     # precisam de tanto espaço quanto ela).
-    with pdf.table(linhas, col_widths=(8, 42, 20, 9, 17, 19, 19, 15, 15),
+    with pdf.table(linhas, col_widths=(8, 48, 14, 9, 17, 19, 19, 15, 15),
                    text_align=("CENTER", "LEFT", "CENTER", "CENTER", "RIGHT", "RIGHT", "LEFT", "LEFT", "LEFT"),
                    headings_style=FontFace(emphasis="BOLD", fill_color=(240, 242, 245)),
                    line_height=6, padding=1.5):

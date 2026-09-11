@@ -7,7 +7,7 @@ padrão dos outros testes de main.py). Rode com:  cd backend && pytest
 from pypdf import PdfReader
 import io
 
-from app.proposta_pdf import gerar_pdf_proposta, _decodificar_logo
+from app.proposta_pdf import gerar_pdf_proposta, _decodificar_logo, _abreviar_unidade
 
 
 _LOGO_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -99,6 +99,30 @@ def test_tabela_de_itens_inclui_fabricante_marca_modelo():
     assert "A4 75g" in txt
 
 
+# --------- _abreviar_unidade --------- #
+
+def test_abrevia_palavra_conhecida():
+    assert _abreviar_unidade("Unidade") == "UN"
+    assert _abreviar_unidade("Resma") == "RM"
+    assert _abreviar_unidade("Caixa") == "CX"
+
+
+def test_abrevia_so_a_primeira_palavra_mantendo_qtd_e_sigla():
+    """PNCP às vezes manda a unidade junto com a quantidade da embalagem
+    (ex.: "Caixa 1000 UN") -- só a primeira palavra (o tipo de embalagem,
+    que é a parte longa) é abreviada; o resto já vem curto."""
+    assert _abreviar_unidade("Caixa 1000 UN") == "CX 1000 UN"
+    assert _abreviar_unidade("Embalagem 500 FL") == "EMB 500 FL"
+
+
+def test_palavra_sem_abreviacao_conhecida_cai_pras_4_primeiras_letras():
+    assert _abreviar_unidade("Xicara") == "XICA"
+
+
+def test_vazio_ou_none_nao_quebra():
+    assert _abreviar_unidade("") == ""
+
+
 def test_ordem_das_colunas_und_qtd_valores_antes_de_fabricante_marca_modelo():
     """Pedido do usuário: ordem fixa das colunas -- Nº/Descrição, depois UND/
     Qtd./Valor unit./Valor total (o que monta o preço), só por último
@@ -110,7 +134,7 @@ def test_ordem_das_colunas_und_qtd_valores_antes_de_fabricante_marca_modelo():
     txt = _texto(gerar_pdf_proposta(_REMETENTE_BASE, _EDITAL_BASE, payload))
     cabecalho = "Nº Descrição UND Qtd. Valor unit. Valor total Fabricante Marca Modelo"
     assert cabecalho in txt.replace("\n", " ")
-    assert "Resma" in txt
+    assert "RM" in txt   # "Resma" abreviada
 
 
 def test_descricao_longa_com_fabricante_marca_modelo_nao_quebra_layout():
