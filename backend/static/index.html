@@ -1659,6 +1659,15 @@ function mascaraTel(v){ // (00) 00000-0000 ou (00) 0000-0000
   return d.replace(/^(\d{2})(\d)/,'($1) $2').replace(/(\d{5})(\d{1,4})$/,'$1-$2');
 }
 function mascaraCep(v){ const d=(v||'').replace(/\D/g,'').slice(0,8); return d.replace(/^(\d{5})(\d)/,'$1-$2'); }
+// RG não tem formato único no Brasil (varia por estado emissor) -- usa o
+// modelo mais comum (XX.XXX.XXX-Y, mesmo padrão usado pela maioria dos
+// formulários brasileiros), aceitando dígito ou "X" no verificador final
+// (alguns estados emitem RG com dígito verificador "X").
+function mascaraRg(v){
+  const d=(v||'').toUpperCase().replace(/[^0-9X]/g,'').slice(0,9);
+  return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2}\.\d{3})(\d)/,'$1.$2')
+          .replace(/^(\d{2}\.\d{3}\.\d{3})([0-9X])/,'$1-$2');
+}
 function emailValido(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim()); }
 function aplicarMascara(el, fn){
   if(!el) return;
@@ -5686,6 +5695,8 @@ async function loadPerfil(){
   // máscaras (idempotente: só liga uma vez)
   if(!$('#pf-doc').dataset.mask){ aplicarMascara($('#pf-doc'), mascaraDoc); $('#pf-doc').dataset.mask='1'; }
   if(!$('#pf-cep').dataset.mask){ aplicarMascara($('#pf-cep'), mascaraCep); $('#pf-cep').dataset.mask='1'; }
+  if(!$('#pf-telefone').dataset.mask){ aplicarMascara($('#pf-telefone'), mascaraTel); $('#pf-telefone').dataset.mask='1'; }
+  if(!$('#pf-representante-rg').dataset.mask){ aplicarMascara($('#pf-representante-rg'), mascaraRg); $('#pf-representante-rg').dataset.mask='1'; }
   carregarVinculoTelegram(1);
   carregarVinculoTelegram(2);
 }

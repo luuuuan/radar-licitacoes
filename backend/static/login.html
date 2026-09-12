@@ -207,10 +207,10 @@
           <p class="wizard-step-titulo">Dados complementares</p>
           <p class="wizard-step-sub">Opcional — usados na proposta timbrada exportada pro edital. Pode pular e completar depois.</p>
           <label>Telefone</label>
-          <input id="c-telefone" placeholder="(00) 00000-0000">
+          <input id="c-telefone" placeholder="(00) 00000-0000" oninput="this.value=mascaraTelLogin(this.value)">
           <div class="row">
             <div><label>Representante legal</label><input id="c-representante" placeholder="Quem assina a proposta"></div>
-            <div style="flex:0 0 110px"><label>RG</label><input id="c-representante-rg"></div>
+            <div style="flex:0 0 110px"><label>RG</label><input id="c-representante-rg" oninput="this.value=mascaraRgLogin(this.value)"></div>
           </div>
           <div class="row">
             <div><label>Inscrição estadual</label><input id="c-ie"></div>
@@ -294,6 +294,19 @@ function mascaraDocLogin(v){
   const d=(v||'').replace(/\D/g,'').slice(0,14);
   if(d.length<=11) return d.replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d{1,2})$/,'$1-$2');
   return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/,'$1.$2.$3').replace(/\.(\d{3})(\d)/,'.$1/$2').replace(/(\d{4})(\d{1,2})$/,'$1-$2');
+}
+function mascaraTelLogin(v){ // (00) 00000-0000 ou (00) 0000-0000
+  const d=(v||'').replace(/\D/g,'').slice(0,11);
+  if(d.length<=10) return d.replace(/^(\d{2})(\d)/,'($1) $2').replace(/(\d{4})(\d{1,4})$/,'$1-$2');
+  return d.replace(/^(\d{2})(\d)/,'($1) $2').replace(/(\d{5})(\d{1,4})$/,'$1-$2');
+}
+// RG não tem formato único no Brasil (varia por estado emissor) -- usa o
+// modelo mais comum (XX.XXX.XXX-Y), aceitando dígito ou "X" no
+// verificador final (alguns estados emitem RG com dígito verificador "X").
+function mascaraRgLogin(v){
+  const d=(v||'').toUpperCase().replace(/[^0-9X]/g,'').slice(0,9);
+  return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2}\.\d{3})(\d)/,'$1.$2')
+          .replace(/^(\d{2}\.\d{3}\.\d{3})([0-9X])/,'$1-$2');
 }
 function mostrar(qual){
   const formularios = {login:'#form-login', cadastro:'#form-cadastro',
