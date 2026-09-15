@@ -1723,6 +1723,8 @@ def listar_editais(
             q_sem_match = q_sem_match.where(Edital.uf.in_([u.upper() for u in uf]))
         if plataforma:
             q_sem_match = q_sem_match.where(Edital.plataforma.in_(plataforma))
+        if modalidade:
+            q_sem_match = q_sem_match.where(Edital.modalidade.in_(modalidade))
         if tipo != "todos":
             prefixo_sm = "m" if tipo == "produtos" else "s"
             q_sem_match = q_sem_match.where(

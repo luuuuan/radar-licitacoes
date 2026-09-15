@@ -32,12 +32,21 @@ from ..config import settings, parse_csv_ints, parse_csv_str
 
 log = logging.getLogger("conector.pncp")
 
+# Achado real (auditoria do agente error-detective): usado só como reserva
+# quando `modalidadeNome` vem ausente/nulo na resposta do PNCP -- o valor
+# vindo direto da API é o que prevalece (ver `_mapear_edital` abaixo). Os
+# nomes aqui têm que bater EXATAMENTE com o que o PNCP manda (confirmado ao
+# vivo: código 6 vem como "Pregão - Eletrônico", com traço), senão o mesmo
+# tipo de pregão vira duas strings diferentes na coluna `modalidade`
+# dependendo de qual dos dois caminhos preencheu aquele edital -- e o filtro
+# por modalidade (que faz IN exato) passa a mostrar duas opções pro usuário
+# pra uma coisa só.
 MODALIDADE_NOME = {
-    1: "Leilão Eletrônico", 2: "Diálogo Competitivo", 3: "Concurso",
-    4: "Concorrência Eletrônica", 5: "Concorrência Presencial",
-    6: "Pregão Eletrônico", 7: "Pregão Presencial", 8: "Dispensa",
+    1: "Leilão - Eletrônico", 2: "Diálogo Competitivo", 3: "Concurso",
+    4: "Concorrência - Eletrônica", 5: "Concorrência - Presencial",
+    6: "Pregão - Eletrônico", 7: "Pregão - Presencial", 8: "Dispensa",
     9: "Inexigibilidade", 10: "Manifestação de Interesse",
-    11: "Pré-qualificação", 12: "Credenciamento", 13: "Leilão Presencial",
+    11: "Pré-qualificação", 12: "Credenciamento", 13: "Leilão - Presencial",
 }
 
 

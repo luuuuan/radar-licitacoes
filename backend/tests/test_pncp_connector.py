@@ -17,7 +17,7 @@ fake com uma fila de respostas. Rode com:  cd backend && pytest
 """
 from datetime import date
 
-from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link
+from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link, MODALIDADE_NOME
 
 
 class _RespostaFake:
@@ -319,3 +319,30 @@ def test_mapear_edital_sem_link_sistema_origem_plataforma_none():
     c, _ = _conector([])
     ec = c._mapear_edital(_reg_pncp(link_sistema_origem=None), modalidade=6)
     assert ec.plataforma is None
+
+
+# --------- modalidade: fallback tem que bater com o valor real do PNCP --------- #
+
+def test_mapear_edital_usa_modalidadenome_da_api_quando_presente():
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(modalidadeNome="Pregão - Eletrônico"), modalidade=6)
+    assert ec.modalidade == "Pregão - Eletrônico"
+
+
+def test_mapear_edital_cai_pro_fallback_quando_modalidadenome_ausente():
+    """Achado real (agente error-detective): a resposta ao vivo do PNCP pro
+    código 6 vem como "Pregão - Eletrônico" (com traço). O dicionário de
+    reserva (MODALIDADE_NOME) tinha "Pregão Eletrônico" (sem traço) -- editais
+    cujo registro não trouxe modalidadeNome caíam nesse fallback e ganhavam
+    uma string DIFERENTE da que os demais editais da mesma modalidade têm,
+    fazendo o filtro por modalidade (match exato) tratar como dois valores."""
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(modalidadeNome=None), modalidade=6)
+    assert ec.modalidade == "Pregão - Eletrônico"
+
+
+def test_modalidade_nome_fallback_bate_com_valor_confirmado_ao_vivo_no_pncp():
+    """Trava de regressão: código 6 é o valor que já confirmamos ao vivo na
+    API do PNCP. Se alguém editar MODALIDADE_NOME sem checar o formato real,
+    este teste quebra."""
+    assert MODALIDADE_NOME[6] == "Pregão - Eletrônico"

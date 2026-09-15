@@ -428,6 +428,24 @@ def test_sem_match_respeita_filtro_de_plataforma():
     assert r["sem_match"][0]["plataforma"] == "BLL Compras"
 
 
+def test_sem_match_respeita_filtro_de_modalidade():
+    """Achado real (agente code-reviewer): o bloco "sem análise automática"
+    monta sua própria query à mão (não passa por _query_editais_filtrada) e
+    ignorava o filtro de modalidade -- selecionar uma modalidade e buscar por
+    item trazia editais de QUALQUER modalidade nesse bloco, mesmo padrão de
+    bug já visto e corrigido antes pra uf/plataforma/valor/data."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_pe = _edital_sem_match(db, "ed-pe", itens=["Papel A4 75g"], modalidade="Pregão - Eletrônico")
+    _edital_sem_match(db, "ed-disp", itens=["Papel A4 75g"], modalidade="Dispensa")
+
+    r = _listar(db, u, busca_item="papel a4", modalidade=["Pregão - Eletrônico"])
+
+    assert len(r["sem_match"]) == 1
+    assert r["sem_match"][0]["edital_id"] == ed_pe.id
+    assert r["sem_match"][0]["modalidade"] == "Pregão - Eletrônico"
+
+
 # --------- filtro por modalidade (tipo de pregão) --------- #
 
 def test_filtro_modalidade_exclui_editais_de_outra_modalidade():
