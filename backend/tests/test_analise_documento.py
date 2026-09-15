@@ -10,48 +10,87 @@ from datetime import date
 from app import analise_edital as ia
 
 
-def test_formatar_requisitos_junta_tecnicos_e_habilitacao():
+def test_formatar_requisitos_junta_as_4_categorias_de_documento():
     texto = ia._formatar_requisitos(
-        ["Garantia mínima de 12 meses"],
         {"juridica": ["Contrato social"], "fiscal_trabalhista": [], "tecnica": ["Atestado de capacidade técnica"],
          "economico_financeira": [], "declaracoes": []},
     )
-    assert "Garantia mínima de 12 meses" in texto
     assert "Contrato social" in texto
     assert "Atestado de capacidade técnica" in texto
 
 
 def test_formatar_requisitos_vazio_retorna_mensagem_padrao():
-    texto = ia._formatar_requisitos([], {})
+    texto = ia._formatar_requisitos({})
     assert "nenhum requisito" in texto.lower()
 
 
+def test_formatar_requisitos_nao_inclui_declaracoes():
+    """Pedido do usuário: declaração não é documento fixo reaproveitável,
+    é texto redigido especificamente pra cada edital -- perguntar pra IA
+    "algum documento cadastrado já atende essa declaração" não faz sentido
+    e gerava um ✗ (não atendido) sem nenhum problema real por trás."""
+    texto = ia._formatar_requisitos(
+        {"juridica": [], "fiscal_trabalhista": [], "tecnica": [],
+         "economico_financeira": [],
+         "declaracoes": [{"nome": "Declaração de ME/EPP", "modelo_orgao": True, "detalhe": ""}]},
+    )
+    assert "Declaração de ME/EPP" not in texto
+    assert "nenhum requisito" in texto.lower()
+
+
+def test_formatar_requisitos_nao_inclui_requisitos_tecnicos():
+    """Pedido do usuário: requisito técnico é especificação do PRODUTO/
+    SERVIÇO ofertado (ex.: "alimento para peixes com tal composição"), não
+    é documento que o fornecedor precise ter cadastrado -- cruzar contra
+    "documentos cadastrados" não fazia sentido e gerava ✗ sem problema
+    real (esse tipo de compatibilidade já é coberto, de outro jeito, pela
+    comparação de catálogo/item). _formatar_requisitos não recebe mais
+    requisitos_tecnicos nem como parâmetro."""
+    texto = ia._formatar_requisitos({"juridica": ["Contrato social"]})
+    assert "Contrato social" in texto
+    # não tem como um requisito técnico vazar aqui -- a função nem recebe
+    # mais essa lista como argumento.
+
+
 def test_verificar_documentos_sem_chave_retorna_sem_ia():
-    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima 12 meses"], {},
+    r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]},
                                         [{"nome": "x.pdf", "texto": "texto qualquer"}], api_key=None)
     assert r == {"status": "sem_ia"}
 
 
 def test_verificar_documentos_sem_documentos_cadastrados():
-    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima 12 meses"], {}, [], api_key="fake-key")
+    r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]}, [], api_key="fake-key")
     assert r == {"status": "sem_documentos"}
 
 
 def test_verificar_documentos_sem_requisitos_do_edital():
-    r = ia.verificar_documentos_usuario("Objeto", [], {}, [{"nome": "x.pdf", "texto": "algo"}], api_key="fake-key")
+    r = ia.verificar_documentos_usuario("Objeto", {}, [{"nome": "x.pdf", "texto": "algo"}], api_key="fake-key")
+    assert r == {"status": "sem_requisitos"}
+
+
+def test_verificar_documentos_so_requisito_tecnico_conta_como_sem_requisitos():
+    """Achado real (pedido do usuário): um edital pode ter requisitos
+    técnicos (specs do produto) sem nenhum documento de habilitação nas 4
+    categorias -- como requisito_tecnico não entra mais nesta verificação,
+    isso tem que continuar contando como "nada pra checar", não disparar
+    uma chamada de IA à toa."""
+    r = ia.verificar_documentos_usuario(
+        "Objeto", {"juridica": [], "fiscal_trabalhista": [], "tecnica": [], "economico_financeira": []},
+        [{"nome": "x.pdf", "texto": "algo"}], api_key="fake-key")
     assert r == {"status": "sem_requisitos"}
 
 
 def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
     resposta_ia = json.dumps({"itens": [
-        {"exigido": "Garantia mínima de 12 meses", "atendido": True,
+        {"exigido": "Atestado técnico", "atendido": True, "aplicavel": True,
          "documento": "ficha_tecnica.pdf", "observacao": ""},
-        {"exigido": "CND Receita Federal", "atendido": False, "documento": "", "observacao": ""},
+        {"exigido": "CND Receita Federal", "atendido": False, "aplicavel": True, "documento": "", "observacao": ""},
     ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
 
     r = ia.verificar_documentos_usuario(
-        "Aquisição de equipamento", ["Garantia mínima de 12 meses"], {"fiscal_trabalhista": ["CND Receita Federal"]},
+        "Aquisição de equipamento",
+        {"fiscal_trabalhista": ["CND Receita Federal"], "tecnica": ["Atestado técnico"]},
         [{"nome": "ficha_tecnica.pdf", "texto": "texto extraído do documento " * 5}],
         api_key="fake-key")
 
@@ -64,19 +103,58 @@ def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
 
 def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
     resposta_ia = json.dumps({"itens": [
-        {"exigido": "", "atendido": True, "documento": "x", "observacao": ""},
-        {"exigido": "Garantia mínima", "atendido": True, "documento": "x.pdf", "observacao": ""},
+        {"exigido": "", "atendido": True, "aplicavel": True, "documento": "x", "observacao": ""},
+        {"exigido": "CND", "atendido": True, "aplicavel": True, "documento": "x.pdf", "observacao": ""},
     ]})
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
-    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima"], {},
+    r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]},
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert len(r["itens"]) == 1
-    assert r["itens"][0]["exigido"] == "Garantia mínima"
+    assert r["itens"][0]["exigido"] == "CND"
+
+
+def test_verificar_documentos_item_nao_aplicavel_e_removido_da_lista(monkeypatch):
+    """Pedido do usuário (a partir de um caso real, edital com exigência
+    alternativa por tipo de empresa: "sociedade empresária ou EIRELI" não
+    se aplica a um fornecedor cadastrado como MEI) -- a IA já reconhecia
+    isso no texto da observação, mas ainda marcava ✗ (não atendido) como se
+    fosse uma pendência real. Item com aplicavel=false nem entra na lista
+    (não conta em atendidos/total, não mostra X nenhum)."""
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "Sociedade empresária ou EIRELI: ato constitutivo", "atendido": False, "aplicavel": False,
+         "documento": "", "observacao": "Não aplicável -- fornecedor cadastrado como MEI"},
+        {"exigido": "CND Receita Federal", "atendido": True, "aplicavel": True,
+         "documento": "cnd.pdf", "observacao": ""},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.verificar_documentos_usuario(
+        "Objeto", {"juridica": ["Sociedade empresária ou EIRELI: ato constitutivo"],
+                   "fiscal_trabalhista": ["CND Receita Federal"]},
+        [{"nome": "cnd.pdf", "texto": "certidão negativa " * 5}], api_key="fake-key")
+
+    assert r["status"] == "ok"
+    assert len(r["itens"]) == 1
+    assert r["itens"][0]["exigido"] == "CND Receita Federal"
+
+
+def test_verificar_documentos_item_sem_campo_aplicavel_conta_como_aplicavel(monkeypatch):
+    """Formato antigo (cache de antes desta mudança) ou IA que não mandou
+    o campo -- trata como aplicável (não descarta silenciosamente um item
+    real por ausência de informação)."""
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "CND Receita Federal", "atendido": False, "documento": "", "observacao": ""},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND Receita Federal"]},
+                                        [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
+    assert len(r["itens"]) == 1
+    assert r["itens"][0]["exigido"] == "CND Receita Federal"
 
 
 def test_verificar_documentos_erro_ia_propaga_status(monkeypatch):
     monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
-    r = ia.verificar_documentos_usuario("Objeto", ["Garantia mínima"], {},
+    r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]},
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
 

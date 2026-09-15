@@ -45,7 +45,7 @@ _resposta_catalogo = json.dumps({"itens": [
 def test_cancelado_antes_de_comecar_nao_chama_ia_nenhuma():
     db = _sessao()
     u, ed = _semear(db)
-    resultado = {"status": "ok", "objeto": ed.objeto, "requisitos_tecnicos": [], "documentos_habilitacao": {}}
+    resultado = {"status": "ok", "objeto": ed.objeto, "requisitos_tecnicos": [], "documentos_habilitacao": {"fiscal_trabalhista": ["CND"]}}
     with patch("app.analise_edital._gerar") as mock_gerar:
         out = _rodar_extras_ia(dict(resultado), ed, u, db, "fake-key", deve_cancelar=lambda: True)
     assert mock_gerar.called is False
@@ -61,7 +61,7 @@ def test_cancelado_entre_as_duas_etapas_roda_so_a_primeira():
     db = _sessao()
     u, ed = _semear(db)
     resultado = {"status": "ok", "objeto": ed.objeto,
-                "requisitos_tecnicos": ["Garantia minima"], "documentos_habilitacao": {}}
+                "requisitos_tecnicos": ["Garantia minima"], "documentos_habilitacao": {"fiscal_trabalhista": ["CND"]}}
     chamadas = {"n": 0}
     def deve_cancelar():
         return chamadas["n"] > 0
@@ -82,7 +82,7 @@ def test_sem_cancelamento_roda_as_duas_etapas_normalmente():
     db = _sessao()
     u, ed = _semear(db)
     resultado = {"status": "ok", "objeto": ed.objeto,
-                "requisitos_tecnicos": ["Garantia minima"], "documentos_habilitacao": {}}
+                "requisitos_tecnicos": ["Garantia minima"], "documentos_habilitacao": {"fiscal_trabalhista": ["CND"]}}
     respostas = iter([_resposta_docs, _resposta_catalogo])
     with patch("app.analise_edital._gerar") as mock_gerar:
         mock_gerar.side_effect = lambda *a, **kw: (next(respostas), "ok")

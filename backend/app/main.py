@@ -2874,6 +2874,33 @@ def _anexar_checklist_documentos(resultado: dict, user: Usuario, db: Session) ->
     return resultado
 
 
+def _anexar_cobertura_lotes(resultado: dict, ed: Edital, user: Usuario, db: Session) -> dict:
+    """Pedido do usuário: quando a disputa é por lote (não dá pra disputar 1
+    item isolado), mostrar quais lotes o catálogo do usuário cobre por
+    inteiro. Cruza resultado["lotes"] (identificado pela análise, cacheado
+    por edital) com o mesmo critério de "item compatível" já usado na
+    Cotação/Proposta (_produtos_confirmados_por_numero) — que é por
+    usuário, então roda em toda leitura, igual ao checklist de documentos
+    por nome (nunca faz parte do cache da análise em si)."""
+    if resultado.get("status") != "ok":
+        return resultado
+    lotes = resultado.get("lotes") or []
+    if not lotes:
+        return resultado
+    confirmados = _produtos_confirmados_por_numero(ed.id, user, db)
+    cobertura = []
+    for lote in lotes:
+        itens_lote = lote.get("itens") or []
+        faltando = [n for n in itens_lote if n not in confirmados]
+        cobertura.append({
+            "numero": lote.get("numero"), "descricao": lote.get("descricao") or "",
+            "itens": itens_lote, "cobre_tudo": bool(itens_lote) and not faltando,
+            "itens_faltando": faltando,
+        })
+    resultado["lotes_cobertura"] = cobertura
+    return resultado
+
+
 def _obter_cache_extras(db: Session, user: Usuario, edital_id: int) -> "AnaliseIAExtras | None":
     return db.execute(select(AnaliseIAExtras).where(
         AnaliseIAExtras.usuario_id == user.id, AnaliseIAExtras.edital_id == edital_id
@@ -2934,11 +2961,29 @@ def _anexar_verificacao_ia_documentos(resultado: dict, ed: Edital, user: Usuario
 def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuario, db: Session,
                                        api_key: str | None, forcar: bool = False) -> dict:
     import json as _json
+    from . import analise_edital as ia
     cache = _obter_cache_extras(db, user, ed.id)
-    tem_cache = cache is not None and cache.versao_documentos_calc is not None
+    dados_cache = None
+    if cache and cache.verificacao_documentos_ia:
+        try:
+            dados_cache = _json.loads(cache.verificacao_documentos_ia)
+        except ValueError:
+            dados_cache = None
+    # achado real (agente error-detective): cache versionada só por
+    # versao_documentos_calc nunca detectava uma mudança na LÓGICA da
+    # verificação (ex.: parar de cobrar declaração) -- guarda a versão da
+    # lógica dentro do próprio JSON cacheado; um cache sem essa marca
+    # (formato anterior a esta correção) ou com marca antiga conta como
+    # inválido, igual a forcar=True, MESMO que versao_documentos_calc ainda
+    # bata com Usuario.versao_documentos. Cache "vazio" (usuário sem
+    # documento algum na última vez) não tem nada pra ficar desatualizado,
+    # continua valendo normalmente.
+    cache_logica_valida = dados_cache is not None and dados_cache.get("_versao_logica") == ia.VERSAO_VERIFICACAO_DOCUMENTOS
+    tem_cache = (cache is not None and cache.versao_documentos_calc is not None
+                and (cache.verificacao_documentos_ia is None or cache_logica_valida))
     if tem_cache and not forcar:
-        if cache.verificacao_documentos_ia:
-            resultado["verificacao_documentos_ia"] = _json.loads(cache.verificacao_documentos_ia)
+        if dados_cache is not None:
+            resultado["verificacao_documentos_ia"] = {k: v for k, v in dados_cache.items() if k != "_versao_logica"}
         if cache.versao_documentos_calc != user.versao_documentos:
             resultado["verificacao_documentos_desatualizada"] = True
         return resultado
@@ -2948,16 +2993,16 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
     ).scalars().all()
     saida = None
     if docs_usuario:
-        from . import analise_edital as ia
         saida = ia.verificar_documentos_usuario(
-            resultado.get("objeto") or "", resultado.get("requisitos_tecnicos"),
-            resultado.get("documentos_habilitacao"),
+            resultado.get("objeto") or "", resultado.get("documentos_habilitacao"),
             [{"nome": d.nome, "texto": d.texto_extraido} for d in docs_usuario],
             api_key=api_key,
         )
+    valor_json = None
+    if saida:
+        valor_json = _json.dumps({**saida, "_versao_logica": ia.VERSAO_VERIFICACAO_DOCUMENTOS}, ensure_ascii=False)
     _upsert_cache_extras(db, user, ed.id, cache,
-        campo_valor="verificacao_documentos_ia",
-        valor_json=_json.dumps(saida, ensure_ascii=False) if saida else None,
+        campo_valor="verificacao_documentos_ia", valor_json=valor_json,
         campo_versao="versao_documentos_calc", versao=user.versao_documentos)
     if saida:
         resultado["verificacao_documentos_ia"] = saida
@@ -3135,7 +3180,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     if cache:
         cache["cache"] = True
         cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar, forcar)
-        return _anexar_checklist_documentos(cache, user, db)
+        cache = _anexar_checklist_documentos(cache, user, db)
+        return _anexar_cobertura_lotes(cache, ed, user, db)
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
     if not ia.ia_texto_disponivel(chave):
         return {"status": "sem_ia"}
@@ -3192,7 +3238,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
                 ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
                 db.commit()
     resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar, forcar)
-    return _anexar_checklist_documentos(resultado, user, db)
+    resultado = _anexar_checklist_documentos(resultado, user, db)
+    return _anexar_cobertura_lotes(resultado, ed, user, db)
 
 
 # Achado real (mesmo motivo/padrão do completar-descrição logo abaixo): a

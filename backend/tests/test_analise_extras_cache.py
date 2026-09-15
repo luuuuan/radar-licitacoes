@@ -59,7 +59,7 @@ def _resposta_catalogo(produto_id):
 
 def _resultado_base(ed):
     return {"status": "ok", "objeto": ed.objeto, "requisitos_tecnicos": ["Garantia minima"],
-           "documentos_habilitacao": {}}
+           "documentos_habilitacao": {"fiscal_trabalhista": ["CND Receita Federal"]}}
 
 
 # ---------------------- verificação de documentos ---------------------- #
@@ -112,6 +112,35 @@ def test_verificacao_documentos_forcar_recalcula_mesmo_com_cache_valido():
         out2 = _anexar_verificacao_ia_documentos(_resultado_base(ed), ed, u, db, "fake-key", forcar=True)
     assert mock_gerar.call_count == 2, "forcar=True deve gastar uma nova chamada de IA"
     assert "verificacao_documentos_desatualizada" not in out2
+
+
+def test_verificacao_documentos_cache_de_logica_antiga_e_recalculada_sem_forcar():
+    """Achado real (agente error-detective): esta cache era versionada só
+    por versao_documentos_calc (muda quando o usuário edita um Documento) --
+    uma correção na LÓGICA de verificar_documentos_usuario() (ex.: parar de
+    cobrar declaração/requisito técnico, ou passar a marcar itens "não
+    aplicáveis") nunca invalidava cache já existente: quem já tinha rodado a
+    verificação antes da correção continuava vendo o resultado ANTIGO pra
+    sempre, mesmo sem ter mudado nenhum documento. Simula exatamente esse
+    cache "antigo" (formato de antes desta correção, sem a chave
+    _versao_logica) gravado direto no banco -- sem passar por
+    _anexar_verificacao_ia_documentos, que já geraria no formato novo."""
+    db = _sessao()
+    u, ed, p = _semear(db)
+    cache_antigo = json.dumps({"itens": [
+        {"exigido": "Declaração de ME/EPP", "atendido": False, "documento": "", "observacao": ""},
+    ]})   # sem "_versao_logica" -- exatamente o formato gravado antes desta correção
+    db.add(AnaliseIAExtras(usuario_id=u.id, edital_id=ed.id,
+                           verificacao_documentos_ia=cache_antigo, versao_documentos_calc=u.versao_documentos))
+    db.commit()
+
+    with patch("app.analise_edital._gerar") as mock_gerar:
+        mock_gerar.return_value = (_resposta_docs, "ok")
+        out = _anexar_verificacao_ia_documentos(_resultado_base(ed), ed, u, db, "fake-key")
+
+    assert mock_gerar.call_count == 1, "cache sem _versao_logica tem que ser tratado como inválido, não servido como está"
+    assert out["verificacao_documentos_ia"]["itens"][0]["exigido"] == "CND"   # veio do mock, não do cache antigo
+    assert "verificacao_documentos_desatualizada" not in out   # recalculou de verdade, não só marcou como desatualizado
 
 
 # ---------------------- comparação de catálogo ---------------------- #

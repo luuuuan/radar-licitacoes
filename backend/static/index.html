@@ -5033,6 +5033,42 @@ async function _obterResultadoAnaliseComPolling(id, forcar, cancelamento){
   throw new Error('Tempo esgotado esperando a análise.');
 }
 
+// Pedido do usuário: quando a disputa é por lote (não dá pra disputar 1
+// item isolado), mostrar quais lotes o catálogo do usuário cobre por
+// inteiro -- cruzamento já pronto em r.lotes_cobertura (ver
+// _anexar_cobertura_lotes em main.py, roda a cada leitura, nunca fica
+// preso no cache da análise em si).
+function _lotesCoberturaHTML(lotes){
+  if(!lotes || !lotes.length) return '';
+  const algumCoberto = lotes.some(l=>l.cobre_tudo);
+  const linhas = lotes.map(l=>{
+    const cor = l.cobre_tudo ? 'var(--forte)' : 'var(--destructive)';
+    const marca = l.cobre_tudo ? '✓' : '✗';
+    // achado do agente code-reviewer: lote sem nenhum item identificado
+    // (falha da extração, não do catálogo) caía na mesma mensagem de "seu
+    // catálogo não cobre" -- fazia o usuário procurar um problema no
+    // catálogo que não existe.
+    const status = l.cobre_tudo
+      ? 'seu catálogo cobre todos os itens deste lote'
+      : (!l.itens || !l.itens.length)
+        ? 'não foi possível identificar os itens deste lote na análise'
+        : (l.itens_faltando && l.itens_faltando.length
+            ? `faltam os itens ${l.itens_faltando.join(', ')}`
+            : 'nenhum item deste lote está confirmado no seu catálogo ainda');
+    return `<li style="margin:5px 0;font-size:13px">
+      <span style="color:${cor};font-weight:600">${marca}</span>
+      <strong>Lote ${esc(String(l.numero))}</strong>${l.descricao?` — ${esc(l.descricao)}`:''}
+      <div class="muted" style="font-size:11px;margin-left:18px">${esc(status)} (itens do lote: ${esc((l.itens||[]).join(', '))})</div>
+    </li>`;
+  }).join('');
+  return `<div style="margin:8px 0 14px">
+    <strong>Cobertura por lote (${lotes.length})</strong>
+    <p class="muted" style="font-size:11px;margin:2px 0 6px">Cruza os itens de cada lote com o que já está confirmado no seu catálogo (mesmo critério usado na Cotação).</p>
+    ${!algumCoberto?`<div style="font-size:12px;color:var(--destructive);margin-bottom:4px">Nenhum lote está totalmente coberto pelo seu catálogo ainda.</div>`:''}
+    <ul style="margin:4px 0 0;padding-left:18px">${linhas}</ul>
+  </div>`;
+}
+
 function _renderResultadoAnalise(r){
   if(r.status==='ok'){
     const flags=[];
@@ -5049,6 +5085,7 @@ function _renderResultadoAnalise(r){
     return {sucesso: true, html: `${r.objeto?`<p style="line-height:1.5;margin-top:0">${esc(r.objeto)}</p>`:''}
       ${r.analise_incompleta?`<p style="margin:6px 0;padding:8px 10px;border:1.5px solid var(--destructive);border-radius:8px;color:var(--destructive);font-size:13px">O texto do edital parece ter sido cortado antes do fim — esta análise pode não cobrir todos os documentos/exigências. Confira o edital original.</p>`:''}
       ${flags.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${flags.map(f=>`<span class="pill medio">${esc(f)}</span>`).join('')}</div>`:''}
+      ${_lotesCoberturaHTML(r.lotes_cobertura)}
       ${r.garantia_contratual?`<p style="margin:6px 0"><strong>Garantia contratual:</strong> ${esc(r.garantia_contratual)}</p>`:''}
 
       ${_paresHTML('Dados do órgão / pregão', [

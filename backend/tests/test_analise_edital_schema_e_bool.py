@@ -68,7 +68,7 @@ def test_schema_cobre_todas_as_chaves_top_level_obrigatorias():
     esperadas = {
         "objeto", "documentos_habilitacao", "requisitos_tecnicos", "dados_orgao",
         "dados_proposta", "validade_documentos_habilitacao", "prazos",
-        "exige_amostra", "exige_visita", "exclusivo_me_epp", "julgamento",
+        "exige_amostra", "exige_visita", "exclusivo_me_epp", "julgamento", "lotes",
         "garantia_contratual", "analise_incompleta", "pontos_atencao",
     }
     assert set(_RESPONSE_SCHEMA["properties"].keys()) == esperadas

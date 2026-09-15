@@ -37,7 +37,20 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 11
+VERSAO_PROMPT = 12
+
+# Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
+# embora um ajuste no prompt também conte). Achado real (agente
+# error-detective): a cache dessa verificação (AnaliseIAExtras) era
+# versionada só por Usuario.versao_documentos -- muda quando o usuário edita
+# um Documento, nunca quando ESTA FUNÇÃO muda de comportamento (ex.: parar
+# de cobrar declaração, ver _formatar_requisitos). Sem isso, quem já tinha
+# rodado a verificação antes de uma correção continuava vendo o resultado
+# ANTIGO pra sempre, até editar um documento ou clicar "Realizar nova
+# análise" -- ao contrário de Edital.analise_ia, que já era corretamente
+# versionado por VERSAO_PROMPT. Incremente ao mudar _formatar_requisitos ou
+# _PROMPT_VERIFICACAO_DOCUMENTOS.
+VERSAO_VERIFICACAO_DOCUMENTOS = 1
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -88,6 +101,10 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "exige_visita": boolean. true se exigir visita técnica/vistoria.
 - "exclusivo_me_epp": boolean. true se o edital (ou algum lote/item) for exclusivo ou tiver cota reservada para microempresa/EPP (LC 123/2006, art. 47/48).
 - "julgamento": string. A UNIDADE de adjudicação (não confundir com criterio_julgamento, que é o critério de preço): "lote" se a disputa/adjudicação é por lote, grupo ou item agrupado/global (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
+- "lotes": array de objetos. APENAS quando "julgamento" for "lote" — a composição de cada lote/grupo, pra saber quais itens precisam ser todos fornecidos juntos. Lista vazia [] se "julgamento" não for "lote", ou se não conseguir identificar a composição dos lotes com segurança (não invente agrupamento nenhum). Cada objeto:
+  - "numero": string. O identificador do lote como aparece no edital (ex.: "1", "Lote 02", "Grupo A").
+  - "itens": array de inteiros. Os números dos itens (mesma numeração usada no restante do edital) que pertencem a este lote.
+  - "descricao": string curta resumindo o conteúdo do lote (ex.: "Material de escritório — papelaria"). "" se não conseguir resumir.
 - "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
 - "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
 - "pontos_atencao": array de strings (máx. 6). Riscos ou exigências INCOMUNS que NÃO tenham campo próprio neste JSON (ex.: multa/penalidade severa, prazo de entrega atipicamente curto, exigência técnica atípica, cláusula restritiva de concorrência). NÃO repita aqui informação que já esteja em outro campo estruturado (garantia_contratual, garantia_produto, validade_dias, exige_amostra, exige_visita etc.) — a tela já mostra esses campos separadamente, duplicar não ajuda. Única exceção: se "analise_incompleta" for true, inclua aqui um aviso de que a análise pode estar incompleta por truncamento do texto.
@@ -176,13 +193,25 @@ _RESPONSE_SCHEMA = {
         # mesmo motivo do modo_disputa acima: sem "enum" (Gemini rejeita
         # valor vazio no enum, e "" é o sentinela de "não identificado").
         "julgamento": _S,
+        "lotes": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "numero": _S,
+                    "itens": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                    "descricao": _S,
+                },
+                "required": ["numero", "itens", "descricao"],
+            },
+        },
         "garantia_contratual": _S,
         "analise_incompleta": _B,
         "pontos_atencao": _L_S,
     },
     "required": ["objeto", "documentos_habilitacao", "requisitos_tecnicos", "dados_orgao",
                 "dados_proposta", "validade_documentos_habilitacao", "prazos",
-                "exige_amostra", "exige_visita", "exclusivo_me_epp", "julgamento",
+                "exige_amostra", "exige_visita", "exclusivo_me_epp", "julgamento", "lotes",
                 "garantia_contratual", "analise_incompleta", "pontos_atencao"],
 }
 
@@ -770,7 +799,7 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
 
 
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
-          response_schema: dict | None = None):
+          response_schema: dict | None = None, max_output_tokens: int = 16384):
     """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
     sobrecarregado") acontecendo com frequência mesmo depois de esgotar as
     retentativas -- ao falhar por completo num modelo com um erro que
@@ -807,8 +836,17 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         # item, e sem esse limite a resposta usa o padrão implícito do
         # modelo, que pode não ser suficiente pra um JSON desse tamanho —
         # a IA responde 200 (não é erro_ia), mas o texto vem cortado no
-        # meio e falha ao parsear (status "resposta_invalida").
-        "maxOutputTokens": 16384,
+        # meio e falha ao parsear (status "resposta_invalida"). Parametrizado
+        # (não fixo em 16384) porque analisar() agora também pede "lotes"
+        # (composição de cada lote, um array de itens que cresce com o
+        # tamanho do edital) dentro da MESMA resposta única que já cobre
+        # habilitação/prazos/declarações/etc -- um edital grande e
+        # multi-lote correria o mesmo risco de corte que já quebrou
+        # comparar_catalogo_usuario() uma vez, só que aqui um corte derruba
+        # a análise INTEIRA (não só a lista de lotes), então o teto pro
+        # chamador mais arriscado (analisar()) precisa de mais folga que o
+        # padrão -- ver call site em analisar().
+        "maxOutputTokens": max_output_tokens,
     }
     if response_schema is not None:
         generation_config["responseSchema"] = response_schema
@@ -944,8 +982,15 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 return {"status": "erro_download_pdf"}
             return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
 
+    # max_output_tokens dobrado em relação ao padrão de _gerar (16384): esta
+    # é a única chamada cujo JSON de resposta cresce com o Nº DE ITENS do
+    # edital (o "lotes" novo, ver _gerar) além de tudo mais que o prompt já
+    # pede -- e, diferente de comparar_catalogo_usuario() (que já lida com
+    # isso dividindo em lotes de 25 itens por chamada), analisar() é uma
+    # chamada única: um corte aqui derruba a análise inteira, não só uma
+    # parte dela.
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
-                     response_schema=_RESPONSE_SCHEMA)
+                     response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st, "_texto_extraido": texto, "_fonte_extraida": fonte}
     data = _parse_json(txt)
@@ -996,6 +1041,50 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 # tolerância: se a IA ainda mandar string simples (formato
                 # antigo), entra sem veredito em vez de descartar a declaração.
                 out.append({"nome": item, "modelo_orgao": None, "detalhe": ""})
+        return out
+
+    # cada lote traz os números de item que o compõem — sem isso não dá pra
+    # cruzar depois com o catálogo do usuário e saber quais lotes ele cobre
+    # por inteiro (ver _anexar_cobertura_lotes em main.py). "itens" que a IA
+    # mandar não numérico é descartado em vez de quebrar o lote inteiro --
+    # achado real (auditoria do agente debugger): int(n) sozinho ACEITA e
+    # TRUNCA silenciosamente um float (int(4.5) == 4, colidindo com um item
+    # 4 legítimo do mesmo lote) e aceita bool como inteiro (int(True) == 1,
+    # já que bool é subclasse de int em Python) -- os dois casos corrompem
+    # o lote em vez de descartar o valor ruim. Só aceita int de verdade (e
+    # bool explicitamente NÃO conta, apesar de ser subclasse de int). O
+    # response_schema força tipo no Gemini, mas o fallback Groq (ver
+    # _chamar_groq) NÃO usa response_schema -- é JSON livre por prosa, onde
+    # esse tipo de desvio pode acontecer de verdade. Deduplica preservando a
+    # ordem pra uma eventual colisão não aparecer repetida na tela.
+    def lotes(x):
+        if not isinstance(x, list):
+            return []
+        out = []
+        numeros_vistos = set()
+        for item in x:
+            if not isinstance(item, dict) or not item.get("numero"):
+                continue
+            numero = s(item.get("numero"))
+            if numero in numeros_vistos:   # lote duplicado -- mantém só a 1ª ocorrência
+                continue
+            numeros_vistos.add(numero)
+            itens_norm = []
+            itens_vistos = set()
+            for n in (item.get("itens") or []):
+                # numeração de item de edital começa em 1 -- 0/negativo é
+                # sempre lixo (nunca vai bater com nenhum item real, e
+                # deixaria o lote "sem cobertura" pra sempre por um motivo
+                # que não tem a ver com o catálogo do usuário).
+                if isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n in itens_vistos:
+                    continue
+                itens_vistos.add(n)
+                itens_norm.append(n)
+            out.append({
+                "numero": numero,
+                "itens": itens_norm,
+                "descricao": s(item.get("descricao")),
+            })
         return out
 
     def documentos_habilitacao(x):
@@ -1054,6 +1143,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         "exige_visita": b(data.get("exige_visita")),
         "exclusivo_me_epp": b(data.get("exclusivo_me_epp")),
         "julgamento": s(data.get("julgamento")),
+        "lotes": lotes(data.get("lotes")),
         "garantia_contratual": s(data.get("garantia_contratual")),
         "analise_incompleta": b(data.get("analise_incompleta")),
         "pontos_atencao": lista(data.get("pontos_atencao")),
@@ -1069,59 +1159,74 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
 # documentos_habilitacao), em vez de reanalisar o edital do zero. Ao
 # contrário do cruzamento por NOME (checklist_habilitacao.montar, sempre
 # ativo, rápido/grátis), este lê o CONTEÚDO de cada documento.
-_PROMPT_VERIFICACAO_DOCUMENTOS = """Você é um especialista em licitações públicas brasileiras. Abaixo estão os REQUISITOS/EXIGÊNCIAS de um edital e os DOCUMENTOS QUE O FORNECEDOR JÁ TEM CADASTRADOS (nome + texto extraído de cada um).
+_PROMPT_VERIFICACAO_DOCUMENTOS = """Você é um especialista em licitações públicas brasileiras. Abaixo estão os DOCUMENTOS DE HABILITAÇÃO exigidos por um edital e os DOCUMENTOS QUE O FORNECEDOR JÁ TEM CADASTRADOS (nome + texto extraído de cada um).
 
 Para CADA exigência listada, verifique se algum dos documentos cadastrados comprovadamente a atende. Responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
 - "itens": array, um item pra CADA exigência da lista abaixo (não pule nenhuma), cada um com:
   - "exigido": a exigência, copiada exatamente como está na lista.
-  - "atendido": true se algum documento cadastrado comprova isso, false caso contrário.
+  - "aplicavel": boolean. Editais costumam listar exigências ALTERNATIVAS pra tipos de empresa diferentes (ex.: um item pra "sociedade empresária ou EIRELI", outro pra "empresário individual", outro pra "sociedade simples" — só UM se aplica a cada fornecedor). false quando os documentos cadastrados já deixam claro que esta exigência é de um tipo de empresa/situação DIFERENTE da do fornecedor (ex.: exigência é de sociedade empresária, mas os documentos mostram que o fornecedor é MEI) — não é uma pendência, é uma alternativa que não se aplica. true em qualquer outro caso, inclusive quando não há informação suficiente pra saber se aplica ou não (não deduza inaplicabilidade sem uma base clara nos documentos).
+  - "atendido": true se algum documento cadastrado comprova isso, false caso contrário. Ignorado (pode ser false) quando "aplicavel" for false.
   - "documento": nome do documento cadastrado que atende (o mais relevante), ou "" se nenhum atende.
   - "observacao": string curta (só quando relevante) — ex. "documento encontrado mas sem data de emissão visível", "atestado cobre item diferente do exigido". "" se não houver nada a observar.
 
-Regras: não invente nada que não esteja nos textos. Se a lista de documentos cadastrados estiver vazia, todo item vem com atendido=false e documento="". Responda em português.
+Regras: não invente nada que não esteja nos textos. Se a lista de documentos cadastrados estiver vazia, todo item vem com atendido=false, aplicavel=true e documento="". Responda em português.
 
 OBJETO DO EDITAL: {objeto}
 
-EXIGÊNCIAS DO EDITAL:
+DOCUMENTOS DE HABILITAÇÃO EXIGIDOS:
 {requisitos}
 
 DOCUMENTOS CADASTRADOS PELO FORNECEDOR:
 {documentos}"""
 
 
-def _formatar_requisitos(requisitos_tecnicos: list, documentos_habilitacao: dict) -> str:
+def _formatar_requisitos(documentos_habilitacao: dict) -> str:
+    """Só entram aqui os 4 tipos de DOCUMENTO de habilitação (jurídica,
+    fiscal/trabalhista, técnica, econômico-financeira) -- pedido do
+    usuário: nem "declarações" nem "requisitos_tecnicos" fazem sentido
+    aqui, os dois por motivos parecidos:
+    - declarações NÃO são "certidão com validade" -- mesmo raciocínio já
+      aplicado no checklist por nome (checklist_habilitacao._item_declaracao):
+      é texto redigido/preenchido especificamente pra ESTE edital, não um
+      arquivo fixo reaproveitável. Perguntar "algum documento cadastrado já
+      atende essa declaração" não faz sentido.
+    - requisitos_tecnicos são especificação do PRODUTO/SERVIÇO ofertado
+      (ex.: "alimento para peixes com tal composição"), não documento
+      nenhum que o fornecedor precise ter cadastrado -- cruzar contra
+      "documentos cadastrados" também não faz sentido aqui (isso já é
+      coberto, de outro jeito, pela comparação de catálogo/item).
+    Sem essa exclusão, a verificação por IA marcava os dois como "não
+    atendido" (✗) mesmo quando não havia nada de errado, só porque nenhum
+    arquivo cadastrado é, por definição, aquilo que a exigência pedia."""
     linhas = []
-    for r in (requisitos_tecnicos or []):
-        linhas.append(f"- {r}")
     docs = documentos_habilitacao or {}
     for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira"):
         for d in (docs.get(categoria) or []):
             linhas.append(f"- {d}")
-    # declaracoes vem como lista de objetos {nome, modelo_orgao, detalhe}
-    # (ver documentos_habilitacao() acima), não strings soltas como as outras.
-    for d in (docs.get("declaracoes") or []):
-        nome = d.get("nome") if isinstance(d, dict) else d
-        if nome:
-            linhas.append(f"- {nome}")
     return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
 
 
-def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documentos_habilitacao: dict,
+def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
                                  documentos_usuario: list[dict], api_key: str | None = None) -> dict:
     """Cruza os documentos que o usuário já tem cadastrados (cada um com
     `nome` e `texto`, vindo de Documento.texto_extraido) contra o que este
     edital exige — verificação de CONTEÚDO, complementar ao cruzamento por
     nome que já existe (checklist_habilitacao). NÃO fica em cache: é
     específico do usuário, e ed.analise_ia é um cache compartilhado entre
-    todos que veem este edital."""
+    todos que veem este edital.
+
+    Não recebe mais requisitos_tecnicos (ver _formatar_requisitos) -- só
+    documentos_habilitacao é usado agora pra decidir se há o que checar."""
     if not ia_texto_disponivel(api_key):
         return {"status": "sem_ia"}
     if not documentos_usuario:
         return {"status": "sem_documentos"}
 
-    requisitos = _formatar_requisitos(requisitos_tecnicos, documentos_habilitacao)
-    if not (requisitos_tecnicos or (documentos_habilitacao or {})):
+    docs = documentos_habilitacao or {}
+    tem_requisito = any(docs.get(c) for c in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira"))
+    if not tem_requisito:
         return {"status": "sem_requisitos"}
+    requisitos = _formatar_requisitos(docs)
 
     # até 8 documentos, ~3000 chars cada — o mesmo teto de prompt do
     # analisar() principal (24000 chars) dividido entre vários documentos
@@ -1150,6 +1255,15 @@ def verificar_documentos_usuario(objeto: str, requisitos_tecnicos: list, documen
     itens = []
     for it in data["itens"]:
         if not isinstance(it, dict) or not it.get("exigido"):
+            continue
+        # pedido do usuário: exigência alternativa que não se aplica a este
+        # fornecedor (ex.: exigência de sociedade empresária quando os
+        # documentos cadastrados mostram que o fornecedor é MEI) não é uma
+        # pendência -- nem entra na lista, não conta em "atendidos/total"
+        # nem mostra ✗. Só pula quando a IA disse EXPLICITAMENTE false; sem
+        # essa informação (chave ausente, formato antigo de cache) trata
+        # como aplicável, igual o prompt pede.
+        if it.get("aplicavel") is False:
             continue
         itens.append({
             "exigido": str(it.get("exigido")),
