@@ -4483,6 +4483,12 @@ function _renderCabecalhoEdital(){
       <button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
       <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' Favoritado':ICN.estrelaVazia+' Favoritar'}</button>
     </div>
+    ${_paresHTML('Dados do pregão (PNCP)', [
+      ['CNPJ do órgão', e.cnpj_orgao ? mascaraDoc(e.cnpj_orgao) : ''],
+      ['Cidade/Estado', [e.municipio, e.uf].filter(Boolean).join('/')],
+      ['Plataforma', e.plataforma],
+      ['Data limite para envio de proposta', e.data_encerramento ? e.data_encerramento.split('-').reverse().join('/') : ''],
+    ])}
   </div>`;
 }
 
