@@ -1361,10 +1361,10 @@ def _inicio_hoje_utc() -> datetime:
 
 def _query_editais_filtrada(
     user: Usuario, todos_editais: bool, nivel: str | None, uf: list[str] | None,
-    plataforma: list[str] | None, status: str | None, apenas_nao_lidos: bool,
-    apenas_interessantes: bool, hoje: bool, tipo: str, valor_min: float | None,
-    valor_max: float | None, data_de: date | None, data_ate: date | None,
-    busca_item: str | None, vista: str, db: Session,
+    plataforma: list[str] | None, modalidade: list[str] | None, status: str | None,
+    apenas_nao_lidos: bool, apenas_interessantes: bool, hoje: bool, tipo: str,
+    valor_min: float | None, valor_max: float | None, data_de: date | None,
+    data_ate: date | None, busca_item: str | None, vista: str, db: Session,
 ):
     """Select(Match, Edital) com todos os filtros da tela de Editais já
     aplicados (WHERE) -- compartilhado entre GET /api/editais e GET
@@ -1412,6 +1412,8 @@ def _query_editais_filtrada(
         filtro.append(Edital.uf.in_([u.upper() for u in uf]))
     if plataforma:
         filtro.append(Edital.plataforma.in_(plataforma))
+    if modalidade:
+        filtro.append(Edital.modalidade.in_(modalidade))
     if status:
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
@@ -1482,6 +1484,7 @@ def _query_editais_filtrada(
 def listar_plataformas(
     nivel: str | None = Query(None),
     uf: list[str] | None = Query(None),
+    modalidade: list[str] | None = Query(None),
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
@@ -1518,7 +1521,7 @@ def listar_plataformas(
     que nunca deu match, já que nesse modo a listagem também mostra
     qualquer edital."""
     base, _ = _query_editais_filtrada(
-        user, todos_editais, nivel, uf, None, status, apenas_nao_lidos,
+        user, todos_editais, nivel, uf, None, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, busca_item, vista, db)
     q = (base.where(Edital.plataforma.is_not(None))
@@ -1527,11 +1530,47 @@ def listar_plataformas(
     return {"plataformas": valores}
 
 
+@app.get("/api/editais/modalidades")
+def listar_modalidades(
+    nivel: str | None = Query(None),
+    uf: list[str] | None = Query(None),
+    plataforma: list[str] | None = Query(None),
+    status: str | None = Query(None),
+    vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
+    apenas_nao_lidos: bool = Query(False),
+    apenas_interessantes: bool = Query(False),
+    hoje: bool = Query(False),
+    tipo: str = Query("todos", pattern="^(todos|produtos|servicos)$"),
+    valor_min: float | None = Query(None, ge=0),
+    valor_max: float | None = Query(None, ge=0),
+    data_de: date | None = Query(None),
+    data_ate: date | None = Query(None),
+    busca_item: str | None = Query(None),
+    todos_editais: bool = Query(False),
+    user: Usuario = Depends(_auth.get_current_user),
+    db: Session = Depends(get_session),
+):
+    """Valores distintos de Edital.modalidade já vistos na coleta (ex.:
+    "Pregão - Eletrônico", "Dispensa") -- alimenta o filtro por tipo de
+    pregão na listagem. Mesmo padrão de listar_plataformas (código-irmão
+    logo acima): aceita os mesmos filtros de GET /api/editais (exceto
+    modalidade/pagina), pra respeitar o que já está filtrado na tela."""
+    base, _ = _query_editais_filtrada(
+        user, todos_editais, nivel, uf, plataforma, None, status, apenas_nao_lidos,
+        apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
+        data_ate, busca_item, vista, db)
+    q = (base.where(Edital.modalidade.is_not(None))
+         .with_only_columns(Edital.modalidade).distinct().order_by(Edital.modalidade))
+    valores = db.execute(q).scalars().all()
+    return {"modalidades": valores}
+
+
 @app.get("/api/editais")
 def listar_editais(
     nivel: str | None = Query(None),
     uf: list[str] | None = Query(None),
     plataforma: list[str] | None = Query(None),
+    modalidade: list[str] | None = Query(None),
     status: str | None = Query(None),
     vista: str = Query("ativos", pattern="^(ativos|encerrados|todos)$"),
     apenas_nao_lidos: bool = Query(False),
@@ -1552,7 +1591,7 @@ def listar_editais(
     hoje_data = date.today()   # reusado mais abaixo no bloco de sem_match
     eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
     base, prazo_efetivo = _query_editais_filtrada(
-        user, todos_editais, nivel, uf, plataforma, status, apenas_nao_lidos,
+        user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, busca_item, vista, db)
 

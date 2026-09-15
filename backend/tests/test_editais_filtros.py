@@ -29,11 +29,12 @@ def _usuario(db):
 
 
 def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
-                      data_abertura=None, data_encerramento=None, plataforma=None, uf="SP"):
+                      data_abertura=None, data_encerramento=None, plataforma=None, uf="SP",
+                      modalidade=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf=uf, valor_estimado=valor_estimado,
                 data_abertura=data_abertura, data_encerramento=data_encerramento,
-                plataforma=plataforma)
+                plataforma=plataforma, modalidade=modalidade)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -44,11 +45,12 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
 
 
 def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP",
-                      valor_estimado=None, data_encerramento=None, plataforma=None):
+                      valor_estimado=None, data_encerramento=None, plataforma=None,
+                      modalidade=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Sem Match",
                objeto="Aquisicao", uf=uf, data_abertura=data_abertura,
                valor_estimado=valor_estimado, data_encerramento=data_encerramento,
-               plataforma=plataforma)
+               plataforma=plataforma, modalidade=modalidade)
     db.add(ed)
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
@@ -58,9 +60,9 @@ def _edital_sem_match(db, id_externo, itens=None, data_abertura=None, uf="SP",
 
 
 def _listar(db, user, **kwargs):
-    padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
-                  apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
-                  tipo="todos", valor_min=None, valor_max=None,
+    padrao = dict(nivel=None, uf=None, plataforma=None, modalidade=None, status=None,
+                  vista="ativos", apenas_nao_lidos=False, apenas_interessantes=False,
+                  hoje=False, tipo="todos", valor_min=None, valor_max=None,
                   data_de=None, data_ate=None, busca_item=None, todos_editais=False,
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
@@ -69,12 +71,22 @@ def _listar(db, user, **kwargs):
 
 def _plataformas(db, user, **kwargs):
     from app.main import listar_plataformas
-    padrao = dict(nivel=None, uf=None, status=None, vista="ativos",
+    padrao = dict(nivel=None, uf=None, modalidade=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
                   data_de=None, data_ate=None, busca_item=None, todos_editais=False)
     padrao.update(kwargs)
     return listar_plataformas(user=user, db=db, **padrao)
+
+
+def _modalidades(db, user, **kwargs):
+    from app.main import listar_modalidades
+    padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
+                  apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
+                  tipo="todos", valor_min=None, valor_max=None,
+                  data_de=None, data_ate=None, busca_item=None, todos_editais=False)
+    padrao.update(kwargs)
+    return listar_modalidades(user=user, db=db, **padrao)
 
 
 def test_valor_min_exclui_editais_abaixo_do_piso():
@@ -414,6 +426,80 @@ def test_sem_match_respeita_filtro_de_plataforma():
     assert len(r["sem_match"]) == 1
     assert r["sem_match"][0]["edital_id"] == ed_bll.id
     assert r["sem_match"][0]["plataforma"] == "BLL Compras"
+
+
+# --------- filtro por modalidade (tipo de pregão) --------- #
+
+def test_filtro_modalidade_exclui_editais_de_outra_modalidade():
+    """Pedido do usuário: filtro por tipo de pregão (ex.: Pregão -
+    Eletrônico, Dispensa) -- mesmo padrão do filtro de plataforma."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_pe = _edital_com_match(db, u, "ed-pe", modalidade="Pregão - Eletrônico")
+    _edital_com_match(db, u, "ed-disp", modalidade="Dispensa")
+
+    r = _listar(db, u, modalidade=["Pregão - Eletrônico"])
+
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed_pe.id
+    assert r["resultados"][0]["modalidade"] == "Pregão - Eletrônico"
+
+
+def test_listar_modalidades_devolve_valores_distintos_ordenados_sem_nulos():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", modalidade="Pregão - Eletrônico")
+    _edital_com_match(db, u, "ed2", modalidade="Dispensa")
+    _edital_com_match(db, u, "ed3", modalidade="Pregão - Eletrônico")   # duplicado, não repete
+    _edital_com_match(db, u, "ed4", modalidade=None)                    # sem modalidade, fica de fora
+
+    r = _modalidades(db, u, todos_editais=False)
+
+    assert r["modalidades"] == ["Dispensa", "Pregão - Eletrônico"]
+
+
+def test_listar_modalidades_respeita_filtro_de_uf():
+    """Mesmo achado real do filtro de plataforma: abrir o filtro de
+    modalidade tem que oferecer só as modalidades que aparecem nos editais
+    já filtrados por UF na tela, não o universo inteiro."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-sp", modalidade="Pregão - Eletrônico", uf="SP")
+    _edital_com_match(db, u, "ed-pr", modalidade="Dispensa", uf="PR")
+    _edital_com_match(db, u, "ed-rj", modalidade="Concorrência", uf="RJ")
+
+    r = _modalidades(db, u, uf=["SP", "PR"])
+
+    assert r["modalidades"] == ["Dispensa", "Pregão - Eletrônico"]
+
+
+def test_listar_modalidades_respeita_filtro_de_plataforma():
+    """listar_modalidades aceita `plataforma` -- filtrar por plataforma na
+    tela também restringe as modalidades oferecidas no outro filtro."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-cn", modalidade="Pregão - Eletrônico", plataforma="ComprasNet")
+    _edital_com_match(db, u, "ed-bll", modalidade="Dispensa", plataforma="BLL Compras")
+
+    r = _modalidades(db, u, plataforma=["ComprasNet"])
+
+    assert r["modalidades"] == ["Pregão - Eletrônico"]
+
+
+def test_listar_modalidades_concorda_com_listar_editais_no_mesmo_filtro():
+    """Mesmo contrato fixado pro filtro de plataforma: as duas rotas
+    (listar_editais e listar_modalidades) têm que concordar sobre quais
+    modalidades aparecem pro mesmo conjunto de filtros ativos."""
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed-sp-barato", modalidade="Pregão - Eletrônico", uf="SP", valor_estimado=500.0)
+    _edital_com_match(db, u, "ed-sp-caro", modalidade="Dispensa", uf="SP", valor_estimado=50000.0)
+    _edital_com_match(db, u, "ed-rj-caro", modalidade="Concorrência", uf="RJ", valor_estimado=50000.0)
+
+    r_modalidades = _modalidades(db, u, uf=["SP"], valor_min=10000)
+    r_editais = _listar(db, u, uf=["SP"], valor_min=10000)
+    modalidades_via_editais = {e["modalidade"] for e in r_editais["resultados"]}
+    assert modalidades_via_editais == set(r_modalidades["modalidades"]) == {"Dispensa"}
 
 
 def test_sem_match_respeita_filtro_de_uf():

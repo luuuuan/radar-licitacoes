@@ -1097,6 +1097,12 @@
           </label>
           <button type="button" class="btn ghost" id="btn-filtro-plataformas" onclick="abrirModalPlataformas()" style="width:100%;text-align:left">Todas as plataformas</button>
         </div>
+        <div class="field">
+          <label>Modalidade (tipo de pregão)
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Ex.: Pregão - Eletrônico, Dispensa, Concorrência. Só aparecem aqui modalidades já vistas em algum dos SEUS editais (ative "Todos os editais" abaixo pra também filtrar modalidades que ainda não te deram nenhuma correspondência) — e que também batem nos demais filtros já marcados aqui do lado.</span></span>
+          </label>
+          <button type="button" class="btn ghost" id="btn-filtro-modalidades" onclick="abrirModalModalidades()" style="width:100%;text-align:left">Todas as modalidades</button>
+        </div>
         <label class="chk">
           <input type="checkbox" id="f-todos-editais" onchange="loadEditais()"> Todos os editais
           <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Por padrão, só aparecem editais que o motor de compatibilidade já avaliou como correspondência com o seu catálogo. Marque aqui pra ver QUALQUER edital coletado, mesmo sem correspondência nenhuma — útil pra explorar uma plataforma específica ou conferir editais que o motor ainda não analisou. Sem correspondência automática, os editais aparecem sem pontuação/nível, mas ainda dá pra marcar status, favoritar e abrir a página normalmente.</span></span>
@@ -2565,6 +2571,7 @@ function _capturarFiltroAtual(){
     nivel: $('#f-nivel') ? $('#f-nivel').value : '',
     ufs: [...document.querySelectorAll('#f-uf-checks input:checked')].map(c=>c.value),
     plataformas: _plataformasSelecionadas,
+    modalidades: _modalidadesSelecionadas,
     status: $('#f-status') ? $('#f-status').value : '',
     tipo: $('#f-tipo') ? $('#f-tipo').value : 'todos',
     porPag: $('#f-porpag') ? $('#f-porpag').value : '20',
@@ -2606,6 +2613,8 @@ function _aplicarFiltroSalvo(){
   if($('#f-busca-item')) $('#f-busca-item').value = f.buscaItem || '';
   _plataformasSelecionadas = f.plataformas || [];
   _atualizarBotaoPlataformas();
+  _modalidadesSelecionadas = f.modalidades || [];
+  _atualizarBotaoModalidades();
 }
 
 // Pedido do usuário: em vez de uma pilha de checkboxes sempre visível na
@@ -2615,12 +2624,20 @@ function _aplicarFiltroSalvo(){
 // estado atual de "Todos os editais" na hora, sem precisar de um refresh
 // à parte quando esse checkbox muda).
 let _plataformasSelecionadas = [];
+let _modalidadesSelecionadas = [];
 
 function _atualizarBotaoPlataformas(){
   const btn = $('#btn-filtro-plataformas');
   if(!btn) return;
   const n = _plataformasSelecionadas.length;
   btn.textContent = n ? `${n} plataforma${n>1?'s':''} selecionada${n>1?'s':''}` : 'Todas as plataformas';
+}
+
+function _atualizarBotaoModalidades(){
+  const btn = $('#btn-filtro-modalidades');
+  if(!btn) return;
+  const n = _modalidadesSelecionadas.length;
+  btn.textContent = n ? `${n} modalidade${n>1?'s':''} selecionada${n>1?'s':''}` : 'Todas as modalidades';
 }
 
 // Lê o estado atual de todos os filtros do painel lateral (exceto
@@ -2692,6 +2709,7 @@ async function abrirModalPlataformas(){
   try{
     const qs = _qsFiltrosAtivos(f);
     qs.set('vista', 'ativos');   // mesmo padrão fixo de loadEditais()
+    _modalidadesSelecionadas.forEach(m=>qs.append('modalidade',m));
     const r = await api('/api/editais/plataformas?'+qs);
     if(r && Array.isArray(r.plataformas)) plataformas = r.plataformas;
     else falhouCarregar = true;
@@ -2722,12 +2740,59 @@ function _aplicarFiltroPlataformasModal(){
   loadEditais();
 }
 
+// Mesmo padrão de abrirModalPlataformas()/_aplicarFiltroPlataformasModal()
+// -- filtro por modalidade (tipo de pregão: Pregão Eletrônico, Dispensa
+// etc.), também respeitando os demais filtros já ativos na tela (incluindo
+// a plataforma selecionada, já que GET /api/editais/modalidades aceita
+// esse parâmetro).
+async function abrirModalModalidades(){
+  const f = _lerFiltrosAtivos();
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:420px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Modalidade (tipo de pregão)</h2>
+      <div id="modal-modalidades-lista" style="margin-top:12px"><p class="muted" style="font-size:12px">Carregando...</p></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost discreto" onclick="fecharModal()">Cancelar</button>
+        <button class="btn" onclick="_aplicarFiltroModalidadesModal()">Aplicar filtro</button>
+      </div>
+    </div>
+  </div>`;
+  let modalidades = [];
+  let falhouCarregar = false;
+  try{
+    const qs = _qsFiltrosAtivos(f);
+    qs.set('vista', 'ativos');
+    _plataformasSelecionadas.forEach(p=>qs.append('plataforma',p));
+    const r = await api('/api/editais/modalidades?'+qs);
+    if(r && Array.isArray(r.modalidades)) modalidades = r.modalidades;
+    else falhouCarregar = true;
+  }catch(e){ falhouCarregar = true; }
+  const lista = $('#modal-modalidades-lista');
+  if(!lista) return;   // modal fechado antes da resposta chegar
+  lista.innerHTML = falhouCarregar
+    ? '<p class="muted" style="font-size:12px">Não foi possível carregar as modalidades agora. Feche e tente de novo.</p>'
+    : modalidades.length
+      ? modalidades.map(m => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0">
+          <input type="checkbox" value="${esc(m)}"${_modalidadesSelecionadas.includes(m)?' checked':''}> ${esc(m)}</label>`).join('')
+      : '<p class="muted" style="font-size:12px">Nenhuma modalidade disponível ainda.</p>';
+}
+
+function _aplicarFiltroModalidadesModal(){
+  _modalidadesSelecionadas = [...document.querySelectorAll('#modal-modalidades-lista input:checked')].map(c=>c.value);
+  _atualizarBotaoModalidades();
+  fecharModal();
+  loadEditais();
+}
+
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
 function limparFiltros(){
   $('#f-nivel').value = '';
   document.querySelectorAll('#f-uf-checks input:checked').forEach(c=>c.checked=false);
   _plataformasSelecionadas = [];
   _atualizarBotaoPlataformas();
+  _modalidadesSelecionadas = [];
+  _atualizarBotaoModalidades();
   $('#f-tipo').value = 'todos';
   $('#f-status').value = '';
   $('#f-porpag').value = '20';
@@ -2749,9 +2814,10 @@ async function loadEditais(resetPagina=true){
   const f = _lerFiltrosAtivos();
   const {nivel, ufs, st, nl, hoje, todosEd, tipo, busca, vmin, vmax, dde, date_} = f;
   const plataformas = _plataformasSelecionadas;
+  const modalidades = _modalidadesSelecionadas;
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
-  const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || st || nl || hoje || todosEd ||
+  const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || modalidades.length || st || nl || hoje || todosEd ||
     tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
@@ -2760,6 +2826,7 @@ async function loadEditais(resetPagina=true){
   qs.set('por_pagina', porPag);
   qs.set('vista', 'ativos');
   plataformas.forEach(p=>qs.append('plataforma',p));
+  modalidades.forEach(m=>qs.append('modalidade',m));
   const r = await api('/api/editais?'+qs);
   const eds = r.resultados||[];
   const semMatch = r.sem_match||[];
