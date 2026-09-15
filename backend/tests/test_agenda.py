@@ -32,13 +32,13 @@ def _usuario(db, email="t@t.com"):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, data_abertura, valor_estimado=None):
+def _edital_com_match(db, usuario, id_externo, data_abertura, valor_estimado=None, status="novo"):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf="SP", valor_estimado=valor_estimado,
                 data_abertura=data_abertura)
     db.add(ed)
     db.commit()
-    db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.5, nivel="medio"))
+    db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.5, nivel="medio", status=status))
     db.commit()
     return ed
 
@@ -143,3 +143,71 @@ def test_sessao_expoe_data_sessao_igual_a_abertura():
     r = agenda(offset=0, user=u, db=db)
 
     assert r["sessoes"][0]["data_sessao"] == abertura.isoformat()
+
+
+# --------- ponto verde: editais marcados "vou participar" --------- #
+
+def test_dia_marca_tem_participacao_quando_status_e_vou_participar():
+    """Pedido do usuário: ponto verde no calendário pros editais que a
+    empresa vai participar -- ver o mesmo dia amarelo (tem_sessao) que já
+    existia pra qualquer edital com match abrindo na semana."""
+    db = _sessao()
+    u = _usuario(db)
+    inicio = _inicio_semana()
+    _edital_com_match(db, u, "ed1", data_abertura=inicio + datetime.timedelta(days=4),
+                      status="vou_participar")
+
+    r = agenda(offset=0, user=u, db=db)
+
+    assert r["dias"][4]["tem_participacao"] is True
+    assert r["dias"][4]["tem_sessao"] is True   # continua marcando o amarelo também
+    assert all(not d["tem_participacao"] for i, d in enumerate(r["dias"]) if i != 4)
+
+
+def test_dia_sem_edital_vou_participar_nao_marca_tem_participacao():
+    db = _sessao()
+    u = _usuario(db)
+    inicio = _inicio_semana()
+    _edital_com_match(db, u, "ed1", data_abertura=inicio + datetime.timedelta(days=1), status="novo")
+
+    r = agenda(offset=0, user=u, db=db)
+
+    assert r["dias"][1]["tem_sessao"] is True
+    assert r["dias"][1]["tem_participacao"] is False
+
+
+def test_sessao_expoe_vou_participar():
+    db = _sessao()
+    u = _usuario(db)
+    inicio = _inicio_semana()
+    ed_part = _edital_com_match(db, u, "ed-part", data_abertura=inicio + datetime.timedelta(days=1),
+                                status="vou_participar")
+    ed_novo = _edital_com_match(db, u, "ed-novo", data_abertura=inicio + datetime.timedelta(days=2),
+                                status="novo")
+
+    r = agenda(offset=0, user=u, db=db)
+
+    por_id = {s["edital_id"]: s["vou_participar"] for s in r["sessoes"]}
+    assert por_id == {ed_part.id: True, ed_novo.id: False}
+
+
+def test_dia_com_dois_editais_um_vou_participar_marca_dia_como_participacao():
+    """Achado real (agente code-reviewer): faltava cobrir o caso central do
+    pedido do usuário -- "quando for o msm edital para os dois casos, deixe
+    apenas o verde". Aqui não é o MESMO edital, são dois editais diferentes
+    no MESMO dia, um "novo" e outro "vou_participar" -- o dia tem que virar
+    verde mesmo assim, porque QUALQUER edital do dia em participação já
+    basta pra pintar o dia inteiro de verde (a prioridade é por dia, não
+    por edital)."""
+    db = _sessao()
+    u = _usuario(db)
+    inicio = _inicio_semana()
+    mesmo_dia = inicio + datetime.timedelta(days=3)
+    _edital_com_match(db, u, "ed-novo-no-dia", data_abertura=mesmo_dia, status="novo")
+    _edital_com_match(db, u, "ed-part-no-dia", data_abertura=mesmo_dia, status="vou_participar")
+
+    r = agenda(offset=0, user=u, db=db)
+
+    assert r["dias"][3]["tem_sessao"] is True
+    assert r["dias"][3]["tem_participacao"] is True
+    assert len(r["sessoes"]) == 2

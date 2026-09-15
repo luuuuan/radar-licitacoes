@@ -186,6 +186,9 @@
   .semana .n.tem::after{content:"";position:absolute;bottom:2px;left:50%;transform:translateX(-50%);
     width:4px;height:4px;border-radius:50%;background:var(--medio)}
   .semana .n.hoje.tem::after{background:#fff}
+  .semana .n.part::after{background:var(--forte)}
+  .semana .n.hoje.part::after{background:#fff}
+  .semana .n.clicavel{cursor:pointer}
 
   .sessoes{display:flex;flex-direction:column;gap:10px;margin-top:4px}
   .sessao{display:flex;gap:10px;align-items:flex-start;padding-top:10px;border-top:1px dashed var(--line);
@@ -2003,8 +2006,17 @@ function _agendaHTML(r){
   const hojeIso = _hojeIsoLocal();
   const diasLbl = ['D','S','T','Q','Q','S','S'];
   const semanaHtml = r.dias.map(d=>{
-    const cls = ['n']; if(d.data===hojeIso) cls.push('hoje'); if(d.tem_sessao) cls.push('tem');
-    return `<div class="${cls.join(' ')}">${_diaMes(d.data).dia}</div>`;
+    const cls = ['n']; if(d.data===hojeIso) cls.push('hoje');
+    // verde (participação confirmada) tem prioridade sobre o amarelo (só
+    // abertura) -- pedido do usuário: quando é o mesmo edital nos dois
+    // casos, mostrar só o verde.
+    if(d.tem_participacao) cls.push('part'); else if(d.tem_sessao) cls.push('tem');
+    const doDia = r.sessoes.filter(s=>s.data_sessao===d.data);
+    let onclick = '';
+    if(doDia.length===1) onclick = ` onclick="abrirPaginaEdital(${doDia[0].edital_id})"`;
+    else if(doDia.length>1) onclick = ` onclick="_abrirAgendaDoDia('${d.data}')"`;
+    if(onclick) cls.push('clicavel');
+    return `<div class="${cls.join(' ')}"${onclick}>${_diaMes(d.data).dia}</div>`;
   }).join('');
   const visiveis = r.sessoes.slice(0,4);
   const sessoesHtml = visiveis.length ? visiveis.map(s=>{
@@ -2038,6 +2050,31 @@ function _agendaHTML(r){
     ${r.sessoes.length?`<button class="ver-mais" type="button" onclick="abrirAgendaCompleta()">Ver agenda completa
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
     </button>`:''}`;
+}
+// clique num dia da agenda com mais de 1 edital -- modal só com os editais
+// daquele dia (dia com 1 edital só vai direto pra página do edital, sem
+// modal; ver _agendaHTML). Reaproveita _agendaAtual, sem chamada nova.
+function _abrirAgendaDoDia(dataIso){
+  if(!_agendaAtual) return;
+  const doDia = _agendaAtual.sessoes.filter(s=>s.data_sessao===dataIso);
+  const {dia,mes} = _diaMes(dataIso);
+  const linhas = doDia.map(s=>{
+    const local = [s.municipio, s.uf].filter(Boolean).join('/');
+    const meta = [s.modalidade, local].filter(Boolean).join(' · ');
+    return `<div class="sessao" onclick="fecharModal();abrirPaginaEdital(${s.edital_id})">
+      <div class="quando"><div class="dia">${dia}</div><div class="mes">${mes}</div></div>
+      <div class="info"><div class="org">${s.vou_participar?'🟢 ':''}${esc(s.orgao||'Órgão não informado')}</div>
+        <div class="meta">${esc(meta)}</div></div>
+    </div>`;
+  }).join('');
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:520px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>${dia} ${mes}</h2>
+      <p class="muted" style="font-size:12px;margin-top:4px">${doDia.length} editais com abertura de propostas neste dia</p>
+      <div class="sessoes" style="margin-top:14px;max-height:380px;overflow-y:auto">${linhas}</div>
+    </div>
+  </div>`;
 }
 // modal com a lista COMPLETA de sessões da semana em exibição (o widget
 // mostra só as 4 primeiras) — mesmo padrão de modal já usado em

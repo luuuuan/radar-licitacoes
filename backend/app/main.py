@@ -1800,7 +1800,16 @@ def marcar(edital_id: int, dados: MarcarIn,
     return {"ok": True}
 
 
-STATUS_VALIDOS = {"novo", "vou_participar", "proposta_enviada", "ganho", "perdido", "descartado"}
+# Único ponto de verdade pro status que conta como "participação
+# confirmada" -- achado do agente architect-reviewer: usado tanto no ponto
+# verde da Agenda da semana (agenda()) quanto no Calendário de compromissos
+# (compromissos()), um em Python e outro num .where() SQL, então uma
+# constante (não função) é o que dá pra reusar nos dois -- antes cada um
+# comparava == "vou_participar" direto, um jeito fácil dos dois divergirem
+# silenciosamente se o critério mudar.
+STATUS_PARTICIPACAO = "vou_participar"
+
+STATUS_VALIDOS = {"novo", STATUS_PARTICIPACAO, "proposta_enviada", "ganho", "perdido", "descartado"}
 
 
 class StatusIn(BaseModel):
@@ -3886,13 +3895,16 @@ def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
         .order_by(Edital.data_abertura)
     ).all()
     datas_com_sessao = {ed.data_abertura for ed, _m in linhas}
+    datas_com_participacao = {ed.data_abertura for ed, m in linhas if m.status == STATUS_PARTICIPACAO}
     dias = [{"data": (inicio + timedelta(days=i)).isoformat(),
-             "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao} for i in range(7)]
+             "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao,
+             "tem_participacao": (inicio + timedelta(days=i)) in datas_com_participacao} for i in range(7)]
     sessoes = [{
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
         "valor_estimado": ed.valor_estimado, "data_sessao": ed.data_abertura.isoformat(),
-    } for ed, _m in linhas]
+        "vou_participar": m.status == STATUS_PARTICIPACAO,
+    } for ed, m in linhas]
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(), "dias": dias, "sessoes": sessoes}
 
 
@@ -4044,7 +4056,7 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     ).scalars().all()
     editais = db.execute(
         select(Edital).join(Match, Match.edital_id == Edital.id)
-        .where(Match.usuario_id == user.id, Match.status == "vou_participar")
+        .where(Match.usuario_id == user.id, Match.status == STATUS_PARTICIPACAO)
         .where(Edital.data_abertura.between(inicio, fim))
     ).scalars().all()
 
