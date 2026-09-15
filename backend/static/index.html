@@ -14,6 +14,15 @@
     --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
     --destructive:#ef4444; --ring:#6D28D9; --overlay:rgba(0,0,0,.6);
     --accent-claro:#A78BFA; --accent-pale:#DDD6FE;
+    /* fundo do botão "excluir" (.btn.perigo) -- valor fixo (não muda por
+       tema) escolhido à parte de --destructive: achado do agente
+       code-reviewer, texto branco sobre --destructive no tema escuro
+       (#ef4444) dá só 3.76:1 de contraste, abaixo do 4.5:1 exigido pra
+       texto normal (passa só no limiar de "large text"/componente de UI,
+       3:1). #dc2626 dá 4.83:1 nos dois temas -- não mexe em --destructive
+       em si pra não afetar os outros ~15 usos dele (texto/borda sobre
+       fundo escuro, onde o tom mais claro já funciona bem). */
+    --perigo-bg:#dc2626;
     --font-body:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     --font-heading:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
@@ -316,10 +325,15 @@
   /* .ghost hoje É AZUL SÓLIDO (igual a .btn) de propósito — só existe pra não
      precisar tocar nos ~55 lugares que já usam essa classe no HTML. O visual
      "fundo transparente" que .ghost tinha antes agora é .discreto, aplicado
-     só nos botões que EXCLUEM ou que CANCELAM/INTERROMPEM algo em andamento
-     (ver _setBtn*Ocupado e os botões "excluir"/"Cancelar" de formulário). */
+     nos botões que CANCELAM/INTERROMPEM algo em andamento (ver
+     _setBtn*Ocupado e os botões "Cancelar" de formulário) -- botão que
+     EXCLUI usa .perigo (abaixo), pedido do usuário: fundo vermelho sólido
+     em vez de só borda, pra chamar mais atenção antes de uma ação que não
+     dá pra desfazer. */
   .btn.ghost{background:var(--accent);border:none;color:#fff}
   .btn.discreto{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn.perigo{background:var(--perigo-bg);border:none;color:#fff}
+  .btn.perigo:hover{filter:brightness(.88)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:16px;margin-bottom:12px}
@@ -1204,7 +1218,7 @@
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div id="bulk-produtos" style="display:none;gap:8px;align-items:center">
           <span id="bulk-produtos-count" class="muted" style="font-size:13px"></span>
-          <button class="btn ghost discreto" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
+          <button class="btn perigo" onclick="excluirProdutosSelecionados()">Excluir selecionados</button>
         </div>
         <input id="busca-produto" type="search" placeholder="Pesquisar produto..." style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px;min-width:200px" oninput="_filtroProdutosMudou()">
         <select id="filtro-fornecedor" onchange="_filtroProdutosMudou()" style="padding:6px 10px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:13px">
@@ -1515,7 +1529,7 @@
           <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" onchange="selecionarLogoPerfil(this)">
           <div class="muted" style="font-size:11px;margin-top:4px">Recomendado: imagem quadrada (largura = altura), a partir de 300x300px. PNG com fundo transparente fica melhor.</div>
           <div class="muted" id="pf-logo-status" style="font-size:11px;margin-top:4px"></div>
-          <button type="button" class="btn ghost discreto" id="pf-logo-remover" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="removerLogoPerfil()">Remover logo</button>
+          <button type="button" class="btn perigo" id="pf-logo-remover" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="removerLogoPerfil()">Remover logo</button>
         </div>
       </div>
       <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
@@ -3105,7 +3119,7 @@ function filtrarProdutos(){
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
-      <button class="btn ghost discreto" onclick="delProduto(${p.id})">excluir</button>
+      <button class="btn perigo" onclick="delProduto(${p.id})">excluir</button>
     </td></tr>`).join('')
     : `<tr><td colspan=6 class="muted">${(q||forn) ? 'Nenhum produto encontrado para essa busca.' : 'Nenhum produto cadastrado ainda.'}</td></tr>`;
   const pagMount = $('#pag-produtos');
@@ -3205,6 +3219,8 @@ function cancelarEdicao(){
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
 async function delProduto(id){
+  const ok = await confirmarExclusao('Excluir este produto do catálogo? Essa ação não pode ser desfeita.');
+  if(!ok) return;
   await fetch('/api/produtos/'+id,{method:'DELETE'});
   _produtosSelecionados.delete(id);
   toast('Produto excluído.', 'ok');
@@ -3332,7 +3348,7 @@ async function loadFornecedores(){
     <td>${site?`<a class="btn ghost" href="${esc(site)}" target="_blank">Site ↗</a>`:'—'}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarFornecedor(${f.id})">editar</button>
-      <button class="btn ghost discreto" onclick="delFornecedor(${f.id})">excluir</button>
+      <button class="btn perigo" onclick="delFornecedor(${f.id})">excluir</button>
     </td></tr>`;
   }).join('');
 }
@@ -3387,7 +3403,7 @@ async function delFornecedor(id){
 async function loadRegras(){
   const rs=await api('/api/regras');
   $('#lista-regras').innerHTML=rs.map(r=>`<tr><td>${esc(r.tipo)}</td><td>${esc(r.valor)}</td>
-    <td><button class="btn ghost discreto" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
+    <td><button class="btn perigo" onclick="delRegra(${r.id})">excluir</button></td></tr>`).join('')
     ||'<tr><td colspan=3 class="muted">Nenhuma regra.</td></tr>';
 }
 async function salvarRegra(){
@@ -3396,7 +3412,11 @@ async function salvarRegra(){
   await api('/api/regras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#r-valor').value=''; loadRegras();
 }
-async function delRegra(id){ await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras(); }
+async function delRegra(id){
+  const ok = await confirmarExclusao('Excluir esta regra de exclusão? Essa ação não pode ser desfeita.');
+  if(!ok) return;
+  await fetch('/api/regras/'+id,{method:'DELETE'}); loadRegras();
+}
 
 let editandoDocId = null;
 
@@ -3423,7 +3443,7 @@ async function loadDocumentos(){
         ${link?`<a class="btn ghost" href="${esc(link)}" target="_blank">abrir ↗</a>`:''}
         ${d.tem_arquivo?`<a class="btn ghost" href="/api/documentos/${d.id}/arquivo" target="_blank">baixar</a>`:''}
         <button class="btn ghost" onclick="editarDocumento(${d.id})">editar</button>
-        <button class="btn ghost discreto" onclick="delDocumento(${d.id})">excluir</button>
+        <button class="btn perigo" onclick="delDocumento(${d.id})">excluir</button>
       </td></tr>`;
   }).join('');
 }
@@ -3506,7 +3526,11 @@ function cancelarEdicaoDoc(){
   $('#btn-salvar-doc').textContent='Salvar documento';
 }
 
-async function delDocumento(id){ await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos(); }
+async function delDocumento(id){
+  const ok = await confirmarExclusao('Excluir este documento? Essa ação não pode ser desfeita.');
+  if(!ok) return;
+  await fetch('/api/documentos/'+id,{method:'DELETE'}); loadDocumentos();
+}
 
 async function mudarStatus(matchId, status){
   await api(`/api/editais/${matchId}/status`,{method:'POST',
@@ -3663,7 +3687,7 @@ function confirmarExclusao(msg, textoBotao='Excluir'){
         <p id="confirmar-msg" class="muted" style="font-size:14px;line-height:1.5"></p>
         <div class="toolbar" style="margin-top:18px;justify-content:flex-end">
           <button class="btn ghost discreto" id="confirmar-btn-cancelar">Cancelar</button>
-          <button class="btn" id="confirmar-btn-ok" style="background:var(--destructive)">Excluir</button>
+          <button class="btn perigo" id="confirmar-btn-ok">Excluir</button>
         </div>
       </div>`;
       document.body.appendChild(modal);
@@ -4135,7 +4159,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
           <button class="btn ghost" onclick="escolherProdutoIA(${it.numero})" style="padding:4px 10px;font-size:12px">${ICN.trocar} trocar produto</button>
           <button class="btn ghost" onclick="abrirDetalheItemIA(${it.numero})" style="padding:4px 10px;font-size:12px">${ICN.detalhe} detalhes</button>
           ${siteForn?`<a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="padding:4px 10px;font-size:12px">fornecedor ↗</a>`:''}
-          <button class="btn ghost discreto" onclick="_excluirComparacaoIA(${it.numero}, this)" style="padding:4px 10px;font-size:12px">excluir</button>
+          <button class="btn perigo" onclick="_excluirComparacaoIA(${it.numero}, this)" style="padding:4px 10px;font-size:12px">excluir</button>
         </div>
       </td>
     </tr>`;
@@ -4160,7 +4184,16 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
 // reabrir a aba/editar traz o item de volta. Se um dia isso precisar
 // sobreviver a reabrir a aba, o jeito é persistir no cache do backend.
 let _comparacaoCatalogoExcluidos = new Set();
-function _excluirComparacaoIA(numero, btn){
+async function _excluirComparacaoIA(numero, btn){
+  // achado real (agente debugger): sem isso, dar Voltar do navegador (troca
+  // de edital) enquanto o modal de confirmação ainda está aberto, e só
+  // confirmar depois, mexia no _comparacaoCatalogoExcluidos do edital NOVO
+  // (o Set é reiniciado a cada _renderPaginaEdital) usando um número de
+  // item que fazia sentido no edital ANTIGO -- corrompia silenciosamente a
+  // exclusão de outro edital, sem erro nenhum.
+  const idAoClicar = _paginaEditalId;
+  const ok = await confirmarExclusao('Excluir este item da lista de comparação?');
+  if(!ok || _paginaEditalId !== idAoClicar) return;
   _comparacaoCatalogoExcluidos.add(String(numero));
   const tr = btn.closest('tr');
   const wrapper = tr ? tr.closest('div[style*="overflow-x"]') : null;
@@ -5201,7 +5234,7 @@ async function _corpoCotacaoEdital(id){
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
       <td><input type="number" step="0.01" class="cot-frete-saida-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
       <td>${linkItem ? `<a href="${esc(linkItem)}" target="_blank" rel="noopener">Abrir</a>` : '<span class="muted">—</span>'}</td>
-      <td><button class="btn ghost discreto" style="padding:3px 8px;font-size:12px" onclick="_excluirItemCotacao('${it.numero}', this)">excluir</button></td>
+      <td><button class="btn perigo" style="padding:3px 8px;font-size:12px" onclick="_excluirItemCotacao('${it.numero}', this)">excluir</button></td>
     </tr>`;
   }).join('');
   return `<p class="muted" style="margin-top:0">Itens adicionados à cotação na aba "Itens / margem" — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos. Desmarcar (ou clicar em "excluir") remove o item da cotação (mesmo efeito de clicar em "remover" na aba Itens / margem).</p>
@@ -5288,7 +5321,9 @@ function _marcarSelecaoCotacao(numero, marcado){
 // de desmarcar o checkbox (_marcarSelecaoCotacao), só que também some com a
 // linha na hora e recalcula o total geral, sem reconstruir a tabela inteira
 // (o que apagaria frete de entrada/saída já digitados nas OUTRAS linhas).
-function _excluirItemCotacao(numero, btn){
+async function _excluirItemCotacao(numero, btn){
+  const ok = await confirmarExclusao('Excluir este item da cotação?');
+  if(!ok) return;
   _marcarSelecaoCotacao(numero, false);
   const tr = document.getElementById('cotacao-linha-'+numero);
   if(tr) tr.remove();
@@ -5622,7 +5657,7 @@ function renderProposta(){
       <td><input type="number" step="any" class="campo-valor" value="${it.preco_unit}" onchange="propSet(${idx},'preco_unit',this.value)" style="width:90px"></td>
       <td style="white-space:nowrap">${fmtMoeda(totItem)}</td>
       <td style="white-space:nowrap;color:${margItem<0?'var(--destructive)':'var(--forte)'}">${fmtMoeda(margItem)}</td>
-      <td><button class="btn ghost discreto" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
+      <td><button class="btn perigo" style="padding:2px 8px" onclick="propDel(${idx})">×</button></td>
     </tr>`;
   }).join('');
   const margem=tv-tc, pct=tv?(margem/tv*100):0;
@@ -5682,7 +5717,20 @@ function propAddDoEdital(numero){
   renderProposta();
   propAbrirModalAdd();  // re-render com o item recém-adicionado já fora da lista
 }
-function propDel(idx){ window._propItens.splice(idx,1); renderProposta(); }
+async function propDel(idx){
+  // achado real (agente debugger): capturar só o INDICE e usar depois do
+  // await é arriscado -- uma sincronização em andamento (ex.: acabou de
+  // marcar outro item na cotação) pode trocar window._propItens por um
+  // array novo/reordenado enquanto o modal ainda está aberto, e o índice
+  // antigo passaria a apontar pro item errado. Guarda a referência do item
+  // em si e reacha ele por identidade depois de confirmar.
+  const item = window._propItens[idx];
+  const ok = await confirmarExclusao('Excluir este item da proposta?');
+  if(!ok) return;
+  const i = window._propItens.indexOf(item);
+  if(i === -1) return;   // item já não existe mais (mudou enquanto confirmava)
+  window._propItens.splice(i,1); renderProposta();
+}
 
 // usa fetch cru (não api()) de propósito: api() nunca rejeita a promise em
 // erro HTTP (só faz r.json(), sem checar r.ok) — uma sessão expirada ou um
@@ -5872,7 +5920,9 @@ function selecionarLogoPerfil(input){
   };
   leitor.readAsDataURL(arquivo);
 }
-function removerLogoPerfil(){
+async function removerLogoPerfil(){
+  const ok = await confirmarExclusao('Remover a logo do perfil?');
+  if(!ok) return;
   _perfilLogoBase64 = '';
   $('#pf-logo').value = '';
   $('#pf-logo-preview').innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>';
