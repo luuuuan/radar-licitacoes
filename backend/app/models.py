@@ -289,6 +289,28 @@ class Match(Base):
     edital: Mapped["Edital"] = relationship(back_populates="match")
 
 
+class CotacaoPreco(Base):
+    """Preço de VENDA que o usuário está acompanhando na aba Cotação
+    (coluna "Valor unit. (venda)"), por (usuário, edital, item) -- pedido
+    do usuário: serve só pra saber até quanto pode ofertar no pregão
+    (planilha exportada), não é o valor de verdade da Proposta e não pode
+    mudar quando a Proposta muda (nem o contrário). Tabela própria, não
+    Match.detalhe: Match é reconstruído a cada POST /api/recalcular por
+    _mesclar_confirmacoes_manuais (service.py), que só preserva uma lista
+    fixa de campos (produto_id/produto/confirmado_manualmente/motivo/
+    confianca) -- um campo novo ali é apagado em silêncio no próximo
+    recálculo. Mesmo padrão de AnaliseIAExtras, abaixo."""
+    __tablename__ = "cotacoes_precos"
+    __table_args__ = (UniqueConstraint("usuario_id", "edital_id", "numero_item",
+                                        name="uq_cotacao_preco_user_edital_item"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
+    numero_item: Mapped[int] = mapped_column(Integer)
+    valor: Mapped[float] = mapped_column(Float)
+
+
 class AnaliseIAExtras(Base):
     """Cache por (edital, usuário) das duas checagens extras da Análise por
     IA — comparação de catálogo e verificação de documentos de habilitação —

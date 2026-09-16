@@ -9,11 +9,11 @@ import asyncio
 import io
 
 import openpyxl
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.main import cotacao_edital, cotacao_fornecedor_edital, exportar_produtos
-from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto, Proposta
+from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto, Proposta, CotacaoPreco
 
 
 def _sessao():
@@ -168,10 +168,50 @@ def test_cotacao_xlsx_nao_pode_ficar_em_cache_no_navegador():
     assert response.headers.get("cache-control") == "no-store"
 
 
-def test_cotacao_xlsx_usa_valor_da_proposta_quando_existe():
+def test_cotacao_xlsx_usa_preco_cotacao_proprio_quando_existe():
     """Pedido do usuário: VALOR UNI. na cotação reflete o preço que o
-    usuário vai cobrar (editável, mesmo campo preco_unit da Proposta), não
-    mais o valor de referência do órgão congelado."""
+    usuário está ACOMPANHANDO na Cotação (tabela própria CotacaoPreco,
+    independente da Proposta de verdade -- ver _preco_cotacao_por_numero),
+    não o valor de referência do órgão congelado nem o preco_unit da
+    Proposta."""
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)   # item numero=1, valor_unitario (órgão) = 50.0
+    db.add(CotacaoPreco(usuario_id=u.id, edital_id=ed.id, numero_item=1, valor=80.0))
+    db.commit()
+
+    response = cotacao_edital(ed.id, itens=None, fretes=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+    assert ws["D6"].value == 80.0
+
+
+def test_cotacao_xlsx_preco_cotacao_proprio_tem_prioridade_sobre_a_proposta():
+    """Achado do pedido do usuário: os dois valores agora são
+    independentes -- se AMBOS existirem (usuário editou os dois em algum
+    momento), o valor de acompanhamento da Cotação (tabela própria) é quem
+    vale na planilha de cotação, não o preco_unit da Proposta de verdade."""
+    db = _sessao()
+    u = _usuario(db)
+    ed, prod = _edital_com_item_e_match(db, u)
+    db.add(CotacaoPreco(usuario_id=u.id, edital_id=ed.id, numero_item=1, valor=80.0))
+    db.add(Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Papel A4 75g", "quantidade": 10,
+         "custo_unit": 0, "preco_unit": 999.0},
+    ]))
+    db.commit()
+
+    response = cotacao_edital(ed.id, itens=None, fretes=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+    assert ws["D6"].value == 80.0
+
+
+def test_cotacao_xlsx_sem_preco_cotacao_cai_pro_preco_unit_da_proposta_por_continuidade():
+    """Continuidade pra quem já usava o app antes desta mudança: item sem
+    preco_cotacao definido (nunca editado na Cotação DEPOIS da mudança)
+    ainda cai pro preco_unit já salvo na Proposta, em vez de voltar vazio
+    do nada -- ver docstring de _preco_cotacao_por_numero."""
     db = _sessao()
     u = _usuario(db)
     ed, prod = _edital_com_item_e_match(db, u)   # item numero=1, valor_unitario (órgão) = 50.0

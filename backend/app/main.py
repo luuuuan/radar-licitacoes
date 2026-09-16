@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco
 from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
 
@@ -2053,6 +2053,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         produtos = {p.id: p for p in db.execute(
             select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
 
+    precos_cotacao = _preco_cotacao_por_numero(edital_id, user, db)
     itens = []
     for it in ed.itens:
         d = itens_match.get(it.numero) or {}
@@ -2099,6 +2100,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             **margem_dados,
             "produto": _produto_json(prod) if (prod and compativel) else None,
             "sugestoes": sugestoes,
+            "preco_cotacao": precos_cotacao.get(it.numero),
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
 
@@ -2210,6 +2212,43 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
         item["candidatos"] = [{"produto_id": pid} for pid in body.candidatos if pid in ids_validos]
     itens[idx] = item
     match.detalhe = {"itens": itens}
+    db.commit()
+    return {"ok": True}
+
+
+class PrecoCotacaoIn(BaseModel):
+    valor: float
+
+
+@app.post("/api/editais/{edital_id}/itens/{numero}/preco-cotacao")
+def definir_preco_cotacao(edital_id: int, numero: int, body: PrecoCotacaoIn,
+                         user: Usuario = Depends(_auth.get_current_user),
+                         db: Session = Depends(get_session)):
+    """Preço de venda que o usuário está ACOMPANHANDO na aba Cotação
+    ("até quanto posso ofertar" nesse item, enquanto o pregão ainda não
+    fechou) -- pedido do usuário: precisa ficar independente da Proposta
+    de verdade (endpoint dela, POST /api/editais/{id}/proposta, não é mais
+    tocado por aqui). Upsert em tabela própria (CotacaoPreco, mesmo padrão
+    de _upsert_cache_extras pra AnaliseIAExtras) -- NÃO em Match.detalhe
+    (ver _preco_cotacao_por_numero pro motivo: Match é reconstruído a cada
+    recálculo e apagaria isso em silêncio)."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    existe = db.execute(select(ItemEdital.id).where(
+        ItemEdital.edital_id == edital_id, ItemEdital.numero == numero)).scalar_one_or_none()
+    if existe is None:
+        raise HTTPException(404, "Item não encontrado neste edital")
+
+    cp = db.execute(select(CotacaoPreco)
+                    .where(CotacaoPreco.edital_id == edital_id)
+                    .where(CotacaoPreco.usuario_id == user.id)
+                    .where(CotacaoPreco.numero_item == numero)).scalar_one_or_none()
+    if cp:
+        cp.valor = body.valor
+    else:
+        db.add(CotacaoPreco(usuario_id=user.id, edital_id=edital_id,
+                            numero_item=numero, valor=body.valor))
     db.commit()
     return {"ok": True}
 
@@ -3507,6 +3546,54 @@ def _produtos_confirmados_por_numero(edital_id: int, user: Usuario, db: Session)
     return {numero: produtos[pid] for numero, pid in mapa_produto.items() if pid in produtos}
 
 
+def _preco_cotacao_por_numero(edital_id: int, user: Usuario, db: Session) -> dict[int, float]:
+    """Preço de VENDA que o usuário está acompanhando na Cotação (coluna
+    "Valor unit. (venda)") -- pedido do usuário: esse valor serve pra
+    acompanhar o pregão ("até quanto posso ofertar") e não deve mais mudar
+    nem ser mudado pela Proposta de verdade, então mora em tabela própria
+    (CotacaoPreco), NÃO em Match.detalhe -- achado real (auditoria do
+    agente architect-reviewer): Match.detalhe é reconstruído a cada POST
+    /api/recalcular por _mesclar_confirmacoes_manuais (service.py), que só
+    preserva uma lista fixa de campos (produto_id/produto/
+    confirmado_manualmente/motivo/confianca); um preco_cotacao guardado lá
+    seria apagado em silêncio no próximo recálculo.
+
+    Fallback de continuidade: item que nunca teve preco_cotacao definido
+    (usuário que só usou a versão antiga, onde esse valor vinha só da
+    Proposta) cai pro preco_unit da Proposta já salva, se existir. Achado
+    real (auditoria do agente error-detective): um fallback recalculado a
+    cada chamada continuaria sendo uma cópia AO VIVO do preço da Proposta
+    pra sempre (o item nunca ganha valor próprio), não só uma ponte de
+    migração -- então o fallback grava (write-through) o valor herdado na
+    tabela própria assim que é usado, virando explícito e desacoplado dali
+    em diante, igual a qualquer valor definido manualmente."""
+    preco_cotacao: dict[int, float] = {}
+    for row in db.execute(select(CotacaoPreco.numero_item, CotacaoPreco.valor)
+                          .where(CotacaoPreco.edital_id == edital_id)
+                          .where(CotacaoPreco.usuario_id == user.id)):
+        preco_cotacao[row.numero_item] = row.valor
+
+    prop_atual = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
+                            .where(Proposta.usuario_id == user.id)).scalars().first()
+    if prop_atual and prop_atual.itens:
+        novos = False
+        for i in prop_atual.itens:
+            numero = i.get("numero")
+            try:
+                numero = int(numero) if numero is not None else None
+            except (TypeError, ValueError):
+                numero = None
+            if numero is not None and numero not in preco_cotacao and i.get("preco_unit") is not None:
+                valor = i["preco_unit"]
+                preco_cotacao[numero] = valor
+                db.add(CotacaoPreco(usuario_id=user.id, edital_id=edital_id,
+                                    numero_item=numero, valor=valor))
+                novos = True
+        if novos:
+            db.commit()
+    return preco_cotacao
+
+
 def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Session) -> list[tuple[ItemEdital, Produto]]:
     """Itens do edital compatíveis com o catálogo do usuário, na ordem do
     edital. `itens`: números separados por vírgula pra restringir aos que o
@@ -3588,24 +3675,11 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         except ValueError:
             analise = None
 
-    # Pedido do usuário: VALOR UNI. reflete o preço que o usuário realmente
-    # vai cobrar (editável na aba Cotação, mesmo campo que a Proposta usa —
-    # preco_unit), não mais o valor de referência do órgão (ItemEdital.
-    # valor_unitario) congelado. Item que nunca foi tocado nem na Cotação
-    # nem na Proposta (sem entrada em Proposta.itens) cai pro valor do
-    # órgão, igual sempre foi.
-    precos_venda: dict[int, float] = {}
-    prop_atual = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
-                            .where(Proposta.usuario_id == user.id)).scalars().first()
-    if prop_atual and prop_atual.itens:
-        for i in prop_atual.itens:
-            numero = i.get("numero")
-            try:
-                numero = int(numero) if numero is not None else None
-            except (TypeError, ValueError):
-                numero = None
-            if numero is not None and i.get("preco_unit") is not None:
-                precos_venda[numero] = i["preco_unit"]
+    # Pedido do usuário: VALOR UNI. reflete o preço de venda que o usuário
+    # está ACOMPANHANDO na Cotação (independente da Proposta de verdade —
+    # ver _preco_cotacao_por_numero). Item que nunca teve esse valor
+    # definido cai pro valor do órgão, igual sempre foi.
+    precos_venda = _preco_cotacao_por_numero(edital_id, user, db)
 
     wb = openpyxl.Workbook()
     ws = wb.active

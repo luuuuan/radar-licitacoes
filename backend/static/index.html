@@ -5197,20 +5197,13 @@ async function _corpoCotacaoEdital(id){
   if(!selecionados.length){
     return '<p class="muted" style="margin-top:0">Nenhum item foi adicionado à cotação ainda. Vá na aba "Itens / margem" e clique em "Adicionar na cotação" nos itens que quiser incluir na planilha.</p>';
   }
-  // Valor unit. (venda) -- mesmo dado que a aba Proposta usa (preco_unit),
-  // buscado aqui só pra pré-preencher o campo editável desta tabela. Editar
-  // aqui ou na Proposta escreve no MESMO lugar (_atualizarPrecoCotacao),
-  // então as duas abas ficam sempre iguais até o usuário divergir uma delas
-  // de propósito.
-  let precosVenda = {};
-  if(_propostaCarregadaPara === id){
-    (window._propItens||[]).forEach(it => { precosVenda[it.numero] = it.preco_unit; });
-  } else {
-    try{
-      const p = await api(`/api/editais/${id}/proposta`);
-      (p.itens||[]).forEach(it => { precosVenda[it.numero] = it.preco_unit; });
-    }catch(e){}
-  }
+  // Valor unit. (venda) -- pedido do usuário: serve só pra ACOMPANHAR o
+  // pregão (planilha exportada, "até quanto posso ofertar"), independente
+  // da Proposta de verdade. Vem de it.preco_cotacao (já incluído no
+  // detalhe do edital, ver _preco_cotacao_por_numero no backend) -- não
+  // precisa mais buscar a Proposta só pra isso.
+  const precosVenda = {};
+  itens.forEach(it => { if(it.preco_cotacao!=null) precosVenda[it.numero] = it.preco_cotacao; });
   const analisado = !!(d.edital && d.edital.analisado);
   const tituloEntrada = 'Quanto custa trazer ESTE item do fornecedor até você (valor total pra a quantidade toda desse item, não por unidade).';
   const tituloSaida = 'Quanto custa entregar ESTE item no órgão (valor total pra a quantidade toda desse item, não por unidade).';
@@ -5230,7 +5223,7 @@ async function _corpoCotacaoEdital(id){
       <td style="white-space:nowrap">${esc(it.quantidade??'—')}</td>
       <td style="white-space:nowrap" class="muted">${esc(it.unidade_medida||'—')}</td>
       <td style="white-space:nowrap">${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}</td>
-      <td><input type="number" step="0.01" class="cot-valor-venda-item campo-valor" data-numero="${it.numero}" style="width:100px" value="${precosVenda[it.numero]!=null?precosVenda[it.numero]:(it.valor_orgao??'')}" onchange="_atualizarPrecoCotacao('${it.numero}',this.value)" title="Valor que você vai cobrar por unidade -- mesmo campo usado na aba Proposta, editar aqui atualiza lá também."></td>
+      <td><input type="number" step="0.01" class="cot-valor-venda-item campo-valor" data-numero="${it.numero}" style="width:100px" value="${precosVenda[it.numero]!=null?precosVenda[it.numero]:(it.valor_orgao??'')}" onchange="_atualizarPrecoCotacao('${it.numero}',this.value)" title="Valor pra você acompanhar o pregão (até quanto dá pra ofertar) -- independente do valor que você define na aba Proposta."></td>
       <td style="white-space:nowrap;font-weight:600">${totalItem!=null?fmtMoeda(totalItem):'—'}</td>
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
@@ -5244,7 +5237,7 @@ async function _corpoCotacaoEdital(id){
       <thead><tr>
         <th><input type="checkbox" id="chk-cotacao-todos" checked onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
         <th>Item</th><th>Descrição</th><th>Qtd. pedida</th><th>Unidade</th><th>Valor unit. (órgão)</th>
-        <th>Valor unit. (venda) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">O que você vai cobrar por unidade -- mesmo valor da aba Proposta, editar aqui ou lá atualiza os dois.</span></span></th>
+        <th>Valor unit. (venda) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Pra você acompanhar o pregão -- até quanto dá pra ofertar. Independente do valor definido na aba Proposta (editar um não muda o outro).</span></span></th>
         <th>Total (órgão) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Quantidade pedida × valor unitário do órgão para este item.</span></span></th>
         <th>Produto do catálogo</th>
         <th>Frete entrada (R$) <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Fornecedor → você, valor total pra esse item (pode ser de um fornecedor diferente dos outros itens). Fica em branco = sem custo de frete de entrada.</span></span></th>
@@ -5398,36 +5391,31 @@ async function _sincronizarItemNaProposta(numero){
   }catch(e){}
 }
 
-// Pedido do usuário: editar o "Valor unit. (venda)" na aba Cotação escreve
-// no MESMO campo preco_unit da Proposta (não é um valor paralelo) -- o
-// valor unitário da proposta começa sempre igual ao da cotação porque, no
-// fundo, é o mesmo dado; cada aba continua podendo editar depois (a
-// própria Proposta mantém seu campo editável de sempre).
+// Pedido do usuário: "Valor unit. (venda)" na aba Cotação é só pra
+// ACOMPANHAR o pregão (planilha exportada, "até quanto posso ofertar") --
+// não deve mudar nem ser mudado pelo valor de verdade da Proposta. Fica
+// em tabela própria no backend (ver _preco_cotacao_por_numero), nunca mais
+// toca em Proposta.itens/preco_unit.
 async function _atualizarPrecoCotacao(numero, valorStr){
   const valor = parseFloat(valorStr) || 0;
   const id = _paginaEditalId;
   try{
-    let itens, observacoes;
-    if(_propostaCarregadaPara === id){
-      itens = window._propItens || [];
-      observacoes = _propObsAtual;
-    } else {
-      const p = await api(`/api/editais/${id}/proposta`);
-      itens = p.existe ? (p.itens || []) : [];
-      observacoes = p.observacoes || '';
-    }
-    const idx = itens.findIndex(i => String(i.numero) === String(numero));
-    if(idx === -1) return;   // item ainda não sincronizado na proposta -- não deveria acontecer
-    itens = itens.map((it,i) => i===idx ? {...it, preco_unit: valor} : it);
-    const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
+    const r = await fetch(`/api/editais/${id}/itens/${numero}/preco-cotacao`, {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({itens, observacoes})});
-    if(!r.ok) return;
-    if(_propostaCarregadaPara === id){
-      window._propItens = itens;
-      if(_abaEditalAtual==='proposta') renderProposta();
+      body: JSON.stringify({valor})});
+    // achado real (agente debugger): sem checar se o usuário já trocou de
+    // edital enquanto o POST estava em voo, esse callback carimbava o
+    // preço digitado no edital ANTIGO em cima de um item de mesmo número
+    // no edital NOVO (a numeração de item do PNCP reinicia a cada edital).
+    if(_paginaEditalId !== id) return;
+    if(!r.ok){ toast('Não foi possível salvar esse valor agora.', 'erro'); return; }
+    if(_paginaEditalDetalhe && _paginaEditalDetalhe.itens){
+      const it = _paginaEditalDetalhe.itens.find(i => String(i.numero) === String(numero));
+      if(it) it.preco_cotacao = valor;
     }
-  }catch(e){}
+  }catch(e){
+    if(_paginaEditalId === id) toast('Não foi possível salvar esse valor agora.', 'erro');
+  }
 }
 
 // Cor do botão "Adicionar na cotação" quando o item já foi adicionado —
@@ -5580,10 +5568,14 @@ async function _montarPropostaEdital(id, ativo){
   // (p.existe) continua vindo do backend do jeito que está, sem filtro.
   const d = _paginaEditalDetalhe;
   const itensDetalhe = (d && d.itens) || [];
+  // preco_unit inicial: sugestão a partir do que já vinha sendo acompanhado
+  // na Cotação (preco_cotacao), com o valor do órgão como último recurso --
+  // é uma CÓPIA de ponto de partida, não um vínculo (a partir daqui, editar
+  // a Cotação não muda mais este valor, e vice-versa).
   const itensIniciais = p.existe ? p.itens : itensDetalhe
     .filter(it => it.compativel && _cotacaoSelecionados.has(String(it.numero)))
     .map(it => ({numero: it.numero, descricao: it.descricao || '', quantidade: it.quantidade || 0,
-                 custo_unit: 0, preco_unit: it.valor_orgao || 0}));
+                 custo_unit: 0, preco_unit: (it.preco_cotacao ?? it.valor_orgao) || 0}));
   window._propItens = (itensIniciais||[]).map(i=>({
     numero: i.numero, descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
