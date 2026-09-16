@@ -255,7 +255,17 @@ def gerar_pdf_proposta(remetente: dict, edital_info: dict, payload: dict) -> byt
     # continuar sendo a coluna dominante mesmo com as outras 8 ao redor
     # (fabricante/marca/modelo/UND são valores curtos de catálogo, não
     # precisam de tanto espaço quanto ela).
-    with pdf.table(linhas, col_widths=(8, 48, 14, 9, 17, 19, 19, 15, 15),
+    # Achado real (usuário mandou print): "Valor total" e "Modelo" estavam
+    # estreitas demais -- "R$ 3.619,00" quebrava em 2 linhas e um modelo tipo
+    # "76x76mm cubo rosa neon" quebrava NO MEIO da palavra ("76x76m"/"m").
+    # Larguras abaixo vêm de medir com pdf.get_string_width (cabeçalho em
+    # negrito -- é mais largo que o corpo, e "Fabricante"/"Valor unit."/
+    # "Valor total" no cabeçalho quase não cabiam nas larguras antigas) e
+    # o pior caso real de conteúdo, com folga (mínimo pra não quebrar =
+    # texto + 2× padding), puxando espaço de Nº/UND/Qtd/Fabricante (curtos por natureza:
+    # número de item, sigla de unidade, quantidade, marca) -- Descrição perde
+    # pouquíssimo espaço (continua sendo, de longe, a coluna mais larga).
+    with pdf.table(linhas, col_widths=(9, 46, 13, 12, 22, 22, 21, 16, 19),
                    text_align=("CENTER", "LEFT", "CENTER", "CENTER", "RIGHT", "RIGHT", "LEFT", "LEFT", "LEFT"),
                    headings_style=FontFace(emphasis="BOLD", fill_color=(240, 242, 245)),
                    line_height=6, padding=1.5):
