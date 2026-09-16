@@ -2108,7 +2108,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "id": ed.id, "orgao": ed.orgao, "cnpj_orgao": ed.cnpj_orgao, "objeto": ed.objeto,
             "modalidade": ed.modalidade, "uf": ed.uf, "municipio": ed.municipio,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte, "link": ed.link,
-            "plataforma": ed.plataforma,
+            "plataforma": ed.plataforma, "link_sistema_origem": ed.link_sistema_origem,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
             "dias_restantes": dias,

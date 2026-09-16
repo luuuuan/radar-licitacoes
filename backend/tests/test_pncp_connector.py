@@ -17,7 +17,7 @@ fake com uma fila de respostas. Rode com:  cd backend && pytest
 """
 from datetime import date
 
-from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link, MODALIDADE_NOME
+from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link, _link_valido, MODALIDADE_NOME
 
 
 class _RespostaFake:
@@ -319,6 +319,43 @@ def test_mapear_edital_sem_link_sistema_origem_plataforma_none():
     c, _ = _conector([])
     ec = c._mapear_edital(_reg_pncp(link_sistema_origem=None), modalidade=6)
     assert ec.plataforma is None
+
+
+# --------- _link_valido / link_sistema_origem no _mapear_edital --------- #
+# Pedido do usuário: abrir direto na página do pregão na plataforma externa
+# (ComprasNet, BLL, etc.), sem precisar buscar manualmente -- linkSistemaOrigem
+# (campo da API do PNCP) já é essa URL específica do processo, só precisava
+# ser guardada (antes só usávamos ela pra extrair o NOME da plataforma).
+
+def test_mapear_edital_preenche_link_sistema_origem():
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(link_sistema_origem="https://bll.org.br/pregao/123"), modalidade=6)
+    assert ec.link_sistema_origem == "https://bll.org.br/pregao/123"
+
+
+def test_mapear_edital_sem_link_sistema_origem_fica_none():
+    c, _ = _conector([])
+    ec = c._mapear_edital(_reg_pncp(link_sistema_origem=None), modalidade=6)
+    assert ec.link_sistema_origem is None
+
+
+def test_link_valido_aceita_http_e_https():
+    assert _link_valido("http://x.com/a") == "http://x.com/a"
+    assert _link_valido("https://x.com/a") == "https://x.com/a"
+
+
+def test_link_valido_rejeita_esquema_perigoso():
+    assert _link_valido("javascript:alert(1)") is None
+    assert _link_valido("data:text/html,x") is None
+
+
+def test_link_valido_none_e_vazio():
+    assert _link_valido(None) is None
+    assert _link_valido("") is None
+
+
+def test_link_valido_url_invalida_nao_quebra():
+    assert _link_valido("nao e uma url") is None or isinstance(_link_valido("nao e uma url"), str)
 
 
 # --------- modalidade: fallback tem que bater com o valor real do PNCP --------- #

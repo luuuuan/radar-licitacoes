@@ -148,6 +148,7 @@ def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
         existe.data_encerramento = ec.data_encerramento or existe.data_encerramento
         existe.link = ec.link or existe.link
         existe.plataforma = ec.plataforma or existe.plataforma
+        existe.link_sistema_origem = ec.link_sistema_origem or existe.link_sistema_origem
         # só faz backfill dos itens se ainda não tem NENHUM -- não tenta
         # mesclar/atualizar item a item (arriscaria descasar confirmações
         # manuais do usuário já ligadas ao índice de um item existente).
@@ -167,7 +168,7 @@ def _persistir_edital(db: Session, ec: EditalColetado) -> Edital | None:
         uf=ec.uf, municipio=ec.municipio, valor_estimado=ec.valor_estimado,
         data_publicacao=ec.data_publicacao, data_abertura=ec.data_abertura,
         data_encerramento=ec.data_encerramento, link=ec.link,
-        plataforma=ec.plataforma, raw=ec.raw,
+        plataforma=ec.plataforma, link_sistema_origem=ec.link_sistema_origem, raw=ec.raw,
     )
     for it in ec.itens:
         ed.itens.append(ItemEdital(

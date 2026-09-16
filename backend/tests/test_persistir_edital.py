@@ -134,6 +134,43 @@ def test_edital_novo_grava_plataforma():
     assert ed.plataforma == "BLL Compras"
 
 
+def test_edital_novo_grava_link_sistema_origem():
+    """Pedido do usuário: abrir direto na página do pregão na plataforma
+    externa (ComprasNet, BLL, etc.) -- mesmo padrão de persistência de
+    `plataforma` (nome do sistema), mas guardando a URL específica do
+    processo."""
+    db = _sessao()
+    _persistir_edital(db, _ec(link_sistema_origem="https://bll.org.br/pregao/123"))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.link_sistema_origem == "https://bll.org.br/pregao/123"
+
+
+def test_edital_existente_sem_link_sistema_origem_e_completado_na_proxima_coleta():
+    db = _sessao()
+    _persistir_edital(db, _ec(link_sistema_origem=None))
+    db.commit()
+
+    _persistir_edital(db, _ec(link_sistema_origem="https://comprasnet.gov.br/pregao/1"))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.link_sistema_origem == "https://comprasnet.gov.br/pregao/1"
+
+
+def test_edital_existente_com_link_sistema_origem_nao_e_apagado_quando_coleta_nova_vem_sem():
+    db = _sessao()
+    _persistir_edital(db, _ec(link_sistema_origem="https://bll.org.br/pregao/123"))
+    db.commit()
+
+    _persistir_edital(db, _ec(link_sistema_origem=None))
+    db.commit()
+
+    ed = db.query(Edital).filter_by(id_externo="e1").one()
+    assert ed.link_sistema_origem == "https://bll.org.br/pregao/123"
+
+
 def test_edital_existente_sem_plataforma_e_completado_na_proxima_coleta():
     """Achado real (pedido do usuário: filtro por plataforma): a 1ª coleta de
     um edital ainda ativo pode não ter conseguido reconhecer a plataforma

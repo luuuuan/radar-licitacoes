@@ -166,6 +166,11 @@ class Edital(Base):
     # edital coletado, direto da API estruturada -- é o que alimenta o
     # filtro por plataforma na listagem.
     plataforma: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # URL crua (linkSistemaOrigem da API do PNCP) pra página do PRÓPRIO
+    # pregão na plataforma externa -- não é só o domínio (isso é
+    # `plataforma`, acima), é o link específico daquele processo, pra abrir
+    # direto sem precisar buscar manualmente dentro do site da plataforma.
+    link_sistema_origem: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON da análise (cache)
     analise_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

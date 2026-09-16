@@ -116,6 +116,19 @@ def _plataforma_de_link(link_sistema_origem: str | None) -> str | None:
     return _NOMES_PLATAFORMA.get(host, host)
 
 
+def _link_valido(link: str | None) -> str | None:
+    """Só aceita http/https -- linkSistemaOrigem vira href clicável no
+    front, então um esquema estranho (javascript:, data:, etc.) não pode
+    passar disso pra lá, mesmo vindo de uma API oficial."""
+    if not link:
+        return None
+    try:
+        esquema = urlparse(link).scheme.lower()
+    except ValueError:
+        return None
+    return link if esquema in ("http", "https") else None
+
+
 class PNCPConnector(BaseConnector):
     nome = "PNCP"
 
@@ -326,6 +339,7 @@ class PNCPConnector(BaseConnector):
             data_encerramento=_parse_data(reg.get("dataEncerramentoProposta")),
             link=self._montar_link(reg),
             plataforma=_plataforma_de_link(reg.get("linkSistemaOrigem")),
+            link_sistema_origem=_link_valido(reg.get("linkSistemaOrigem")),
             categoria_pncp=str(reg.get("codigoCategoriaProcesso") or reg.get("categoriaProcesso") or ""),
             # NÃO guardamos o JSON inteiro do PNCP (inflaria o banco com milhares
             # de editais). Só uma referência temporária para buscar os itens.

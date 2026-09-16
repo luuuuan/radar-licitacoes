@@ -4495,6 +4495,7 @@ function _renderCabecalhoEdital(){
   // pedido do usuário pra chamar mais atenção na página do edital.
   const prazo = encerrado ? '' : (e.dias_restantes!=null?fmtPrazoEdital(e.dias_restantes):'prazo n/d');
   const linkPortal = linkSeguro(e.link);
+  const linkPlataforma = linkSeguro(e.link_sistema_origem);
   $('#edital-cabecalho').innerHTML = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
       <div>
@@ -4513,6 +4514,7 @@ function _renderCabecalhoEdital(){
     <p style="line-height:1.45;margin:12px 0">${esc(e.objeto||'')}</p>
     <div class="toolbar">
       ${linkPortal?`<a class="btn ghost" href="${esc(linkPortal)}" target="_blank">Abrir edital no portal ${ICN.externo}</a>`:''}
+      ${linkPlataforma?`<a class="btn ghost" href="${esc(linkPlataforma)}" target="_blank">Abrir no ${esc(e.plataforma||'sistema da disputa')} ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="_marcarPaginaEdital('lido',${!e.lido})">${e.lido?ICN.check+' lido':'marcar lido'}</button>
       <button class="btn ghost" onclick="_marcarPaginaEdital('interessante',${!e.interessante})">${e.interessante?ICN.estrela+' Favoritado':ICN.estrelaVazia+' Favoritar'}</button>
     </div>
