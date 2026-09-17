@@ -646,7 +646,7 @@ _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Teto de quanto vale a pena ESPERAR um 429 de rate limit (tokens/requisições
 # por minuto) passar antes de desistir -- um pouco acima da janela de 60s que
-# a Groq usa (achado real, ver _GROQ_LIMITE_PROMPT_CHARS). Só espera quando o
+# a Groq usa (achado real, ver _GROQ_LIMITE_PROMPT_BYTES). Só espera quando o
 # PRÓPRIO provedor informa quanto falta (Retry-After ou "please try again in
 # Xs" no corpo, formato usado pela Groq) -- nunca um valor chutado: sem essa
 # informação não dá pra saber se esperar vai adiantar alguma coisa (pode ser
@@ -755,22 +755,47 @@ def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas
 # tokens/minuto, POR REQUISIÇÃO, não uma cota que enche e esvazia. Trocado
 # pro groq/compound-mini (ver comentário em settings.GROQ_MODELO_TEXTO em
 # config.py): 70000 tokens/minuto, confirmado ao vivo via header
-# x-ratelimit-limit-tokens -- ~8.75x mais espaço. Ainda assim mantém um
-# teto (bem maior que antes): sem ele, um 429/413 na Groq com o MESMO
-# tamanho bateria de novo pra sempre. ~1.3 chars/token foi a proporção
-# observada num teste real com texto repetitivo (pior caso, mais denso que
-# o ~3 chars/token de texto de PDF comum) -- usa esse valor pra estimar com
-# folga. Corta só a ponta do TEXTO DO EDITAL (fica sempre no fim do
-# _PROMPT) -- as instruções completas continuam intactas, e o próprio
-# prompt já pede pra IA sinalizar "analise_incompleta" quando o texto
-# parece cortado no meio, então truncar aqui é seguro (mesmo raciocínio de
-# MAX_TOTAL em analisar(), só que com um teto ainda menor, específico da
-# Groq). max_tokens explícito reserva espaço pra resposta dentro do mesmo
-# teto de 70000 (entrada + saída contam juntas) -- achado real: o valor
+# x-ratelimit-limit-tokens -- ~8.75x mais espaço.
+#
+# 2º achado real (edital 134686, já no compound-mini): 413 de novo, mas
+# com mensagem GENÉRICA ("Request Entity Too Large" / code
+# "request_too_large"), sem os números de TPM que o erro acima tinha --
+# na doc da Groq (console.groq.com/docs/errors), 413 é um código PRÓPRIO,
+# separado do 429 (esse sim é o de tokens/minuto, com número). Ou seja,
+# não é mais o teto de tokens/minuto -- é o corpo bruto da requisição
+# (bytes) estourando um limite à parte, não documentado publicamente. O
+# corte antigo (`_GROQ_LIMITE_PROMPT_CHARS`) media CARACTERES, não bytes
+# -- texto em português (ç, ã, é, õ...) vira 2 bytes por caractere em
+# UTF-8, então um prompt de 70000 caracteres podia virar ~140KB de corpo
+# de verdade sem o corte perceber. Agora mede bytes UTF-8 reais, com um
+# teto bem mais conservador (sem número oficial da Groq pra mirar).
+# Corta só a ponta do TEXTO DO EDITAL (fica sempre no fim do _PROMPT) --
+# as instruções completas continuam intactas, e o próprio prompt já pede
+# pra IA sinalizar "analise_incompleta" quando o texto parece cortado no
+# meio, então truncar aqui é seguro (mesmo raciocínio de MAX_TOTAL em
+# analisar(), só que com um teto ainda menor, específico da Groq).
+# max_tokens explícito reserva espaço pra resposta dentro do orçamento de
+# tokens/minuto (entrada + saída contam juntas) -- achado real: o valor
 # antigo (3000) podia cortar a resposta em editais com muita exigência de
 # habilitação, bem menor que o maxOutputTokens usado pro Gemini (16384).
-_GROQ_LIMITE_PROMPT_CHARS = 70000
+_GROQ_LIMITE_PROMPT_BYTES = 90_000
 _GROQ_MAX_TOKENS_RESPOSTA = 6000
+
+
+def _truncar_utf8(texto: str, max_bytes: int) -> str:
+    """Corta `texto` pra no máximo `max_bytes` bytes UTF-8, sem quebrar um
+    caractere multibyte no meio (isso geraria um byte inválido no meio do
+    corpo da requisição -- pior que só truncar cedo demais)."""
+    bruto = texto.encode("utf-8")
+    if len(bruto) <= max_bytes:
+        return texto
+    bruto = bruto[:max_bytes]
+    while bruto:
+        try:
+            return bruto.decode("utf-8")
+        except UnicodeDecodeError:
+            bruto = bruto[:-1]
+    return ""
 
 
 def _chamar_groq(prompt: str, timeout: int, tentativas: int):
@@ -782,8 +807,7 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
     igual era pro Gemini antes do schema existir."""
     if not settings.GROQ_API_KEY:
         return None, "sem_chave_groq"
-    if len(prompt) > _GROQ_LIMITE_PROMPT_CHARS:
-        prompt = prompt[:_GROQ_LIMITE_PROMPT_CHARS]
+    prompt = _truncar_utf8(prompt, _GROQ_LIMITE_PROMPT_BYTES)
     body = {
         "model": settings.GROQ_MODELO_TEXTO,
         "messages": [{"role": "user", "content": prompt}],
@@ -952,8 +976,8 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # depois -- a IA sinalizava "analise_incompleta" com frequência. O
         # Gemini (gemini-3.6/3.5-flash) tem contexto de sobra pra um texto
         # bem maior; o teto pequeno era mais conservador do que precisava.
-        # A Groq (fallback, teto de TPM bem menor) já trunca de novo por
-        # conta própria em _GROQ_LIMITE_PROMPT_CHARS -- não depende deste
+        # A Groq (fallback, teto de corpo bem menor) já trunca de novo por
+        # conta própria em _GROQ_LIMITE_PROMPT_BYTES -- não depende deste
         # valor. max_paginas também sobe (senão o PDF para de ser lido bem
         # antes de bater esse teto de caracteres).
         MAX_TOTAL = 80000

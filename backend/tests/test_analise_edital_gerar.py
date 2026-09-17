@@ -295,16 +295,23 @@ def test_gerar_tenta_groq_quando_os_2_modelos_gemini_dao_404(monkeypatch):
     assert mock_post.call_count == 2   # 1 no Gemini (404, sem retentar) + 1 na Groq
 
 
-# --------- prompt grande demais estoura o TPM da Groq (achado real: --------- #
-# HTTP 413 num edital de 350 itens, "Limit 8000, Requested 11382") --------- #
-# tier gratuito da Groq: 8000 tokens/minuto é POR REQUISIÇÃO, esperar e
-# tentar de novo com o mesmo tamanho bate no mesmo erro pra sempre -- só
-# resolve truncando o que é mandado (_chamar_groq corta antes de enviar).
+# --------- prompt grande demais estoura o corpo da requisição na Groq -- #
+# achado real #1: HTTP 413 num edital de 350 itens, "Limit 8000, Requested
+# 11382" -- tier gratuito da Groq, 8000 tokens/minuto POR REQUISIÇÃO,
+# esperar e tentar de novo com o mesmo tamanho bate no mesmo erro pra
+# sempre -- só resolve truncando o que é mandado.
+# achado real #2 (edital 134686, já no modelo com TPM bem maior): 413 de
+# novo, mas SEM número de TPM na mensagem ("Request Entity Too Large" /
+# code "request_too_large") -- na doc da Groq, 413 é um erro PRÓPRIO,
+# separado do 429 (que é o de TPM). É o corpo bruto (bytes) estourando um
+# teto à parte, não tokens -- e o corte antigo media CARACTERES, não
+# bytes (texto em português com acento pode virar 2 bytes/caractere em
+# UTF-8). _chamar_groq agora corta por BYTES UTF-8 reais.
 
 def test_chamar_groq_trunca_prompt_grande_antes_de_mandar(monkeypatch):
-    from app.analise_edital import _chamar_groq, _GROQ_LIMITE_PROMPT_CHARS
+    from app.analise_edital import _chamar_groq, _GROQ_LIMITE_PROMPT_BYTES
     monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
-    prompt_grande = "x" * (_GROQ_LIMITE_PROMPT_CHARS + 5000)
+    prompt_grande = "x" * (_GROQ_LIMITE_PROMPT_BYTES + 5000)   # 1 byte/char (ascii)
     prompts_recebidos = []
 
     def _post(url, json=None, **kw):
@@ -315,7 +322,42 @@ def test_chamar_groq_trunca_prompt_grande_antes_de_mandar(monkeypatch):
         txt, status = _chamar_groq(prompt_grande, timeout=60, tentativas=1)
 
     assert status == "ok"
-    assert len(prompts_recebidos[0]) == _GROQ_LIMITE_PROMPT_CHARS   # cortado, não os 5000 a mais
+    assert len(prompts_recebidos[0]) == _GROQ_LIMITE_PROMPT_BYTES   # cortado, não os 5000 a mais
+
+
+def test_chamar_groq_trunca_por_bytes_utf8_nao_por_caracteres(monkeypatch):
+    """Pedido do usuário (edital 134686): texto em português denso de
+    acento pode ter menos caracteres que bytes -- o corte tem que respeitar
+    o tamanho REAL do corpo (bytes UTF-8), não a contagem de caracteres do
+    Python, senão o corte antigo (baseado em caracteres) deixa passar um
+    corpo maior do que o teto pretendia."""
+    from app.analise_edital import _chamar_groq, _GROQ_LIMITE_PROMPT_BYTES
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    # "çã" = 2 caracteres, 4 bytes em UTF-8 -- bem mais denso que ascii.
+    prompt_grande = "çã" * (_GROQ_LIMITE_PROMPT_BYTES // 2)
+    prompts_recebidos = []
+
+    def _post(url, json=None, **kw):
+        prompts_recebidos.append(json["messages"][0]["content"])
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _chamar_groq(prompt_grande, timeout=60, tentativas=1)
+
+    assert status == "ok"
+    enviado = prompts_recebidos[0]
+    assert len(enviado.encode("utf-8")) <= _GROQ_LIMITE_PROMPT_BYTES
+    # não pode ter quebrado um caractere multibyte no meio (decodificou ok
+    # acima, sem UnicodeDecodeError -- é a própria asserção do teste).
+
+
+def test_truncar_utf8_nao_quebra_caractere_multibyte_no_meio():
+    from app.analise_edital import _truncar_utf8
+    # "á" = 2 bytes em UTF-8 -- corta exatamente no meio dele.
+    texto = "x" * 9 + "á"
+    resultado = _truncar_utf8(texto, max_bytes=10)
+    assert resultado == "x" * 9   # o "á" quebrado inteiro fica de fora, não 1 byte dele
+    assert len(resultado.encode("utf-8")) <= 10
 
 
 def test_chamar_groq_nao_trunca_prompt_pequeno():
