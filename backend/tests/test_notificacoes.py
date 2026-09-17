@@ -283,7 +283,13 @@ def test_analise_concluida_antes_da_ultima_visita_nao_aparece():
     assert not any(i["tipo"] == "analise" for i in r["itens"])
 
 
-def test_analise_sem_visita_nenhuma_ainda_aparece():
+def test_analise_sem_visita_nenhuma_nao_aparece():
+    """Achado real (auditoria dos agentes architect-reviewer/error-detective):
+    analise_ia é cache POR EDITAL (não por usuário) -- sem exigir que o
+    usuário já tenha visitado esse edital alguma vez, um usuário que NUNCA
+    abriu o edital podia ganhar uma notificação sobre uma análise que
+    outro usuário pediu, sem nunca sumir sozinha (não tinha motivo pra
+    abrir algo que nunca visitou -- vira um fantasma permanente)."""
     db = _sessao()
     u = _usuario(db)
     ed = _edital(db, analise_em=datetime.utcnow())
@@ -292,7 +298,7 @@ def test_analise_sem_visita_nenhuma_ainda_aparece():
 
     r = notificacoes(user=u, db=db)
 
-    assert any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
+    assert not any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
 
 
 def test_edital_sem_analise_nenhuma_nao_aparece():
@@ -328,7 +334,8 @@ def test_total_bate_com_tamanho_da_lista():
     u = _usuario(db)
     ed = _edital(db, data_encerramento=date.today() + timedelta(days=1),
                 analise_em=datetime.utcnow())
-    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO,
+                interagido_em=datetime.utcnow() - timedelta(hours=2)))
     db.add(Documento(usuario_id=u.id, nome="CND Federal",
                      data_validade=date.today() + timedelta(days=1), ativo=True))
     db.commit()
@@ -336,3 +343,20 @@ def test_total_bate_com_tamanho_da_lista():
     r = notificacoes(user=u, db=db)
 
     assert r["total"] == len(r["itens"]) == 3
+
+
+# --------- teto por categoria (achado real do agente performance-engineer) --------- #
+
+def test_documentos_vencendo_respeita_teto_por_categoria():
+    from app.main import _LIMITE_ITENS_NOTIFICACAO
+    db = _sessao()
+    u = _usuario(db)
+    for i in range(_LIMITE_ITENS_NOTIFICACAO + 5):
+        db.add(Documento(usuario_id=u.id, nome=f"Documento {i}",
+                         data_validade=date.today() + timedelta(days=1), ativo=True))
+    db.commit()
+
+    r = notificacoes(user=u, db=db)
+
+    itens_doc = [i for i in r["itens"] if i["tipo"] == "documento"]
+    assert len(itens_doc) == _LIMITE_ITENS_NOTIFICACAO

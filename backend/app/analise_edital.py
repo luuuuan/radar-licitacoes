@@ -687,7 +687,7 @@ def _retry_after_segundos(r) -> float | None:
 
 
 def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativas: int,
-                    extrair_texto, rotulo: str):
+                    extrair_texto, rotulo: str, ensure_ascii: bool = True):
     """POST com a retentativa curta (backoff simples) comum a qualquer
     provedor de IA usado aqui — mesmo espírito do
     PNCPConnector._get_com_retry — pra falha TRANSIENTE (timeout/rede,
@@ -700,11 +700,27 @@ def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativa
     só reforça o limite -- devolve o erro direto, mesmo comportamento de
     antes. Consome o mesmo orçamento de `tentativas` do backoff de 5xx (não
     é um mecanismo à parte). extrair_texto(dados_json) -> texto da
-    resposta, específico do formato de cada provedor (Gemini x Groq)."""
+    resposta, específico do formato de cada provedor (Gemini x Groq).
+
+    ensure_ascii=False (achado real do agente error-detective): `requests`,
+    com `json=body`, serializa via `json.dumps` com ensure_ascii=TRUE por
+    padrão -- cada caractere acentuado (ç, ã, é...) vira um escape \\uXXXX
+    de 6 bytes, em vez dos 2 bytes reais em UTF-8. Isso destruía o corte
+    por bytes de _chamar_groq: o corpo de verdade enviado podia ficar
+    3x maior do que o que foi medido antes de truncar, reproduzindo o
+    mesmo 413 que o corte deveria ter evitado. Serializa manualmente com
+    ensure_ascii=False (corpo de verdade menor E igual ao que foi medido)
+    quando o chamador pede -- Gemini continua no padrão (nunca foi capado
+    por bytes, não tem esse risco)."""
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
         try:
-            r = requests.post(url, json=body, timeout=timeout, headers=headers)
+            if ensure_ascii:
+                r = requests.post(url, json=body, timeout=timeout, headers=headers)
+            else:
+                corpo = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                cabecalhos = {**headers, "Content-Type": "application/json; charset=utf-8"}
+                r = requests.post(url, data=corpo, timeout=timeout, headers=cabecalhos)
         except requests.RequestException as e:
             ultimo_erro = f"rede:{e}"
             if tentativa < tentativas:
@@ -807,7 +823,15 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
     igual era pro Gemini antes do schema existir."""
     if not settings.GROQ_API_KEY:
         return None, "sem_chave_groq"
+    tamanho_original = len(prompt.encode("utf-8"))
     prompt = _truncar_utf8(prompt, _GROQ_LIMITE_PROMPT_BYTES)
+    if tamanho_original > _GROQ_LIMITE_PROMPT_BYTES:
+        # achado real (2x já): se o corte de 90_000 bytes um dia se mostrar
+        # insuficiente de novo, isso aqui é o que vai diferenciar "o corte
+        # não bastou" de "é outra causa" no log de produção -- sem isso, um
+        # 413 futuro fica tão sem pista quanto os dois anteriores.
+        log.warning("Groq: prompt cortado de %d para %d bytes (limite %d)",
+                   tamanho_original, len(prompt.encode("utf-8")), _GROQ_LIMITE_PROMPT_BYTES)
     body = {
         "model": settings.GROQ_MODELO_TEXTO,
         "messages": [{"role": "user", "content": prompt}],
@@ -819,7 +843,7 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
     return _post_com_retry(
         _GROQ_URL, headers, body, timeout, tentativas,
         extrair_texto=lambda d: d["choices"][0]["message"]["content"],
-        rotulo="Groq texto")
+        rotulo="Groq texto", ensure_ascii=False)
 
 
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,

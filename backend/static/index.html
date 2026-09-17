@@ -1934,7 +1934,12 @@ function _abrirNotificacao(i){
     // pedido do usuário: não abre UM edital específico (normalmente é
     // mais de um) -- abre a lista de Editais já filtrada, mesmo padrão de
     // filtro usado pelo resto da tela (_lerFiltrosAtivos/_aplicarFiltroSalvo).
+    // Achado real (agente debugger): setar só #f-nivel deixava qualquer
+    // OUTRO filtro que já estivesse ligado (UF, busca por item, faixa de
+    // valor...) combinado em cima -- podia render 0 resultados sem
+    // nenhuma pista de por quê. limparFiltros() zera tudo antes.
     tab('editais');
+    limparFiltros();
     if(n.filtro && n.filtro.nivel && $('#f-nivel')) $('#f-nivel').value = n.filtro.nivel;
     loadEditais();
     return;
@@ -4769,6 +4774,29 @@ async function _mudarStatusPaginaEdital(status){
   await mudarStatus(_paginaEditalDetalhe.edital.id, status);
   _paginaEditalDetalhe.edital.status = status;
   _renderCabecalhoEdital();
+  await _resincronizarBloqueioEdicao();
+}
+
+// Achado real (agentes code-reviewer/debugger): bloqueio_edicao (usado por
+// _motivoBloqueioEdicao pra desabilitar botões) só era buscado 1x, na
+// carga inicial da página do edital -- mudar o status pro "ganho", salvar
+// a proposta ou o preço de cotação nunca atualizavam esse valor em cache,
+// deixando os botões habilitados mesmo depois do backend passar a
+// rejeitar (403) as mesmas ações com uma mensagem genérica em vez do
+// "desabilitado com motivo" que a feature deveria mostrar. Só re-renderiza
+// a aba se o valor realmente mudou -- evita perder foco/posição de scroll
+// à toa no caso comum (nada mudou).
+async function _resincronizarBloqueioEdicao(){
+  if(!_paginaEditalDetalhe || !_paginaEditalDetalhe.edital) return;
+  const id = _paginaEditalId;
+  const antes = _paginaEditalDetalhe.edital.bloqueio_edicao;
+  let d;
+  try{ d = await api(`/api/editais/${id}/detalhe`); }catch(e){ return; }
+  if(_paginaEditalId !== id || !_paginaEditalDetalhe || !_paginaEditalDetalhe.edital) return;
+  _paginaEditalDetalhe.edital.bloqueio_edicao = d.edital.bloqueio_edicao;
+  if(_paginaEditalDetalhe.edital.bloqueio_edicao !== antes){
+    abaEdital(_abaEditalAtual, true);
+  }
 }
 
 async function abaEdital(nome, forcar){
@@ -5179,9 +5207,10 @@ function _corpoItensEdital(d){
   const statusDescricao = qtdCompletados > 0
     ? `${ICN.check||'✓'} ${qtdCompletados} ${qtdCompletados===1?'descrição completada':'descrições completadas'} a partir do documento oficial.`
     : '';
+  const _motivoBloqDesc = _motivoBloqueioEdicao();
   const toolbarDescricao = `<div class="muted" style="font-size:11px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${statusDescricao}
-      <button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="_completarDescricaoItens(_paginaEditalId, ()=>true, true, this)">buscar descrição completa no documento</button>
+      <button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="_completarDescricaoItens(_paginaEditalId, ()=>true, true, this)" ${_motivoBloqDesc?`disabled title="${esc(_motivoBloqDesc)}"`:''}>buscar descrição completa no documento</button>
     </div>`;
   return `
     ${toolbarDescricao}
@@ -5649,6 +5678,7 @@ async function _atualizarPrecoCotacao(numero, valorStr){
       const it = _paginaEditalDetalhe.itens.find(i => String(i.numero) === String(numero));
       if(it) it.preco_cotacao = valor;
     }
+    _resincronizarBloqueioEdicao();
   }catch(e){
     if(_paginaEditalId === id) toast('Não foi possível salvar esse valor agora.', 'erro');
   }
@@ -5992,6 +6022,7 @@ async function salvarProposta(btn){
       setTimeout(()=>{$('#prop-msg').textContent='';},4000);
       toast('Proposta salva.', 'ok');
     }
+    _resincronizarBloqueioEdicao();
   }catch(e){
     if(btn){
       $('#prop-msg').textContent='erro ao salvar';
@@ -6350,7 +6381,12 @@ async function sair(){
   // plataformas, que não dependem mais de nenhuma chamada assíncrona --
   // a lista de opções só é buscada quando o modal abre) já saírem aplicados.
   _aplicarFiltroSalvo();
-  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento(), carregarNotificacoes()]).finally(()=>{
+  // carregarNotificacoes() fica FORA do Promise.all de propósito (achado
+  // real do agente performance-engineer): o splash só devia esperar o que
+  // o usuário precisa pra ver a tela pedida -- o sininho pode aparecer
+  // uma fração de segundo depois, sem atrasar o primeiro paint da página.
+  carregarNotificacoes();
+  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
   setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); carregarNotificacoes(); }, 30000);

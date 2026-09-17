@@ -5,6 +5,7 @@ Testes da retentativa de _gerar() (chamada ao Gemini) em falha transiente
 chance (diferente do PNCPConnector, que já retentava). Rode com:
 cd backend && pytest
 """
+import json
 from unittest.mock import patch, MagicMock
 
 import requests
@@ -308,14 +309,21 @@ def test_gerar_tenta_groq_quando_os_2_modelos_gemini_dao_404(monkeypatch):
 # bytes (texto em português com acento pode virar 2 bytes/caractere em
 # UTF-8). _chamar_groq agora corta por BYTES UTF-8 reais.
 
+def _corpo_de(data) -> dict:
+    """_chamar_groq manda o corpo pré-serializado via `data=` (bytes), não
+    `json=` (ver ensure_ascii=False em _post_com_retry) -- decodifica de
+    volta pra inspecionar nos testes, igual o `json=` fazia sozinho antes."""
+    return json.loads(data.decode("utf-8"))
+
+
 def test_chamar_groq_trunca_prompt_grande_antes_de_mandar(monkeypatch):
     from app.analise_edital import _chamar_groq, _GROQ_LIMITE_PROMPT_BYTES
     monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
     prompt_grande = "x" * (_GROQ_LIMITE_PROMPT_BYTES + 5000)   # 1 byte/char (ascii)
     prompts_recebidos = []
 
-    def _post(url, json=None, **kw):
-        prompts_recebidos.append(json["messages"][0]["content"])
+    def _post(url, data=None, **kw):
+        prompts_recebidos.append(_corpo_de(data)["messages"][0]["content"])
         return _resposta_groq_ok()
 
     with patch("app.analise_edital.requests.post", side_effect=_post):
@@ -337,8 +345,8 @@ def test_chamar_groq_trunca_por_bytes_utf8_nao_por_caracteres(monkeypatch):
     prompt_grande = "çã" * (_GROQ_LIMITE_PROMPT_BYTES // 2)
     prompts_recebidos = []
 
-    def _post(url, json=None, **kw):
-        prompts_recebidos.append(json["messages"][0]["content"])
+    def _post(url, data=None, **kw):
+        prompts_recebidos.append(_corpo_de(data)["messages"][0]["content"])
         return _resposta_groq_ok()
 
     with patch("app.analise_edital.requests.post", side_effect=_post):
@@ -349,6 +357,29 @@ def test_chamar_groq_trunca_por_bytes_utf8_nao_por_caracteres(monkeypatch):
     assert len(enviado.encode("utf-8")) <= _GROQ_LIMITE_PROMPT_BYTES
     # não pode ter quebrado um caractere multibyte no meio (decodificou ok
     # acima, sem UnicodeDecodeError -- é a própria asserção do teste).
+
+
+def test_chamar_groq_manda_corpo_sem_inflar_acento_com_escape_unicode(monkeypatch):
+    """Achado real (agente error-detective): requests.post(json=...) usa
+    json.dumps ensure_ascii=True por padrão -- cada caractere acentuado
+    vira um escape \\uXXXX de 6 bytes, 3x os 2 bytes reais em UTF-8. Isso
+    destruía o corte por bytes (o corpo de VERDADE enviado podia ficar bem
+    maior do que o medido antes de truncar). O corpo de verdade enviado
+    tem que conter os bytes UTF-8 do caractere, não o escape."""
+    from app.analise_edital import _chamar_groq
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    corpos_brutos = []
+
+    def _post(url, data=None, **kw):
+        corpos_brutos.append(data)
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        _chamar_groq("edital com acentuação: ção, não, é, ã", timeout=60, tentativas=1)
+
+    enviado = corpos_brutos[0]
+    assert b"\\u" not in enviado   # nada de escape unicode
+    assert "ção".encode("utf-8") in enviado   # os bytes UTF-8 reais, direto no corpo
 
 
 def test_truncar_utf8_nao_quebra_caractere_multibyte_no_meio():
@@ -365,8 +396,8 @@ def test_chamar_groq_nao_trunca_prompt_pequeno():
     prompt_pequeno = "prompt normal, bem menor que o limite"
     prompts_recebidos = []
 
-    def _post(url, json=None, **kw):
-        prompts_recebidos.append(json["messages"][0]["content"])
+    def _post(url, data=None, **kw):
+        prompts_recebidos.append(_corpo_de(data)["messages"][0]["content"])
         return _resposta_groq_ok()
 
     with patch("app.analise_edital.requests.post", side_effect=_post), \
@@ -381,8 +412,8 @@ def test_chamar_groq_manda_max_tokens_pra_reservar_espaco_na_resposta():
     from app.analise_edital import _chamar_groq, _GROQ_MAX_TOKENS_RESPOSTA
     corpos_recebidos = []
 
-    def _post(url, json=None, **kw):
-        corpos_recebidos.append(json)
+    def _post(url, data=None, **kw):
+        corpos_recebidos.append(_corpo_de(data))
         return _resposta_groq_ok()
 
     with patch("app.analise_edital.requests.post", side_effect=_post), \

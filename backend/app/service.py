@@ -389,10 +389,21 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
                              ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
                      for i in ed.itens]
-        # exclusões do próprio usuário
+        # exclusões do próprio usuário -- achado real (auditoria do agente
+        # error-detective): esse branch deletava o Match incondicionalmente,
+        # SEM a proteção de _match_engajado que o branch "fraco" logo abaixo
+        # já tem. Um Match "ganho" (ou lido/interessante/com item confirmado)
+        # podia sumir em silêncio só porque o usuário adicionou depois um
+        # termo de exclusão genérico que por acaso bate no objeto/itens
+        # daquele edital específico -- mesma classe de bug já corrigida uma
+        # vez nesta sessão pra outro campo (preco_cotacao, ver
+        # _mesclar_confirmacoes_manuais). Edital que o usuário já se
+        # engajou com continua sendo avaliado normalmente pelas regras de
+        # exclusão dali pra frente (só este recálculo não mexe nele).
         if aplicar_regras_exclusao(ed.objeto or "", itens_edt, termos_excl, None, categorias_excl):
             if existente:
-                db.delete(existente)
+                if not _match_engajado(existente):
+                    db.delete(existente)
             continue
 
         era_novo = existente is None

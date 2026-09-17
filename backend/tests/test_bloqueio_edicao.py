@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.main import (
     _bloqueio_edicao_edital, confirmar_item_edital, definir_preco_cotacao,
-    analise_edital_iniciar, salvar_proposta, edital_detalhe,
+    analise_edital_iniciar, salvar_proposta, edital_detalhe, completar_descricao_itens,
     ConfirmarItemIn, PrecoCotacaoIn, PropostaIn,
 )
 from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto
@@ -182,6 +182,36 @@ def test_analise_iniciar_liberada_quando_recebendo():
     u = _usuario(db)
     ed = _edital_com_item(db, **RECEBENDO)
     r = analise_edital_iniciar(ed.id, BackgroundTasks(), forcar=False, user=u, db=db)
+    assert r["ok"] is True
+
+
+def test_completar_descricao_bloqueada_quando_ganho():
+    """Achado real (auditoria do agente architect-reviewer): este endpoint é
+    irmão de analise_edital_iniciar (mesmo tipo de job pago em IA que
+    sobrescreve dado do item) mas tinha ficado sem o guard."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db, **RECEBENDO)
+    _match(db, ed, u, status="ganho")
+    with pytest.raises(HTTPException) as exc:
+        completar_descricao_itens(ed.id, BackgroundTasks(), user=u, db=db)
+    assert exc.value.status_code == 403
+
+
+def test_completar_descricao_bloqueada_quando_encerrado_sem_selecao():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db, **ENCERRADO)
+    with pytest.raises(HTTPException) as exc:
+        completar_descricao_itens(ed.id, BackgroundTasks(), user=u, db=db)
+    assert exc.value.status_code == 403
+
+
+def test_completar_descricao_liberada_quando_recebendo():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db, **RECEBENDO)
+    r = completar_descricao_itens(ed.id, BackgroundTasks(), user=u, db=db)
     assert r["ok"] is True
 
 

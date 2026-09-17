@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.matching import engine as engine_mod
-from app.models import Base, Usuario, Edital, ItemEdital, Produto, Match
+from app.models import Base, Usuario, Edital, ItemEdital, Produto, Match, RegraExclusao
 from app.service import _gerar_matches_usuario, _mesclar_confirmacoes_manuais, _match_engajado
 
 
@@ -298,3 +298,67 @@ def test_recalculo_continua_apagando_match_fraco_nao_engajado(monkeypatch):
 
     ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
     assert ainda_existe is None
+
+
+# --------- regra de exclusão não pode apagar Match engajado (achado real: --------- #
+# esse branch deletava incondicionalmente, sem a proteção de _match_engajado --------- #
+# que o branch "fraco" acima já tem) --------- #
+
+def _usuario_com_regra_exclusao(db, termo, email="exclusao@t.com"):
+    u = Usuario(nome="Teste", email=email, senha_hash="x")
+    db.add(u)
+    db.commit()
+    db.add(RegraExclusao(usuario_id=u.id, tipo="termo", valor=termo, ativo=True))
+    ed = Edital(fonte="PNCP", id_externo="ed-exclusao", objeto="Aquisicao de material de limpeza",
+               orgao="Orgao Teste", uf="SP")
+    db.add(ed)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Detergente neutro",
+                      quantidade=10, valor_unitario=5.0))
+    db.commit()
+    return u, ed
+
+
+def test_regra_de_exclusao_apaga_match_nao_engajado_como_antes():
+    db = _sessao()
+    u, ed = _usuario_com_regra_exclusao(db, "material de limpeza")
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio")
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is None
+
+
+def test_regra_de_exclusao_nao_apaga_match_marcado_ganho():
+    """O bug: usuário marca um edital "ganho", depois cadastra uma regra de
+    exclusão genérica que (sem querer) bate no objeto/itens desse mesmo
+    edital -- o próximo recálculo não pode apagar o registro do pregão
+    ganho por causa disso."""
+    db = _sessao()
+    u, ed = _usuario_com_regra_exclusao(db, "material de limpeza")
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.9, nivel="forte", status="ganho")
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is not None
+    assert ainda_existe.status == "ganho"
+
+
+def test_regra_de_exclusao_nao_apaga_match_com_item_confirmado_manualmente():
+    db = _sessao()
+    u, ed = _usuario_com_regra_exclusao(db, "material de limpeza")
+    match = Match(edital_id=ed.id, usuario_id=u.id, score=0.5, nivel="medio",
+                  detalhe={"itens": [{"item": 1, "confirmado_manualmente": True}]})
+    db.add(match)
+    db.commit()
+
+    _gerar_matches_usuario(db, u, recalcular_todos=True, forcar_usar_ia=False)
+
+    ainda_existe = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert ainda_existe is not None

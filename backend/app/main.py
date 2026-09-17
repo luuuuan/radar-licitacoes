@@ -3503,6 +3503,11 @@ def completar_descricao_itens(edital_id: int, bg: BackgroundTasks,
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
     lock = _lock_completar_descricao(edital_id)
     if lock.locked():
         return {"ok": False, "em_andamento": True,
@@ -4511,6 +4516,9 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
     } for d in docs]
 
 
+_LIMITE_ITENS_NOTIFICACAO = 30  # teto por categoria -- sem isso o payload cresce sem fim com a idade da conta
+
+
 @app.get("/api/notificacoes")
 def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                  db: Session = Depends(get_session)):
@@ -4529,85 +4537,107 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
        dentro da janela de Usuario.dias_antecedencia, só se
        Usuario.avisar_abertura. Clicar aqui NÃO abre um edital específico
        (pedido do usuário) -- abre a lista de Editais já filtrada por
-       nível "forte", porque normalmente tem mais de um.
+       nível "forte", porque normalmente tem mais de um. Só precisa de uma
+       CONTAGEM (item agrupado), não dos editais em si.
     3. Documentos de habilitação vencendo (mesmo limiar do checklist do
        edital, settings.LEMBRETE_DOC_DIAS -- ver checklist_habilitacao.py).
     4. Análises por IA que terminaram depois da última vez que o usuário
-       esteve naquele edital (Edital.analise_em > Match.interagido_em) --
-       clicar pra ver JÁ atualiza interagido_em (abrirPaginaEdital), então
-       a notificação some sozinha, sem precisar de estado de "lida" à
-       parte. analise_ia é cache POR EDITAL (não por usuário) -- em
-       teoria outro usuário rodando a análise deste mesmo edital também
-       dispara isso aqui, mas como só roda a pedido explícito (nunca
-       automático) e o cache normalmente já está pronto, isso é raro na
-       prática.
+       esteve naquele edital (Edital.analise_em > Match.interagido_em),
+       exigindo que ele já tenha visitado esse edital ALGUMA vez
+       (interagido_em IS NOT NULL) -- achado real (auditoria dos agentes
+       architect-reviewer/error-detective): analise_ia é cache POR EDITAL
+       (não por usuário, vários usuários podem ter Match no mesmo edital
+       público), então sem essa exigência um usuário que NUNCA visitou um
+       edital podia ganhar uma notificação de "análise concluída" só
+       porque OUTRO usuário rodou a análise -- um alerta sobre um trabalho
+       que nada tem a ver com ele, e que nunca some sozinho (só some
+       quando o usuário abre o edital, mas ele não tinha motivo pra abrir
+       algo que nunca visitou). Clicar pra ver JÁ atualiza interagido_em
+       (abrirPaginaEdital), então a notificação some sozinha da próxima
+       vez, sem precisar de estado de "lida" à parte.
 
-    Cada item já vem com pra onde a notificação deve levar ao clicar."""
+    Achado real (auditoria do agente performance-engineer, medido): as
+    consultas antigas traziam a entidade ORM INTEIRA (Match/Edital/
+    Documento), incluindo colunas gigantes nunca usadas aqui --
+    Documento.arquivo_cifrado (até 15MB por documento!), Edital.
+    texto_analise_ia/analise_ia/raw -- chamado a cada 30s por aba aberta.
+    Agora seleciona só as colunas usadas e empurra os filtros de data pro
+    SQL (não Python) -- ~15-40ms e alguns MB por chamada viraram ~2ms e
+    bytes. Cada item já vem com pra onde a notificação deve levar ao
+    clicar."""
     hoje = date.today()
     itens = []
 
-    q_prazo = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+    q_prazo = (select(Edital.id, Edital.orgao, Edital.data_encerramento)
+              .join(Match, Match.edital_id == Edital.id)
               .where(Match.usuario_id == user.id)
               .where(Edital.data_encerramento.is_not(None))
+              .where(Edital.data_encerramento >= hoje)
+              .where(Edital.data_encerramento <= hoje + timedelta(days=settings.LEMBRETE_PRAZO_DIAS))
               .where(or_(Match.status == STATUS_PARTICIPACAO,
-                        Match.interessante.is_(True), Match.nivel == "forte")))
-    for match, ed in db.execute(q_prazo).all():
-        dias = (ed.data_encerramento - hoje).days
-        if 0 <= dias <= settings.LEMBRETE_PRAZO_DIAS:
-            itens.append({
-                "tipo": "prazo", "edital_id": ed.id, "orgao": ed.orgao,
-                "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
-                "aba": "proposta",
-            })
+                        Match.interessante.is_(True), Match.nivel == "forte"))
+              .limit(_LIMITE_ITENS_NOTIFICACAO))
+    for edital_id, orgao, data_encerramento in db.execute(q_prazo).all():
+        dias = (data_encerramento - hoje).days
+        itens.append({
+            "tipo": "prazo", "edital_id": edital_id, "orgao": orgao,
+            "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
+            "aba": "proposta",
+        })
 
     if user.avisar_abertura:
-        q_abertura = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+        janela = max(0, user.dias_antecedencia)
+        q_abertura = (select(func.count(Edital.id))
+                     .select_from(Match).join(Edital, Match.edital_id == Edital.id)
                      .where(Match.usuario_id == user.id)
                      .where(Match.nivel == "forte")
                      .where(Edital.data_abertura.is_not(None))
-                     .where(Edital.data_abertura >= hoje))
-        editais_abrindo = []
-        for match, ed in db.execute(q_abertura).all():
-            dias = (ed.data_abertura - hoje).days
-            if dias <= max(0, user.dias_antecedencia):
-                editais_abrindo.append(ed)
-        if editais_abrindo:
+                     .where(Edital.data_abertura >= hoje)
+                     .where(Edital.data_abertura <= hoje + timedelta(days=janela)))
+        total_abrindo = db.execute(q_abertura).scalar_one()
+        if total_abrindo:
             itens.append({
                 "tipo": "abertura",
-                "detalhe": (f"{len(editais_abrindo)} editais de alta compatibilidade vão abrir em breve"
-                           if len(editais_abrindo) > 1 else "Um edital de alta compatibilidade vai abrir em breve"),
+                "detalhe": (f"{total_abrindo} editais de alta compatibilidade vão abrir em breve"
+                           if total_abrindo > 1 else "Um edital de alta compatibilidade vai abrir em breve"),
                 "filtro": {"nivel": "forte"},
             })
 
-    q_docs = (select(Documento).where(Documento.usuario_id == user.id)
+    q_docs = (select(Documento.id, Documento.nome, Documento.data_validade)
+             .where(Documento.usuario_id == user.id)
              .where(Documento.ativo.is_(True))
-             .where(Documento.data_validade.is_not(None)))
-    for d in db.execute(q_docs).scalars():
-        dias = (d.data_validade - hoje).days
-        # inclui já vencido (dias<0), não só "vence em breve" -- um
-        # documento vencido é mais urgente que um vencendo, não menos.
-        if dias <= settings.LEMBRETE_DOC_DIAS:
-            if dias < 0:
-                detalhe = f"vencido há {abs(dias)} dia(s)"
-            elif dias == 0:
-                detalhe = "vence hoje"
-            else:
-                detalhe = f"vence em {dias} dia(s)"
-            itens.append({
-                "tipo": "documento", "documento_id": d.id, "nome": d.nome,
-                "detalhe": detalhe,
-            })
+             .where(Documento.data_validade.is_not(None))
+             # inclui já vencido (dias<0), não só "vence em breve" -- um
+             # documento vencido é mais urgente que um vencendo, não menos
+             # (sem piso aqui de propósito).
+             .where(Documento.data_validade <= hoje + timedelta(days=settings.LEMBRETE_DOC_DIAS))
+             .limit(_LIMITE_ITENS_NOTIFICACAO))
+    for doc_id, nome, data_validade in db.execute(q_docs).all():
+        dias = (data_validade - hoje).days
+        if dias < 0:
+            detalhe = f"vencido há {abs(dias)} dia(s)"
+        elif dias == 0:
+            detalhe = "vence hoje"
+        else:
+            detalhe = f"vence em {dias} dia(s)"
+        itens.append({
+            "tipo": "documento", "documento_id": doc_id, "nome": nome,
+            "detalhe": detalhe,
+        })
 
-    q_analise = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+    q_analise = (select(Edital.id, Edital.orgao)
+                .join(Match, Match.edital_id == Edital.id)
                 .where(Match.usuario_id == user.id)
-                .where(Edital.analise_em.is_not(None)))
-    for match, ed in db.execute(q_analise).all():
-        if match.interagido_em is None or ed.analise_em > match.interagido_em:
-            itens.append({
-                "tipo": "analise", "edital_id": ed.id, "orgao": ed.orgao,
-                "detalhe": "análise por IA concluída",
-                "aba": "analise",
-            })
+                .where(Match.interagido_em.is_not(None))
+                .where(Edital.analise_em.is_not(None))
+                .where(Edital.analise_em > Match.interagido_em)
+                .limit(_LIMITE_ITENS_NOTIFICACAO))
+    for edital_id, orgao in db.execute(q_analise).all():
+        itens.append({
+            "tipo": "analise", "edital_id": edital_id, "orgao": orgao,
+            "detalhe": "análise por IA concluída",
+            "aba": "analise",
+        })
 
     return {"total": len(itens), "itens": itens}
 
