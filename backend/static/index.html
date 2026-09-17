@@ -494,6 +494,29 @@
   .acoes-ia.aberto .menu{opacity:1;visibility:visible;pointer-events:auto;transform:scale(1) translateY(0)}
   .acoes-ia .menu .btn{justify-content:flex-start;width:100%;text-align:left;border:none;background:none;padding:6px 8px}
   .acoes-ia .menu .btn:hover{background:var(--panel)}
+  /* Central de notificações (sininho no header) -- pedido do usuário:
+     editais "Vou participar" com prazo fechando, documentos vencendo,
+     análises por IA concluídas fora da tela, tudo clicável. Fica no
+     header (não dentro de nada com overflow:auto), então position:absolute
+     simples já basta aqui -- ao contrário do menu "⋮" da Análise por IA
+     (ver comentário de .acoes-ia acima), não precisa de position:fixed. */
+  .notif-wrap{position:relative;display:inline-flex}
+  .notif-badge{position:absolute;top:-3px;right:-3px;background:var(--destructive);color:#fff;
+    font-size:10px;font-weight:700;line-height:1;min-width:16px;height:16px;border-radius:999px;
+    display:flex;align-items:center;justify-content:center;padding:0 3px;pointer-events:none}
+  .notif-painel{position:absolute;top:calc(100% + 8px);right:0;z-index:5000;
+    width:340px;max-width:90vw;max-height:70vh;overflow-y:auto;
+    background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+    box-shadow:0 12px 32px rgba(0,0,0,.4);padding:6px;
+    opacity:0;visibility:hidden;pointer-events:none;
+    transform:scale(.96) translateY(-6px);transform-origin:top right;
+    transition:opacity .16s ease,transform .16s ease}
+  .notif-wrap.aberto .notif-painel{opacity:1;visibility:visible;pointer-events:auto;transform:scale(1) translateY(0)}
+  .notif-item{display:flex;flex-direction:column;gap:2px;padding:9px 10px;border-radius:8px;
+    cursor:pointer;text-align:left;width:100%;background:none;border:none;color:var(--txt);font-size:13px}
+  .notif-item:hover{background:var(--panel)}
+  .notif-item .tit{font-weight:600}
+  .notif-item .det{font-size:11px;color:var(--muted)}
   /* Toast (avisos) */
   #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
     z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
@@ -984,6 +1007,14 @@
     </div>
   </div>
   <button class="btn" id="btn-coletar" onclick="coletar()"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" style="vertical-align:-2px"><polygon points="6 4 20 12 6 20 6 4"/></svg> Coletar agora</button>
+  <span class="notif-wrap" id="notif-wrap">
+    <button class="btn ghost" id="btn-notificacoes" type="button" onclick="toggleNotificacoes(event)"
+        title="Notificações" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span class="notif-badge" id="notif-badge" style="display:none">0</span>
+    </button>
+    <div class="notif-painel" id="notif-painel" role="menu"></div>
+  </span>
   <span class="header-conta-desktop">
     <span id="user-nome" class="badge" title="Sua conta">—</span>
     <button class="btn ghost" onclick="sair()" title="Sair da conta">Sair</button>
@@ -1812,9 +1843,11 @@ document.addEventListener('click', e=>{
   if(!e.target.closest('.ajuda')) document.querySelectorAll('.ajuda.aberto').forEach(_fecharAjuda);
   if(!e.target.closest('.nav-grupo-wrap')) document.querySelectorAll('.nav-grupo-wrap.aberto').forEach(g=>g.classList.remove('aberto'));
   if(!e.target.closest('.acoes-ia')) document.querySelectorAll('.acoes-ia.aberto').forEach(_fecharAcoesIA);
+  if(!e.target.closest('.notif-wrap')) _fecharNotificacoes();
 });
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape') document.querySelectorAll('.acoes-ia.aberto').forEach(_fecharAcoesIA);
+  if(e.key==='Escape') _fecharNotificacoes();
 });
 // menu é position:fixed (posição calculada uma vez, na abertura) -- rolar
 // a página ou a div da tabela (overflow-x:auto) deixaria o menu "flutuando"
@@ -1827,6 +1860,89 @@ function _fecharAcoesIA(el){
   el.classList.remove('aberto');
   const btn = el.querySelector('button[aria-haspopup]');
   if(btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+// Central de notificações (sininho no header) -- pedido do usuário: editais
+// "Vou participar" com prazo fechando, documentos vencendo, análises por IA
+// concluídas fora da tela, tudo clicável e levando pro lugar certo. Sem
+// estado de "lida" à parte -- clicar num item de análise JÁ reabre o
+// edital (abrirPaginaEdital atualiza interagido_em), que é o próprio sinal
+// que faz a notificação sumir na próxima vez que a lista for recarregada
+// (ver GET /api/notificacoes no backend).
+let _notifCache = [];
+async function carregarNotificacoes(){
+  try{
+    const r = await api('/api/notificacoes');
+    _notifCache = r.itens || [];
+  }catch(e){
+    _notifCache = [];
+  }
+  const badge = $('#notif-badge');
+  if(_notifCache.length){
+    badge.style.display = 'flex';
+    badge.textContent = _notifCache.length > 9 ? '9+' : _notifCache.length;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+function _notifIconePorTipo(tipo){
+  if(tipo==='prazo') return ICN.relogio||'';
+  if(tipo==='documento') return ICN.doc||'';
+  if(tipo==='abertura') return ICN.busca||'';
+  return ICN.ia||'';
+}
+function _renderNotificacoes(){
+  const painel = $('#notif-painel');
+  if(!_notifCache.length){
+    painel.innerHTML = '<div class="muted" style="padding:16px 10px;font-size:13px;text-align:center">Nenhuma notificação por enquanto.</div>';
+    return;
+  }
+  painel.innerHTML = _notifCache.map((n,i)=>{
+    const titulo = n.tipo==='documento' ? n.nome : (n.tipo==='abertura' ? 'Editais abrindo em breve' : n.orgao);
+    return `<button class="notif-item" type="button" role="menuitem" onclick="_abrirNotificacao(${i})">
+      <span class="tit">${_notifIconePorTipo(n.tipo)} ${esc(titulo||'')}</span>
+      <span class="det">${esc(n.detalhe||'')}</span>
+    </button>`;
+  }).join('');
+}
+async function toggleNotificacoes(ev){
+  ev.stopPropagation();
+  const wrap = $('#notif-wrap');
+  const jaAberto = wrap.classList.contains('aberto');
+  if(jaAberto){ _fecharNotificacoes(); return; }
+  wrap.classList.add('aberto');
+  $('#btn-notificacoes').setAttribute('aria-expanded', 'true');
+  await carregarNotificacoes();
+  _renderNotificacoes();
+}
+function _fecharNotificacoes(){
+  const wrap = document.getElementById('notif-wrap');
+  if(!wrap) return;
+  wrap.classList.remove('aberto');
+  const btn = document.getElementById('btn-notificacoes');
+  if(btn) btn.setAttribute('aria-expanded', 'false');
+}
+function _abrirNotificacao(i){
+  const n = _notifCache[i];
+  if(!n) return;
+  _fecharNotificacoes();
+  if(n.tipo === 'documento'){
+    tab('documentos');
+    return;
+  }
+  if(n.tipo === 'abertura'){
+    // pedido do usuário: não abre UM edital específico (normalmente é
+    // mais de um) -- abre a lista de Editais já filtrada, mesmo padrão de
+    // filtro usado pelo resto da tela (_lerFiltrosAtivos/_aplicarFiltroSalvo).
+    tab('editais');
+    if(n.filtro && n.filtro.nivel && $('#f-nivel')) $('#f-nivel').value = n.filtro.nivel;
+    loadEditais();
+    return;
+  }
+  // mesmo caminho já usado por outras origens que abrem um edital numa
+  // aba específica (ex.: link do Telegram) -- ver comentário de
+  // _abaEditalSalvaPara.
+  abrirPaginaEdital(n.edital_id, n.aba || 'itens');
 }
 // Menu "⋮" (trocar produto/detalhes/fornecedor) da tabela de comparação da
 // Análise por IA — pedido do usuário: em vez de empilhar todos os botões
@@ -1928,6 +2044,7 @@ const ICN = {
   doc:        _svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
   trocar:     _svg('<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>'),
   mais:       _svg('<circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none"/>'),
+  sino:       _svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'),
 };
 // usado tanto na aba Itens/margem quanto no card da lista de editais
 const CORES_VALIDACAO = {'Atende':'var(--forte)', 'Atende parcialmente':'var(--medio)', 'Não atende':'var(--destructive)'};
@@ -6233,10 +6350,10 @@ async function sair(){
   // plataformas, que não dependem mais de nenhuma chamada assíncrona --
   // a lista de opções só é buscada quando o modal abre) já saírem aplicados.
   _aplicarFiltroSalvo();
-  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento()]).finally(()=>{
+  Promise.all([loadResumo(), loadEditais(), loadConfig(), loadColetaStatus(), verificarRecalculoEmAndamento(), carregarNotificacoes()]).finally(()=>{
     setTimeout(()=>{ const s=$('#splash'); if(s){ s.classList.add('out'); setTimeout(()=>s.remove(),420); } }, 300);
   });
-  setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); }, 30000);
+  setInterval(()=>{ loadResumo(); if(!_recalcTimer) loadColetaStatus(); verificarRecalculoEmAndamento(); carregarNotificacoes(); }, 30000);
 })();
 </script>
 </body>

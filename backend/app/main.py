@@ -4511,6 +4511,107 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
     } for d in docs]
 
 
+@app.get("/api/notificacoes")
+def notificacoes(user: Usuario = Depends(_auth.get_current_user),
+                 db: Session = Depends(get_session)):
+    """Central de notificações no app -- pedido do usuário: sinais computados
+    AO VIVO a partir de dado que já existe, sem tabela de eventos nova nem
+    "marcar como lida" à parte:
+
+    1. Editais com o prazo de propostas fechando -- MESMO critério do
+       lembrete por e-mail/Telegram já existente (interessante OU nível
+       forte, ver lembretes.verificar_prazos/telegram_menu._pendentes_prazo),
+       união com "Vou participar" (pedido original: quem marcou que vai
+       participar precisa saber, mesmo que o motor não tenha marcado como
+       forte/interessante). Mesmo limiar de dias, settings.LEMBRETE_PRAZO_DIAS.
+    2. Editais de alta compatibilidade (nível forte) que vão ABRIR em
+       breve -- mesmo critério do e-mail (lembretes.verificar_aberturas):
+       dentro da janela de Usuario.dias_antecedencia, só se
+       Usuario.avisar_abertura. Clicar aqui NÃO abre um edital específico
+       (pedido do usuário) -- abre a lista de Editais já filtrada por
+       nível "forte", porque normalmente tem mais de um.
+    3. Documentos de habilitação vencendo (mesmo limiar do checklist do
+       edital, settings.LEMBRETE_DOC_DIAS -- ver checklist_habilitacao.py).
+    4. Análises por IA que terminaram depois da última vez que o usuário
+       esteve naquele edital (Edital.analise_em > Match.interagido_em) --
+       clicar pra ver JÁ atualiza interagido_em (abrirPaginaEdital), então
+       a notificação some sozinha, sem precisar de estado de "lida" à
+       parte. analise_ia é cache POR EDITAL (não por usuário) -- em
+       teoria outro usuário rodando a análise deste mesmo edital também
+       dispara isso aqui, mas como só roda a pedido explícito (nunca
+       automático) e o cache normalmente já está pronto, isso é raro na
+       prática.
+
+    Cada item já vem com pra onde a notificação deve levar ao clicar."""
+    hoje = date.today()
+    itens = []
+
+    q_prazo = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+              .where(Match.usuario_id == user.id)
+              .where(Edital.data_encerramento.is_not(None))
+              .where(or_(Match.status == STATUS_PARTICIPACAO,
+                        Match.interessante.is_(True), Match.nivel == "forte")))
+    for match, ed in db.execute(q_prazo).all():
+        dias = (ed.data_encerramento - hoje).days
+        if 0 <= dias <= settings.LEMBRETE_PRAZO_DIAS:
+            itens.append({
+                "tipo": "prazo", "edital_id": ed.id, "orgao": ed.orgao,
+                "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
+                "aba": "proposta",
+            })
+
+    if user.avisar_abertura:
+        q_abertura = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+                     .where(Match.usuario_id == user.id)
+                     .where(Match.nivel == "forte")
+                     .where(Edital.data_abertura.is_not(None))
+                     .where(Edital.data_abertura >= hoje))
+        editais_abrindo = []
+        for match, ed in db.execute(q_abertura).all():
+            dias = (ed.data_abertura - hoje).days
+            if dias <= max(0, user.dias_antecedencia):
+                editais_abrindo.append(ed)
+        if editais_abrindo:
+            itens.append({
+                "tipo": "abertura",
+                "detalhe": (f"{len(editais_abrindo)} editais de alta compatibilidade vão abrir em breve"
+                           if len(editais_abrindo) > 1 else "Um edital de alta compatibilidade vai abrir em breve"),
+                "filtro": {"nivel": "forte"},
+            })
+
+    q_docs = (select(Documento).where(Documento.usuario_id == user.id)
+             .where(Documento.ativo.is_(True))
+             .where(Documento.data_validade.is_not(None)))
+    for d in db.execute(q_docs).scalars():
+        dias = (d.data_validade - hoje).days
+        # inclui já vencido (dias<0), não só "vence em breve" -- um
+        # documento vencido é mais urgente que um vencendo, não menos.
+        if dias <= settings.LEMBRETE_DOC_DIAS:
+            if dias < 0:
+                detalhe = f"vencido há {abs(dias)} dia(s)"
+            elif dias == 0:
+                detalhe = "vence hoje"
+            else:
+                detalhe = f"vence em {dias} dia(s)"
+            itens.append({
+                "tipo": "documento", "documento_id": d.id, "nome": d.nome,
+                "detalhe": detalhe,
+            })
+
+    q_analise = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+                .where(Match.usuario_id == user.id)
+                .where(Edital.analise_em.is_not(None)))
+    for match, ed in db.execute(q_analise).all():
+        if match.interagido_em is None or ed.analise_em > match.interagido_em:
+            itens.append({
+                "tipo": "analise", "edital_id": ed.id, "orgao": ed.orgao,
+                "detalhe": "análise por IA concluída",
+                "aba": "analise",
+            })
+
+    return {"total": len(itens), "itens": itens}
+
+
 _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 _TAMANHO_MAX_UPLOAD_DOCUMENTO = 15 * 1024 * 1024  # 15 MB
 
