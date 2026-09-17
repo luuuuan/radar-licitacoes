@@ -334,6 +334,108 @@ def test_dias_restantes_antes_da_abertura_conta_ate_abertura_nao_ate_encerrament
     assert r["resultados"][0]["dias_restantes"] == 3
 
 
+# --------- status_prazo: "Recebendo proposta" entre início e fim --------- #
+# Pedido do usuário: o PNCP chama de "Data de início/fim de recebimento de
+# propostas" (= data_abertura/data_encerramento aqui). "faltam X dias"
+# continua contando até data_abertura; NO período entre início e fim, o
+# status vira "recebendo" (badge novo, "Recebendo proposta"); depois do
+# fim, "encerrado" (já existia como conceito, só não tinha nome próprio).
+
+def test_status_prazo_antes_da_abertura_e_aguardando():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje + timedelta(days=3),
+                           data_encerramento=hoje + timedelta(days=40))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["status_prazo"] == "aguardando"
+
+
+def test_status_prazo_entre_abertura_e_encerramento_e_recebendo():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje - timedelta(days=5),
+                           data_encerramento=hoje + timedelta(days=10))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["status_prazo"] == "recebendo"
+
+
+def test_status_prazo_depois_do_encerramento_e_encerrado():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    _edital_com_match(db, u, "ed1",
+                      data_abertura=hoje - timedelta(days=20),
+                      data_encerramento=hoje - timedelta(days=5))
+
+    r = _listar(db, u, vista="todos")
+
+    assert r["resultados"][0]["status_prazo"] == "encerrado"
+
+
+def test_status_prazo_no_dia_exato_da_abertura_ja_e_recebendo():
+    """A janela abre no próprio dia de data_abertura -- não precisa esperar
+    o dia seguinte pra começar a receber."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje, data_encerramento=hoje + timedelta(days=10))
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["status_prazo"] == "recebendo"
+
+
+def test_status_prazo_no_dia_exato_do_encerramento_ainda_e_recebendo():
+    """O prazo vale até o fim do dia de data_encerramento -- só vira
+    "encerrado" no dia SEGUINTE."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = date.today()
+    ed = _edital_com_match(db, u, "ed1",
+                           data_abertura=hoje - timedelta(days=10), data_encerramento=hoje)
+
+    r = _listar(db, u, vista="ativos")
+
+    assert r["resultados"][0]["edital_id"] == ed.id
+    assert r["resultados"][0]["status_prazo"] == "recebendo"
+
+
+def test_status_prazo_sem_nenhuma_data_e_aguardando():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_match(db, u, "ed1", data_abertura=None, data_encerramento=None)
+
+    r = _listar(db, u, vista="todos")
+
+    assert r["resultados"][0]["status_prazo"] == "aguardando"
+
+
+def test_sem_match_tambem_expoe_status_prazo():
+    hoje = date.today()
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_sem_match(db, "ed-janela-aberta", itens=["Grampeador de mesa"],
+                           data_abertura=hoje - timedelta(days=5),
+                           data_encerramento=hoje + timedelta(days=10))
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert r["sem_match"][0]["edital_id"] == ed.id
+    assert r["sem_match"][0]["status_prazo"] == "recebendo"
+
+
 def test_sem_match_inclui_edital_com_abertura_passada_mas_encerramento_futuro():
     hoje = date.today()
     db = _sessao()

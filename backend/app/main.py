@@ -1350,6 +1350,47 @@ def _dias_restantes_edital(ed: Edital) -> int | None:
     return (limite - hoje).days if limite else None
 
 
+def _status_prazo_edital(ed: Edital) -> str:
+    """Fase do prazo de recebimento de propostas (pedido do usuário: o PNCP
+    chama de "Data de início/fim de recebimento de propostas" -- são
+    exatamente data_abertura/data_encerramento): "aguardando" antes de
+    data_abertura (contagem "faltam X dias" continua sendo até aqui),
+    "recebendo" entre data_abertura e data_encerramento (a janela está
+    literalmente aberta agora -- hoje isso não tinha rótulo nenhum, só
+    parava de contar dias), "encerrado" depois de data_encerramento.
+    Companheiro de _dias_restantes_edital (mesmas datas, mesmo fallback pra
+    data_abertura quando não tem data_encerramento cadastrada) -- devolve a
+    FASE em vez da contagem, porque um dias_restantes positivo sozinho não
+    diz se ainda não abriu ou se já abriu e ainda não fechou."""
+    hoje = date.today()
+    if ed.data_abertura and hoje < ed.data_abertura:
+        return "aguardando"
+    limite = ed.data_encerramento or ed.data_abertura
+    if not limite:
+        return "aguardando"
+    return "encerrado" if hoje > limite else "recebendo"
+
+
+def _bloqueio_edicao_edital(ed: Edital, match: Match | None, user: Usuario, db: Session) -> str | None:
+    """None se a edição deste edital (análise por IA, troca/confirmação de
+    item, preço de cotação, proposta) está liberada; senão, a mensagem pro
+    403. Pedido do usuário: trava quando (a) o usuário já marcou o status
+    como "ganho" (processo resolvido, editar não faz mais sentido) OU (b)
+    o prazo de propostas encerrou (ver _status_prazo_edital) E nenhum item
+    deste edital foi confirmado (_produtos_confirmados_por_numero vazio --
+    nunca houve engajamento, perdeu a janela, não tem mais o que fazer
+    aqui). Edital "aguardando"/"recebendo", ou "encerrado" mas com item já
+    confirmado (pode estar organizando a proposta depois do prazo),
+    continua liberado. `match`: já resolvido pelo chamador (evita consultar
+    de novo -- a maioria dos endpoints que checam isso já precisa dele pro
+    resto da lógica)."""
+    if match and match.status == "ganho":
+        return 'Este edital já foi marcado como "Ganho" — a edição foi bloqueada.'
+    if _status_prazo_edital(ed) == "encerrado" and not _produtos_confirmados_por_numero(ed.id, user, db):
+        return "O prazo de propostas deste edital já encerrou e nenhum item foi selecionado — a edição foi bloqueada."
+    return None
+
+
 def _inicio_hoje_utc() -> datetime:
     """Início do dia de hoje no fuso de Brasília, convertido para UTC naïve
     (coletado_em é gravado em UTC). Serve para contar 'coletados hoje'."""
@@ -1679,7 +1720,7 @@ def listar_editais(
             "plataforma": ed.plataforma,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
-            "dias_restantes": dias, "link": ed.link,
+            "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed), "link": ed.link,
             "score": match.score if match else None, "nivel": match.nivel if match else None,
             "itens_compativeis": itens_compativeis,
             "lido": match.lido if match else False, "interessante": match.interessante if match else False,
@@ -1758,7 +1799,8 @@ def listar_editais(
                 "plataforma": ed.plataforma,
                 "valor_estimado": ed.valor_estimado,
                 "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
-                "dias_restantes": dias, "link": ed.link, "itens_batem": itens_batem,
+                "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
+                "link": ed.link, "itens_batem": itens_batem,
             })
 
     return {
@@ -2113,7 +2155,8 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "plataforma": ed.plataforma, "link_sistema_origem": ed.link_sistema_origem,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
-            "dias_restantes": dias,
+            "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
+            "bloqueio_edicao": _bloqueio_edicao_edital(ed, match, user, db),
             "nivel": match.nivel if match else None,
             "score": match.score if match else None,
             "match_id": match.id if match else None,
@@ -2152,8 +2195,15 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
     garante ser o mesmo produto). `produto_id: null` = "nenhuma destas".
     A confirmação sobrevive a recálculos futuros — ver
     service._mesclar_confirmacoes_manuais."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
+
     if not match:
         # Editais sem nenhum sinal textual (nivel "fraco") nunca ganham Match
         # — de propósito, ver _gerar_matches_usuario. Mas a comparação de
@@ -2162,9 +2212,6 @@ def confirmar_item_edital(edital_id: int, numero: int, body: ConfirmarItemIn,
         # essa sugestão sempre batia em 404 ("Edital sem match"), mesmo o
         # usuário tendo acabado de confirmar que o produto É o certo — a
         # própria confirmação já é sinal suficiente de relevância.
-        ed = db.get(Edital, edital_id)
-        if not ed:
-            raise HTTPException(404, "Edital não encontrado")
         match = Match(edital_id=edital_id, usuario_id=user.id, score=0.0,
                       nivel="medio", detalhe={"itens": []})
         db.add(match)
@@ -2235,6 +2282,11 @@ def definir_preco_cotacao(edital_id: int, numero: int, body: PrecoCotacaoIn,
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
     existe = db.execute(select(ItemEdital.id).where(
         ItemEdital.edital_id == edital_id, ItemEdital.numero == numero)).scalar_one_or_none()
     if existe is None:
@@ -3329,6 +3381,11 @@ def analise_edital_iniciar(edital_id: int, bg: BackgroundTasks, forcar: bool = Q
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
     chave = (user.id, edital_id)
     if _analise_status.get(chave, {}).get("rodando"):
         return {"ok": False, "em_andamento": True,
@@ -4316,6 +4373,11 @@ def salvar_proposta(edital_id: int, dados: PropostaIn,
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
     prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
                       .where(Proposta.usuario_id == user.id)).scalars().first()
     if prop is None:

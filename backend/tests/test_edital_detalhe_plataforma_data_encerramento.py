@@ -61,3 +61,46 @@ def test_detalhe_plataforma_e_data_encerramento_none_quando_nao_coletados():
     assert r["edital"]["plataforma"] is None
     assert r["edital"]["link_sistema_origem"] is None
     assert r["edital"]["data_encerramento"] is None
+
+
+# --------- status_prazo: "Recebendo proposta" entre início e fim --------- #
+
+def test_detalhe_status_prazo_recebendo_quando_dentro_da_janela():
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP",
+               data_abertura=datetime.date.today() - datetime.timedelta(days=2),
+               data_encerramento=datetime.date.today() + datetime.timedelta(days=5))
+    db.add(ed)
+    db.commit()
+
+    r = edital_detalhe(edital_id=ed.id, user=u, db=db)
+
+    assert r["edital"]["status_prazo"] == "recebendo"
+
+
+def test_detalhe_status_prazo_aguardando_antes_da_abertura():
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP",
+               data_abertura=datetime.date.today() + datetime.timedelta(days=3))
+    db.add(ed)
+    db.commit()
+
+    r = edital_detalhe(edital_id=ed.id, user=u, db=db)
+
+    assert r["edital"]["status_prazo"] == "aguardando"
+
+
+def test_detalhe_status_prazo_encerrado_depois_do_fim():
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP",
+               data_abertura=datetime.date.today() - datetime.timedelta(days=20),
+               data_encerramento=datetime.date.today() - datetime.timedelta(days=1))
+    db.add(ed)
+    db.commit()
+
+    r = edital_detalhe(edital_id=ed.id, user=u, db=db)
+
+    assert r["edital"]["status_prazo"] == "encerrado"
