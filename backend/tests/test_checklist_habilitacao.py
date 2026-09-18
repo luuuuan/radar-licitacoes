@@ -165,6 +165,40 @@ def test_documento_nao_relacionado_nao_atende_cndt_so_por_palavra_de_ligacao():
     assert resultado[0]["status"] == "nao_cadastrado"
 
 
+def test_certidao_estadual_nao_perde_pra_certidao_federal_com_vocabulario_parecido():
+    """Achado real (descoberto ao verificar a correção acima em produção,
+    edital 136161): a certidão FEDERAL do usuário batia com a exigência de
+    Fazenda ESTADUAL (0.60) em vez da certidão estadual de verdade que ele
+    tinha cadastrada (0.55) -- as duas compartilham tanto vocabulário
+    genérico ("certidão negativa de débitos... tributos...") que a palavra
+    que realmente distingue a esfera de governo não bastava sozinha."""
+    exigidos = {"juridica": [], "tecnica": [], "economico_financeira": [], "declaracoes": [],
+               "fiscal_trabalhista": [
+                   "Prova de regularidade junto à Fazenda Estadual (Certidão Negativa conjunta junto aos Tributos Estaduais)"]}
+    usuario = [
+        {"id": 1, "nome": "CERTIDÃO NEGATIVA DE DÉBITOS RELATIVOS AOS TRIBUTOS FEDERAIS E À DIVIDA DA UNIÃO",
+         "data_validade": date.today() + timedelta(days=100), "ativo": True},
+        {"id": 2, "nome": "CERTIDAO NEGATIVA DE DEBITOS TRIBUTARIOS E DE DIVIDA ATIVA ESTADUAL",
+         "data_validade": date.today() + timedelta(days=100), "ativo": True},
+    ]
+    resultado = montar(exigidos, usuario)
+    assert resultado[0]["documento_id"] == 2
+
+
+def test_certidao_municipal_nao_perde_pra_certidao_federal_com_vocabulario_parecido():
+    exigidos = {"juridica": [], "tecnica": [], "economico_financeira": [], "declaracoes": [],
+               "fiscal_trabalhista": [
+                   "Prova de regularidade junto à Fazenda Municipal (Certidão Negativa junto aos Tributos Municipais)"]}
+    usuario = [
+        {"id": 1, "nome": "CERTIDÃO NEGATIVA DE DÉBITOS RELATIVOS AOS TRIBUTOS FEDERAIS E À DIVIDA DA UNIÃO",
+         "data_validade": date.today() + timedelta(days=100), "ativo": True},
+        {"id": 2, "nome": "CERTIDAO NEGATIVA DE DEBITOS RELATIVOS AOS TRIBUTOS MUNICIPAIS (MOBILIARIOS E IMOBILIARIOS)",
+         "data_validade": date.today() + timedelta(days=100), "ativo": True},
+    ]
+    resultado = montar(exigidos, usuario)
+    assert resultado[0]["documento_id"] == 2
+
+
 def test_documento_cadastrado_vencido_ainda_reporta_vencido_quando_o_match_e_correto():
     exigidos = {"juridica": [], "fiscal_trabalhista": ["CNDT"], "tecnica": [], "economico_financeira": [], "declaracoes": []}
     usuario = [_doc("Certidão Negativa de Débitos Trabalhistas", dias_para_vencer=-5)]

@@ -93,6 +93,41 @@ def _normalizar_doc(nome: str) -> str:
     return n
 
 
+# achado real (edital 136161, descoberto ao verificar a correção acima em
+# produção): "Prova de regularidade junto à Fazenda ESTADUAL" batia com a
+# certidão FEDERAL do usuário (0.60) em vez da certidão estadual de verdade
+# que ele tinha cadastrada (0.55) -- as duas certidões compartilham tanto
+# vocabulário genérico ("certidão negativa de débitos... tributos...") que a
+# ÚNICA palavra que realmente distingue uma esfera de governo da outra
+# ("estadual" vs. "federal"/"nacional") não pesa o suficiente sozinha pra
+# virar o placar. Nunca existe ambiguidade real entre essas 3 esferas (são
+# mutuamente exclusivas por definição) -- quando a exigência menciona uma e
+# o candidato menciona outra DIFERENTE, é sinal forte de documento errado,
+# mesmo com o resto do texto parecido.
+_ESFERAS_GOVERNO = {
+    "federal": {"federal", "federais", "nacional", "uniao"},
+    "estadual": {"estadual", "estaduais"},
+    "municipal": {"municipal", "municipais"},
+}
+
+
+def _esferas_mencionadas(texto_norm: str) -> set[str]:
+    tokens = set(texto_norm.split())
+    return {esfera for esfera, palavras in _ESFERAS_GOVERNO.items() if tokens & palavras}
+
+
+def _score(alvo_norm: str, cand_norm: str) -> float:
+    """min(set, sort): ver _LIMIAR_MATCH -- token_set_ratio sozinho é
+    enviesado a favor de candidatos com nome CURTO. Penaliza quando exigido
+    e candidato citam esferas de governo diferentes (ver _ESFERAS_GOVERNO)."""
+    base = min(fuzz.token_set_ratio(alvo_norm, cand_norm),
+              fuzz.token_sort_ratio(alvo_norm, cand_norm)) / 100.0
+    esf_alvo, esf_cand = _esferas_mencionadas(alvo_norm), _esferas_mencionadas(cand_norm)
+    if esf_alvo and esf_cand and not (esf_alvo & esf_cand):
+        base *= 0.6
+    return base
+
+
 def _status_validade(dias: int) -> str:
     if dias < 0:
         return "vencido"
@@ -149,11 +184,7 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
             alvo = _normalizar_doc(exigido)
             melhor, melhor_score = None, 0.0
             for c in candidatos:
-                # min(set, sort): ver _LIMIAR_MATCH -- token_set_ratio
-                # sozinho é enviesado a favor de candidatos com nome CURTO
-                # (poucas palavras de ligação em comum já infla o score).
-                score = min(fuzz.token_set_ratio(alvo, c["_norm"]),
-                           fuzz.token_sort_ratio(alvo, c["_norm"])) / 100.0
+                score = _score(alvo, c["_norm"])
                 if score > melhor_score:
                     melhor, melhor_score = c, score
             if melhor and melhor_score >= _LIMIAR_MATCH:
