@@ -48,9 +48,13 @@ VERSAO_PROMPT = 12
 # rodado a verificação antes de uma correção continuava vendo o resultado
 # ANTIGO pra sempre, até editar um documento ou clicar "Realizar nova
 # análise" -- ao contrário de Edital.analise_ia, que já era corretamente
-# versionado por VERSAO_PROMPT. Incremente ao mudar _formatar_requisitos ou
-# _PROMPT_VERIFICACAO_DOCUMENTOS.
-VERSAO_VERIFICACAO_DOCUMENTOS = 1
+# versionado por VERSAO_PROMPT. Incremente ao mudar _formatar_requisitos,
+# _PROMPT_VERIFICACAO_DOCUMENTOS ou verificar_documentos_usuario (ex.: v2 =
+# corrige corte de documentos_usuario[:8] pra orçamento de caracteres,
+# achado real do edital 126768 -- sem incrementar aqui, quem já tinha
+# rodado a verificação incompleta continuaria vendo o resultado velho
+# mesmo depois do código corrigido).
+VERSAO_VERIFICACAO_DOCUMENTOS = 2
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
