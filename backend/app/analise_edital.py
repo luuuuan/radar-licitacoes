@@ -828,7 +828,20 @@ def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativa
             return None, ultimo_erro
         if r.status_code != 200:
             log.warning("%s HTTP %s: %s", rotulo, r.status_code, r.text[:200])
-            return None, f"http_{r.status_code}"
+            # achado real (edital 125821): 413 do Gemini persistindo mesmo
+            # trocando de chave/tamanho de texto -- sem acesso a log de
+            # produção pra ver o corpo real da resposta, o "http_413" sozinho
+            # não dizia se o erro vinha mesmo do Gemini (limite real deles) ou
+            # de algo no caminho de rede (proxy/egress) antes de chegar lá.
+            # Anexa um trecho curto do corpo da resposta ao erro (só nesse
+            # branch genérico -- 429/5xx já têm log dedicado e continuam
+            # exatos "http_429"/"http_5xx" pros comparadores que dependem
+            # disso) pra aparecer no "detalhe" que o app expõe.
+            detalhe = r.text[:200].strip()
+            erro = f"http_{r.status_code}"
+            if detalhe:
+                erro = f"{erro}:{detalhe}"
+            return None, erro
         try:
             return extrair_texto(r.json()), "ok"
         except (ValueError, KeyError, IndexError):
@@ -1007,8 +1020,10 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         if txt is not None:
             return txt, erro
         ultimo_erro = erro
-        eh_transiente = (erro.startswith("http_5") or erro in ("http_429", "http_404")
-                        or erro.startswith("rede:"))
+        # startswith, não == -- erro pode vir com um trecho do corpo da
+        # resposta colado depois de ":" (ver _post_com_retry).
+        eh_transiente = (erro.startswith("http_5") or erro.startswith("http_429")
+                        or erro.startswith("http_404") or erro.startswith("rede:"))
         if not eh_transiente:
             return None, ultimo_erro
 
@@ -1161,7 +1176,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
     # parte dela.
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
                      response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
-    if st == "http_413":
+    if st.startswith("http_413"):   # startswith: st pode vir com o corpo da resposta colado
         # Achado real (edital 125821): MAX_TOTAL=200000 reproduziu HTTP 413
         # de verdade no Gemini mesmo já sem a inflação de ensure_ascii (ver
         # _chamar_modelo) -- o teto exato que o Gemini aceita pra esse

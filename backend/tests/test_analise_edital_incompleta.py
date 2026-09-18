@@ -96,4 +96,4 @@ def test_413_do_gemini_sem_sucesso_na_retentativa_ainda_reporta_erro(monkeypatch
     resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "erro_ia"
-    assert resultado["detalhe"] == "http_413"
+    assert resultado["detalhe"] == "http_413:Request Entity Too Large"

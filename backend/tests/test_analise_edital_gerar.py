@@ -136,7 +136,7 @@ def test_gerar_nao_usa_fallback_em_outro_4xx_que_nao_429(monkeypatch):
               return_value=MagicMock(status_code=400, text="bad request")) as mock_post:
         txt, status = _gerar("prompt", api_key="fake-key")
 
-    assert status == "http_400"
+    assert status == "http_400:bad request"
     assert mock_post.call_count == 1   # nem tentou o fallback
 
 
@@ -248,7 +248,7 @@ def test_gerar_nao_tenta_groq_em_outro_4xx_que_nao_429(monkeypatch):
               return_value=MagicMock(status_code=400, text="bad request")) as mock_post:
         txt, status = _gerar("prompt", api_key="fake-key")
 
-    assert status == "http_400"
+    assert status == "http_400:bad request"
     assert mock_post.call_count == 1   # nem o Gemini retentou, nem foi pra Groq
 
 
