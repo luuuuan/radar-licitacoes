@@ -1058,6 +1058,16 @@ def _prioridade_arquivo(a: dict) -> int:
     return 3
 
 
+# Achado real (edital 125821): quando o texto do edital estoura o teto de
+# tamanho de requisição do Gemini (HTTP 413 -- limite exato não é
+# documentado publicamente), a retentativa dentro de analisar() trunca pro
+# último valor que já rodou de verdade em produção sem erro, em vez de
+# desistir de vez. Módulo-level (não dentro de analisar()) porque o 413
+# pode acontecer também no caminho de texto_pronto (cache), que pula o
+# bloco onde MAX_TOTAL é calculado.
+_MAX_TOTAL_SEGURO_413 = 80000
+
+
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
             texto_pronto: dict | None = None) -> dict:
     """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
@@ -1141,6 +1151,20 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
     # parte dela.
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
                      response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
+    if st == "http_413":
+        # Achado real (edital 125821): MAX_TOTAL=200000 reproduziu HTTP 413
+        # de verdade no Gemini mesmo já sem a inflação de ensure_ascii (ver
+        # _chamar_modelo) -- o teto exato que o Gemini aceita pra esse
+        # campo não é documentado publicamente, então em vez de mirar um
+        # número exato (arriscando cair de novo), reagimos ao 413 truncando
+        # pro último valor que já rodou de verdade em produção sem erro
+        # (_MAX_TOTAL_SEGURO_413 = o antigo MAX_TOTAL de 80000) e tentando
+        # uma vez mais -- graceful degradation (edital gigante ainda gera
+        # uma análise parcial, sinalizada por analise_incompleta, em vez de
+        # falhar por completo) em vez de travar a análise inteira.
+        texto = texto[:_MAX_TOTAL_SEGURO_413]
+        txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
+                         response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st, "_texto_extraido": texto, "_fonte_extraida": fonte}
     data = _parse_json(txt)
