@@ -1082,7 +1082,16 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # conta própria em _GROQ_LIMITE_PROMPT_BYTES -- não depende deste
         # valor. max_paginas também sobe (senão o PDF para de ser lido bem
         # antes de bater esse teto de caracteres).
-        MAX_TOTAL = 80000
+        #
+        # 80000 -> 200000 (achado real, edital 125821, PNCP
+        # 88830609000139/2026/371): depois de corrigir a leitura de .odt
+        # (ver _e_odt), um edital com catálogo de 90+ itens ESTOURAVA DE
+        # VERDADE o teto de 80000 no meio da tabela de itens do Anexo I --
+        # a seção de habilitação/prazos/multas já tinha sido capturada
+        # antes do corte (não é a mesma classe de bug do .odt, que perdia
+        # o documento inteiro), mas o usuário pediu pra também cobrir esse
+        # caso por completo.
+        MAX_TOTAL = 200000
         partes, fontes = [], []
         falhou_download = False
         for a in candidatos[:5]:
