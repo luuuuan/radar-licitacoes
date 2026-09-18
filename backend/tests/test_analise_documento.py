@@ -405,6 +405,7 @@ def test_comparar_catalogo_resposta_truncada_vira_resposta_invalida_e_loga(monke
 def test_gerar_manda_max_output_tokens_no_body(monkeypatch):
     """maxOutputTokens explícito evita que o Gemini corte a resposta no
     meio quando o JSON esperado é grande (muitos itens/candidatos)."""
+    import json as _json
     capturado = {}
 
     class _RespostaFake:
@@ -412,8 +413,10 @@ def test_gerar_manda_max_output_tokens_no_body(monkeypatch):
         def json(self):
             return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
 
-    def _post_fake(url, json=None, timeout=None, headers=None):
-        capturado["body"] = json
+    def _post_fake(url, data=None, timeout=None, headers=None):
+        # _chamar_modelo manda o corpo via data= (bytes), não json= --
+        # ver ensure_ascii=False em _post_com_retry.
+        capturado["body"] = _json.loads(data.decode("utf-8"))
         return _RespostaFake()
 
     monkeypatch.setattr(ia.requests, "post", _post_fake)

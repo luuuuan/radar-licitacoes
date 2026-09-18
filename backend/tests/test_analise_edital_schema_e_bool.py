@@ -7,6 +7,7 @@ edital diz que não aceita). Também confirma que analisar() manda o
 response_schema pro Gemini (força tipo/obrigatoriedade no decoder, reduz
 ainda mais o espaço pra esse tipo de erro). Rode com:  cd backend && pytest
 """
+import json
 from unittest.mock import patch, MagicMock
 
 from app.analise_edital import analisar, _RESPONSE_SCHEMA
@@ -61,7 +62,35 @@ def test_analisar_manda_response_schema_pro_gemini():
         analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert len(chamadas) == 1
-    assert chamadas[0]["json"]["generationConfig"]["responseSchema"] == _RESPONSE_SCHEMA
+    # _chamar_modelo manda o corpo via data= (bytes), não json= -- ver
+    # ensure_ascii=False em _post_com_retry.
+    corpo = json.loads(chamadas[0]["data"].decode("utf-8"))
+    assert corpo["generationConfig"]["responseSchema"] == _RESPONSE_SCHEMA
+
+
+def test_analisar_manda_corpo_pro_gemini_sem_inflar_acento_com_escape_unicode():
+    """Achado real (edital 125821, depois de subir MAX_TOTAL pra 200000):
+    requests.post(json=...) usa json.dumps ensure_ascii=True por padrão --
+    cada caractere acentuado vira um escape \\uXXXX de 6 bytes, até 3x os
+    2 bytes reais em UTF-8. Com um prompt grande em português isso sozinho
+    bastava pra estourar o limite de tamanho de requisição do Gemini
+    (HTTP 413), mesmo com o texto do edital dentro do teto de caracteres.
+    Mesma correção já aplicada à Groq (ver test_analise_edital_gerar.py)."""
+    arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
+    corpos_brutos = []
+
+    def _fake_post(url, data=None, **kw):
+        corpos_brutos.append(data)
+        return _resposta_gemini('{"objeto": "teste"}')
+
+    texto_acentuado = "cláusula de habilitação: certidão, inscrição, não aplicável. " * 20
+    with patch("app.analise_edital._baixar_texto_pdf", return_value=(texto_acentuado, False)), \
+         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+        analisar("Objeto de teste", arquivos, api_key="fake-key")
+
+    assert len(corpos_brutos) == 1
+    assert b"\\u" not in corpos_brutos[0]   # nada de escape unicode
+    assert "não aplicável".encode("utf-8") in corpos_brutos[0]   # bytes UTF-8 reais
 
 
 def test_schema_cobre_todas_as_chaves_top_level_obrigatorias():

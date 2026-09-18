@@ -787,9 +787,13 @@ def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativa
     por bytes de _chamar_groq: o corpo de verdade enviado podia ficar
     3x maior do que o que foi medido antes de truncar, reproduzindo o
     mesmo 413 que o corte deveria ter evitado. Serializa manualmente com
-    ensure_ascii=False (corpo de verdade menor E igual ao que foi medido)
-    quando o chamador pede -- Gemini continua no padrão (nunca foi capado
-    por bytes, não tem esse risco)."""
+    ensure_ascii=False (corpo de verdade menor) quando o chamador pede --
+    achado real #2 (edital 125821): "Gemini nunca foi capado por bytes,
+    não tem esse risco" só era verdade enquanto o teto de caracteres do
+    prompt (MAX_TOTAL) era pequeno o bastante pra nunca aproximar do
+    limite de tamanho de requisição do próprio Gemini, mesmo com a
+    inflação de 3x -- assim que MAX_TOTAL subiu, _chamar_modelo passou a
+    pedir ensure_ascii=False também."""
     ultimo_erro = "sem_resposta"
     for tentativa in range(1, max(1, tentativas) + 1):
         try:
@@ -833,13 +837,24 @@ def _post_com_retry(url: str, headers: dict, body: dict, timeout: int, tentativa
 
 
 def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas: int):
-    """1 modelo Gemini."""
+    """1 modelo Gemini.
+
+    ensure_ascii=False (achado real, edital 125821: HTTP 413 do Gemini
+    depois de subir MAX_TOTAL de 80000 pra 200000 chars): "Gemini nunca
+    foi capado por bytes, não tem esse risco" deixou de ser verdade assim
+    que o teto de caracteres subiu o bastante -- o mesmo problema já
+    corrigido pra Groq (ver docstring de _post_com_retry) também vale
+    aqui: sem isso, `requests` com `json=body` serializa com
+    ensure_ascii=True por padrão, e um prompt de 200000 caracteres em
+    português (cheio de ç/ã/é/õ) pode virar bem mais que 400KB de corpo
+    de verdade -- estourando o limite de tamanho de requisição do próprio
+    Gemini."""
     url = f"{_BASE}/{modelo}:generateContent"
     headers = {"x-goog-api-key": chave, "Content-Type": "application/json"}
     return _post_com_retry(
         url, headers, body, timeout, tentativas,
         extrair_texto=lambda d: d["candidates"][0]["content"]["parts"][0]["text"],
-        rotulo=f"Gemini texto ({modelo})")
+        rotulo=f"Gemini texto ({modelo})", ensure_ascii=False)
 
 
 # Achado real em produção (edital de 350 itens, modelo antigo

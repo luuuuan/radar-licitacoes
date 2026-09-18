@@ -7,10 +7,19 @@ mandado pra ela agora carrega marcadores reais: "=== DOCUMENTO: <nome> ==="
 no início de cada arquivo combinado, e "[pág. N]" antes de cada página.
 Rode com:  cd backend && pytest
 """
+import json
 import pypdf
 from unittest.mock import patch, MagicMock
 
 from app import analise_edital as ia
+
+
+def _corpo_de(kw: dict) -> dict:
+    """_chamar_modelo manda o corpo via data= (bytes), não json= -- ver
+    ensure_ascii=False em _post_com_retry (achado real: prompt grande em
+    português inflava até 3x com ensure_ascii=True, estourando o teto de
+    tamanho de requisição do Gemini)."""
+    return json.loads(kw["data"].decode("utf-8"))
 
 
 class _PaginaFake:
@@ -78,7 +87,7 @@ def test_analisar_marca_cada_documento_combinado_com_seu_titulo():
         resultado = ia.analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "ok"
-    texto_enviado = chamadas[0]["json"]["contents"][0]["parts"][0]["text"]
+    texto_enviado = _corpo_de(chamadas[0])["contents"][0]["parts"][0]["text"]
     assert "=== DOCUMENTO: Edital de Pregão nº 16/2026 ===" in texto_enviado
     assert "=== DOCUMENTO: Termo de Referência ===" in texto_enviado
     # o cabeçalho do 2º documento vem depois do texto do 1º -- confirma que

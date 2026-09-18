@@ -7,13 +7,17 @@ agora prioriza retificação/errata/aditamento antes do edital original, pra
 garantir que o texto mais atualizado sempre entre no que é mandado pra IA.
 Rode com:  cd backend && pytest
 """
+import json
 from unittest.mock import patch, MagicMock
 
 from app.analise_edital import analisar, _prioridade_arquivo
 
 
 def _texto_enviado_a_ia(chamada_post_kwargs) -> str:
-    return chamada_post_kwargs["json"]["contents"][0]["parts"][0]["text"]
+    # _chamar_modelo manda o corpo via data= (bytes), não json= -- ver
+    # ensure_ascii=False em _post_com_retry.
+    corpo = json.loads(chamada_post_kwargs["data"].decode("utf-8"))
+    return corpo["contents"][0]["parts"][0]["text"]
 
 
 def test_prioridade_arquivo_prioriza_retificacao_antes_do_edital():
