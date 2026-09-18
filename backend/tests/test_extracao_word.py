@@ -141,3 +141,123 @@ def test_baixar_texto_pdf_comum_continua_no_caminho_antigo(monkeypatch):
 
     assert chamadas == [1]
     assert r == ("texto do pdf", False)
+
+
+# ---------------------------------------------------------------------------
+# .odt (OpenDocument Text) — achado real (edital PNCP 88830609000139/2026/371,
+# usuário reportou "análise parece cortada" no edital 125821): o órgão
+# publicou o edital E o termo de referência em .odt dentro de um .zip. Sem
+# suporte, os dois caíam no mesmo balde do .zip "burro" de PDFs soltos
+# (_texto_de_zip), que só olhava extensão .pdf — a IA analisava só os
+# anexos PDF secundários (mapa de riscos, ETP) e nunca o edital de
+# verdade. O aviso "análise incompleta" estava certo (faltava a seção de
+# habilitação), mas o motivo real não era o teto de 80000 caracteres.
+# ---------------------------------------------------------------------------
+
+_MIMETYPE_ODT = "application/vnd.oasis.opendocument.text"
+
+
+def test_e_odt_detecta_mimetype_opendocument():
+    assert ia._e_odt(_zip_bytes({"mimetype": _MIMETYPE_ODT, "content.xml": "<xml/>"})) is True
+
+
+def test_e_odt_falso_pra_zip_comum_de_pdfs():
+    assert ia._e_odt(_zip_bytes({"edital.pdf": "conteudo fake"})) is False
+
+
+def test_e_odt_falso_pra_docx():
+    """docx não tem o arquivo "mimetype" do ODF -- discrimina os dois
+    formatos, ambos zip por dentro."""
+    assert ia._e_odt(_zip_bytes({"word/document.xml": "<xml/>"})) is False
+
+
+def test_baixar_texto_detecta_odt_via_zip_e_usa_conversor_word(monkeypatch):
+    conteudo = _zip_bytes({"mimetype": _MIMETYPE_ODT, "content.xml": "<xml/>"})
+    monkeypatch.setattr(ia.requests, "get", lambda *a, **k: _RespostaFake(conteudo))
+    chamadas = []
+    monkeypatch.setattr(ia, "_texto_de_word_bytes",
+                        lambda conteudo, ext, max_chars: chamadas.append(ext) or "texto do odt")
+
+    r = ia._baixar_texto_pdf("http://exemplo/arquivo")
+
+    assert chamadas == [".odt"]
+    assert r == ("texto do odt", False)
+
+
+def test_texto_de_zip_processa_odt_alem_de_pdf(monkeypatch):
+    """Regressão do achado real: um zip "burro" com o edital em .odt e um
+    anexo em .pdf precisa processar os DOIS, não só o .pdf."""
+    conteudo = _zip_bytes({
+        "edital.odt": "conteudo fake de odt",
+        "anexo.pdf": "conteudo fake de pdf",
+    })
+    monkeypatch.setattr(ia, "_texto_de_pdf_bytes", lambda *a, **k: "texto do pdf")
+    monkeypatch.setattr(ia, "_texto_de_word_bytes", lambda *a, **k: "texto do odt")
+
+    texto = ia._texto_de_zip(conteudo, max_paginas=40, max_chars=24000)
+
+    assert "texto do odt" in texto
+    assert "texto do pdf" in texto
+
+
+def test_texto_de_zip_ignora_extensao_nao_suportada():
+    conteudo = _zip_bytes({"planilha.xlsx": "conteudo fake", "edital.pdf": "conteudo fake"})
+    assert "planilha" not in ia._texto_de_zip(conteudo, max_paginas=40, max_chars=24000).lower()
+
+
+class TestPrioridadeArquivoZip:
+    def test_retificacao_vem_primeiro(self):
+        assert ia._prioridade_arquivo_zip("RETIFICACAO_01.odt") == 0
+
+    def test_edital_vem_antes_de_termo_de_referencia(self):
+        assert ia._prioridade_arquivo_zip("Edital.odt") < ia._prioridade_arquivo_zip(
+            "Anexo I - Termo de Referencia.odt")
+
+    def test_nome_generico_sem_edital_no_titulo_fica_acima_de_anexo_secundario(self):
+        """Achado real: o edital principal costuma vir nomeado só com um
+        código de processo (ex.: "PESRP170-26.odt"), sem a palavra
+        "edital" -- não pode cair no mesmo catch-all que uma minuta/ata,
+        senão perde a vaga pra elas quando o zip tem mais itens do que o
+        limite processado."""
+        generico = ia._prioridade_arquivo_zip("PESRP170-26.odt")
+        minuta = ia._prioridade_arquivo_zip("Anexo III - Minuta de Termo de Contrato.odt")
+        ata = ia._prioridade_arquivo_zip("Anexo_II__Minuta_de_Ata_de_Registro_de_Precos_.odt")
+        mapa_risco = ia._prioridade_arquivo_zip("Mapa_de_Riscos_ata_registro_de_precos_ETI.pdf")
+        assert generico < minuta
+        assert generico < ata
+        assert generico < mapa_risco
+
+    def test_termo_de_referencia_vem_antes_de_anexo_secundario(self):
+        assert ia._prioridade_arquivo_zip("Anexo I - Termo de Referencia.odt") < \
+            ia._prioridade_arquivo_zip("Estimativa de precos.pdf")
+
+
+def test_texto_de_zip_prioriza_edital_sobre_anexo_secundario_quando_zip_grande(monkeypatch):
+    """Regressão do achado real (edital 125821): com mais arquivos do que
+    o limite processado (8), o edital (nome genérico de processo) e o
+    termo de referência não podem perder a vaga pra minutas/atas/mapas."""
+    monkeypatch.setattr(ia, "_texto_de_word_bytes", lambda conteudo, ext, max_chars: f"[odt:{max_chars}]")
+    monkeypatch.setattr(ia, "_texto_de_pdf_bytes", lambda *a, **k: "[pdf]")
+
+    arquivos = {
+        "PESRP170-26.odt": "edital",  # sem a palavra "edital" no nome, de propósito
+        "Anexo I - Termo de Referencia.odt": "tr",
+        "Anexo III - Minuta de Termo de Contrato.odt": "minuta",
+        "Anexo_II__Minuta_de_Ata_de_Registro_de_Precos_.odt": "ata",
+        "COLETA_DE_ESTIMATIVAS.pdf": "estimativa",
+        "Mapa_de_Riscos.pdf": "mapa",
+        "Declaracao_modelo.odt": "declaracao",
+        "Procuracao_modelo.odt": "procuracao",
+        "Planilha_apoio.pdf": "planilha",
+    }
+    conteudo = _zip_bytes(arquivos)
+
+    texto = ia._texto_de_zip(conteudo, max_paginas=40, max_chars=24000, marcar_paginas=True)
+
+    # com 9 itens suportados e o teto de 8 arquivos processados, exatamente
+    # 1 dos 7 anexos secundários (tier 4) fica de fora -- o importante é
+    # que o edital (nome genérico) e o termo de referência SEMPRE entram,
+    # não importa quantos anexos secundários existam.
+    assert "PESRP170-26.odt" in texto
+    assert "Anexo I - Termo de Referencia.odt" in texto
+    assert texto.count("=== DOCUMENTO:") == 8

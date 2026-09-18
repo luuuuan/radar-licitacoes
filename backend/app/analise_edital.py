@@ -257,6 +257,27 @@ def _e_docx(conteudo: bytes) -> bool:
         return False
 
 
+def _e_odt(conteudo: bytes) -> bool:
+    """.odt (OpenDocument Text, formato nativo do LibreOffice) também é um
+    .zip por dentro, como o .docx (_e_docx) -- só que com um arquivo
+    "mimetype" próprio em vez de word/document.xml. Achado real (edital
+    PNCP 88830609000139/2026/371, usuário reportou "análise incompleta"):
+    o órgão publicou o edital E o termo de referência em .odt dentro de um
+    .zip -- sem esta checagem, os dois caíam no mesmo balde do .zip "burro"
+    de PDFs soltos (_texto_de_zip), que só olhava extensão .pdf, e eram
+    simplesmente ignorados. A IA acabava analisando só os anexos PDF
+    secundários (mapa de riscos, ETP) e nunca o edital de verdade -- o
+    aviso "parece cortado" estava certo (faltava a seção de habilitação),
+    só que o motivo real não era o teto de 80000 caracteres, era o edital
+    nunca ter sido lido."""
+    import zipfile
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(conteudo))
+        return zf.read("mimetype").strip() == b"application/vnd.oasis.opendocument.text"
+    except Exception:
+        return False
+
+
 def _texto_de_word_bytes(conteudo: bytes, extensao: str, max_chars: int) -> str:
     """Converte .doc/.docx/.rtf pra texto via LibreOffice headless (binário
     'soffice', instalado no Dockerfile — pacote libreoffice-writer). Não dá
@@ -349,28 +370,79 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
     return texto
 
 
+_EXTENSOES_ZIP_SUPORTADAS = (".pdf", ".odt", ".docx", ".doc", ".rtf")
+
+
+def _prioridade_arquivo_zip(nome: str) -> int:
+    """Prioriza qual arquivo processar primeiro dentro de um zip "burro"
+    (_texto_de_zip), quando há mais itens do que cabem no limite. Não dá
+    pra reaproveitar _prioridade_arquivo (usada pra ranquear a lista de
+    "documentos" do PNCP, cada um já com um título/tipo estruturado) --
+    aqui só existe o NOME do arquivo dentro do zip, e o achado real (edital
+    PNCP 88830609000139/2026/371) é que o próprio edital principal costuma
+    vir nomeado só com um código de processo (ex.: "PESRP170-26.odt"), sem
+    a palavra "edital" em lugar nenhum -- caía no mesmo catch-all (pior
+    prioridade) que um anexo claramente secundário, e só não causava
+    problema aqui porque o zip tinha poucos itens. Sinal positivo
+    (retificação/edital/termo de referência) vem primeiro; sinal negativo
+    (claramente um anexo de apoio: minuta, ata, mapa de risco, planilha)
+    vai pro fim; nome genérico sem nenhum dos dois sinais -- o caso mais
+    comum pro próprio edital -- fica no meio, acima do que foi reconhecido
+    como secundário."""
+    n = nome.lower()
+    if any(p in n for p in ("retificaç", "retificac", "errata", "aditamento", "adendo")):
+        return 0
+    if "edital" in n:
+        return 1
+    if "termo de refer" in n or "termoreferencia" in n:
+        return 2
+    if any(p in n for p in (
+        "minuta", "ata de registro", "ata_de_registro", "mapa de risco", "mapa_de_risco",
+        "estimativa", "cotaç", "cotac", "pesquisa de preç", "pesquisa_de_preç",
+        "planilha", "declaraç", "declarac", "procuraç", "procurac", "contrato social",
+    )):
+        return 4
+    return 3
+
+
 def _texto_de_zip(conteudo: bytes, max_paginas: int, max_chars: int,
                   max_paginas_ocr: int | None = None, marcar_paginas: bool = False) -> str:
     """O PNCP às vezes publica um único 'documento' como um .zip contendo
-    vários PDFs (edital + anexos) em vez de um PDF direto. Sem isso, esses
-    editais caíam sempre em "sem_texto" (pypdf/pdf2image não leem .zip)."""
+    vários arquivos (edital + anexos) em vez de um PDF direto. Sem isso,
+    esses editais caíam sempre em "sem_texto" (pypdf/pdf2image não leem
+    .zip).
+
+    Processa .pdf E .odt/.docx/.doc/.rtf dentro do zip -- achado real
+    (edital PNCP 88830609000139/2026/371, ver _e_odt): antes só pegava
+    .pdf, então um zip com o edital/termo de referência em .odt e só os
+    anexos secundários em .pdf (mapa de riscos, ETP) analisava só os
+    anexos e nunca o edital de verdade, mesmo com espaço de sobra no teto
+    de caracteres. Ordena por _prioridade_arquivo_zip -- um zip pode ter
+    mais itens do que cabem no limite de arquivos processados, e o
+    edital/termo de referência (onde fica a habilitação) não pode perder
+    a vaga pra uma minuta de contrato ou ata de registro de preços."""
     import zipfile
     try:
         zf = zipfile.ZipFile(io.BytesIO(conteudo))
     except Exception:
         return ""
-    nomes_pdf = sorted(n for n in zf.namelist() if n.lower().endswith(".pdf"))
+    nomes = [n for n in zf.namelist() if n.lower().endswith(_EXTENSOES_ZIP_SUPORTADAS)]
+    nomes.sort(key=_prioridade_arquivo_zip)
     partes = []
     total = 0
-    for nome in nomes_pdf[:5]:
+    for nome in nomes[:8]:
         if total >= max_chars:
             break
         try:
             dados = zf.read(nome)
         except Exception:
             continue
-        t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total,
-                                max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas)
+        if nome.lower().endswith(".pdf"):
+            t = _texto_de_pdf_bytes(dados, max_paginas, max_chars - total,
+                                    max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas)
+        else:
+            extensao = "." + nome.rsplit(".", 1)[-1].lower()
+            t = _texto_de_word_bytes(dados, extensao, max_chars - total)
         if t:
             if marcar_paginas:
                 t = f"=== DOCUMENTO: {nome} ===\n{t}"
@@ -413,6 +485,8 @@ def _baixar_texto_pdf(url: str, timeout: int = 45, max_paginas: int = 40, max_ch
     if _e_zip(r.content):
         if _e_docx(r.content):
             return _texto_de_word_bytes(r.content, ".docx", max_chars), False
+        if _e_odt(r.content):
+            return _texto_de_word_bytes(r.content, ".odt", max_chars), False
         return _texto_de_zip(r.content, max_paginas, max_chars,
                              max_paginas_ocr=max_paginas_ocr, marcar_paginas=marcar_paginas), False
     return _texto_de_pdf_bytes(r.content, max_paginas, max_chars,
