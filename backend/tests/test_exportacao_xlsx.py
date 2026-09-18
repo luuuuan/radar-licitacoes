@@ -325,9 +325,12 @@ def test_cotacao_fornecedor_xlsx_cabecalho_so_tem_id_do_app_e_numero_pncp():
 
     assert ws["A1"].value == "ID:"
     assert ws["B1"].value == ed.id
-    # sem numeroControlePNCP estruturado (id_externo simples "ed1" no teste),
-    # _numero_processo_pncp não acha nada -- linha fica vazia, sem quebrar.
-    assert not ws["A2"].value
+    # id_externo simples ("ed1" no teste) não é o numeroControlePNCP de
+    # verdade, mas _ref_pncp cai pro link do PNCP (ed.link, sempre no
+    # formato .../cnpj/ano/sequencial -- ver _montar_link em
+    # connectors/pncp.py), que aqui É real -- então acha o número mesmo
+    # assim, em vez de deixar a linha vazia.
+    assert ws["A2"].value == " Nº 1/2026"
 
 
 def test_cotacao_fornecedor_xlsx_colunas_e_formula_do_total():

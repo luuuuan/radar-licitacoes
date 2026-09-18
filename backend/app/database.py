@@ -108,7 +108,8 @@ for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),
           # comentário em models.py (Match.notificado_2)
           ("notificado_2", "BOOLEAN DEFAULT FALSE"),
           ("prazo_avisado_telegram_2", "BOOLEAN DEFAULT FALSE"),
-          ("abertura_avisada_telegram_2", "BOOLEAN DEFAULT FALSE")):
+          ("abertura_avisada_telegram_2", "BOOLEAN DEFAULT FALSE"),
+          ("analise_vista_em", "TIMESTAMP")):
     if _c not in _COLUNAS_NOVAS["matches"]:
         _COLUNAS_NOVAS["matches"].append(_c)
 _COLUNAS_NOVAS.setdefault("logs_coleta", [])

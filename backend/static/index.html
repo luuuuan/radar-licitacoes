@@ -4860,7 +4860,7 @@ async function abaEdital(nome, forcar){
   // (sem toast, sem esperar resposta): abrir a página já entra direto numa
   // aba, então toda chamada daqui (inclusive a 1ª, "itens") conta como
   // interação de verdade, não só cliques em trocar de aba depois.
-  api(`/api/editais/${id}/interacao`, {method:'POST'}).catch(()=>{});
+  api(`/api/editais/${id}/interacao?aba=${encodeURIComponent(nome)}`, {method:'POST'}).catch(()=>{});
 
   // 1ª análise de um edital não roda sozinha (é cara: baixa PDF, roda OCR,
   // chama a IA pra ler o edital inteiro) — mostra um botão em vez de

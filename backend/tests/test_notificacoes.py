@@ -267,20 +267,39 @@ def test_analise_concluida_depois_da_ultima_visita_aparece():
     assert item["aba"] == "analise"
 
 
-def test_analise_concluida_antes_da_ultima_visita_nao_aparece():
-    """Usuário já viu o resultado (reabriu o edital depois que a análise
-    terminou) -- clicar/reabrir É a dispensa, não precisa de estado à
+def test_analise_concluida_antes_da_ultima_visita_a_aba_analise_nao_aparece():
+    """Usuário já viu o resultado (reabriu a aba Análise depois que a
+    análise terminou) -- ver a aba É a dispensa, não precisa de estado à
     parte."""
     db = _sessao()
     u = _usuario(db)
     ed = _edital(db, analise_em=datetime.utcnow() - timedelta(hours=2))
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
-                interagido_em=datetime.utcnow()))
+                interagido_em=datetime.utcnow(), analise_vista_em=datetime.utcnow()))
     db.commit()
 
     r = notificacoes(user=u, db=db)
 
     assert not any(i["tipo"] == "analise" for i in r["itens"])
+
+
+def test_analise_concluida_continua_aparecendo_apos_visitar_outra_aba():
+    """Achado real (usuário reportou não ter sido notificado): reabrir o
+    edital por outro motivo qualquer (itens, cotação, documentos) atualiza
+    interagido_em mas NÃO analise_vista_em -- a notificação não pode
+    sumir só por causa disso, senão o usuário nunca chega a vê-la."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, analise_em=datetime.utcnow() - timedelta(hours=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=datetime.utcnow(),   # visitou de novo (outra aba)...
+                analise_vista_em=None))            # ...mas nunca abriu a aba Análise
+    db.commit()
+
+    r = notificacoes(user=u, db=db)
+
+    item = next(i for i in r["itens"] if i["tipo"] == "analise")
+    assert item["edital_id"] == ed.id
 
 
 def test_analise_sem_visita_nenhuma_nao_aparece():

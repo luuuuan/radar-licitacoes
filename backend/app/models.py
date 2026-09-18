@@ -289,6 +289,16 @@ class Match(Base):
     # Sem isso não tinha como saber QUANDO o usuário marcou como ganho, só
     # o valor atual do status.
     status_atualizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # achado real (usuário reportou): a notificação "análise concluída" em
+    # /api/notificacoes usava interagido_em (acima) pra saber se o usuário já
+    # viu o resultado -- mas interagido_em é atualizado em QUALQUER aba do
+    # edital (itens/cotação/documentos/proposta), não só na Análise. Bastava
+    # o usuário reabrir o edital por outro motivo qualquer, dias depois, pra
+    # apagar a notificação sem nunca ter olhado o resultado nem o sino. Este
+    # campo só é atualizado quando a aba "análise" é aberta de verdade (ver
+    # registrar_interacao em main.py), então navegar pelas outras abas não
+    # dispensa mais a notificação sozinho.
+    analise_vista_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     edital: Mapped["Edital"] = relationship(back_populates="match")
 

@@ -1,0 +1,42 @@
+name: Backfill de hora em data_abertura/data_encerramento
+
+# Disparo manual (Actions -> este workflow -> "Run workflow"), não agendado --
+# corrige DE UMA VEZ os editais coletados antes de data_abertura/
+# data_encerramento passarem a guardar a hora (a maioria se autocorrige
+# sozinha ao ser aberta na tela, ver _reconsultar_datas_pncp; isto aqui pega
+# o resto, editais já encerrados que ninguém mais abre). Idempotente: rodar
+# de novo não faz mal, editais já corrigidos somem da varredura sozinhos.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rodar backfill em lotes até não sobrar nada
+        run: |
+          URL="${{ vars.RENDER_URL }}"
+          if [ -z "$URL" ]; then
+            echo "⚠ Defina a variável RENDER_URL (Settings → Secrets and variables → Actions → Variables)"
+            exit 1
+          fi
+          total_corrigidos=0
+          for i in $(seq 1 50); do
+            resp=$(curl -s --max-time 60 \
+              -X POST "${URL%/}/api/cron/backfill-datas-pncp?limite=50" \
+              -H "X-Cron-Key: ${{ secrets.CRON_SECRET }}")
+            echo "Lote $i: $resp"
+            processados=$(echo "$resp" | grep -o '"processados":[0-9]*' | grep -o '[0-9]*')
+            corrigidos=$(echo "$resp" | grep -o '"corrigidos":[0-9]*' | grep -o '[0-9]*')
+            if [ -z "$processados" ]; then
+              echo "Resposta inesperada, parando (verifique CRON_SECRET/RENDER_URL)."
+              exit 1
+            fi
+            total_corrigidos=$((total_corrigidos + ${corrigidos:-0}))
+            if [ "$processados" -eq 0 ]; then
+              echo "Nada mais pra corrigir. Total corrigido nesta rodada: $total_corrigidos"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Atingiu o limite de 50 lotes nesta rodada (total corrigido: $total_corrigidos) -- rode o workflow de novo pra continuar."

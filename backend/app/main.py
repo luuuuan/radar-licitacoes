@@ -1938,15 +1938,24 @@ def mudar_status(edital_id: int, dados: StatusIn,
 
 
 @app.post("/api/editais/{edital_id}/interacao")
-def registrar_interacao(edital_id: int,
+def registrar_interacao(edital_id: int, aba: str | None = Query(None),
                         user: Usuario = Depends(_auth.get_current_user),
                         db: Session = Depends(get_session)):
     """Chamado pelo front (silencioso, sem toast) toda vez que o usuário
     navega entre as abas de um edital aberto -- ver abaEdital() no JS.
     Alimenta o card "Analisados recentemente" do painel Início
-    (GET /api/editais/recentes)."""
+    (GET /api/editais/recentes).
+
+    aba="analise": também marca Match.analise_vista_em -- achado real (ver
+    comentário em models.py, Match.analise_vista_em): só a aba Análise
+    conta como "viu o resultado" pra fins da notificação "análise
+    concluída" em /api/notificacoes; as outras abas continuam atualizando
+    só interagido_em (o card de recentes), sem dispensar essa notificação."""
     m = _match_do_usuario_por_edital(db, edital_id, user)
-    m.interagido_em = _utcnow_main()
+    agora = _utcnow_main()
+    m.interagido_em = agora
+    if aba == "analise":
+        m.analise_vista_em = agora
     db.commit()
     return {"ok": True}
 
@@ -2728,13 +2737,24 @@ def limpar_fracos(user: Usuario = Depends(_auth.get_current_user),
 
 def _ref_pncp(ed: Edital):
     """Reconstrói (cnpj, ano, sequencial) a partir do numeroControlePNCP
-    (formato: cnpj-tipo-sequencial/ano)."""
+    (formato: cnpj-tipo-sequencial/ano), com fallback pro link do PNCP
+    (formato: https://pncp.gov.br/app/editais/{cnpj}/{ano}/{sequencial} --
+    ver _montar_link em connectors/pncp.py) quando id_externo estiver
+    ausente ou fora do formato esperado -- achado real (backfill de hora
+    zerada, ver _reconsultar_datas_pncp): editais antigos podem ter
+    id_externo vazio mas o link continua confiável."""
     try:
         esq, ano = ed.id_externo.rsplit("/", 1)
         partes = esq.split("-")
         cnpj = (ed.cnpj_orgao or partes[0]).strip()
         seq = int(partes[-1])
         return cnpj, int(ano), seq
+    except Exception:
+        pass
+    try:
+        partes = (ed.link or "").rstrip("/").split("/")
+        cnpj, ano, seq = partes[-3], partes[-2], partes[-1]
+        return cnpj.strip(), int(ano), int(seq)
     except Exception:
         return None
 
@@ -2764,26 +2784,28 @@ def _datas_pncp_com_hora_zerada(ed: Edital) -> bool:
     )
 
 
-def _reconsultar_datas_pncp(ed: Edital, db: Session) -> None:
+def _reconsultar_datas_pncp(ed: Edital, db: Session) -> bool:
     """Silencioso de propósito: falha de rede ou edital sumido do PNCP não
     pode quebrar a leitura normal da página -- só deixa a hora errada pra
-    tentar de novo na próxima vez que alguém abrir este edital."""
+    tentar de novo na próxima vez que alguém abrir este edital. Retorna se
+    algo mudou de verdade (usado pelo backfill em lote pra contar quantos
+    editais foram corrigidos de fato)."""
     ref = _ref_pncp(ed)
     if not ref:
-        return
+        return False
     cnpj, ano, seq = ref
     url = f"{settings.PNCP_BASE_URL.rstrip('/')}/v1/orgaos/{cnpj}/compras/{ano}/{seq}"
     try:
         r = requests.get(url, timeout=15,
                          headers={"Accept": "application/json", "User-Agent": "RadarLicitacoes/1.0"})
     except requests.RequestException:
-        return
+        return False
     if r.status_code != 200:
-        return
+        return False
     try:
         reg = r.json()
     except ValueError:
-        return
+        return False
     from .connectors.pncp import _parse_data_hora
     nova_abertura = _parse_data_hora(reg.get("dataAberturaProposta"))
     nova_encerramento = _parse_data_hora(reg.get("dataEncerramentoProposta"))
@@ -2796,6 +2818,28 @@ def _reconsultar_datas_pncp(ed: Edital, db: Session) -> None:
         mudou = True
     if mudou:
         db.commit()
+    return mudou
+
+
+def _editais_com_hora_zerada_ids(db: Session, limite: int) -> list[int]:
+    """IDs de editais com data_abertura ou data_encerramento em meia-noite
+    exata -- alvo do backfill em lote (POST /api/cron/backfill-datas-pncp).
+    Varredura em Python (só 3 colunas leves) em vez de SQL específico de
+    dialeto, pra funcionar igual em Postgres (produção) e SQLite (dev/teste)."""
+    from datetime import time as _hora_zero
+    linhas = db.execute(
+        select(Edital.id, Edital.data_abertura, Edital.data_encerramento)
+        .where(or_(Edital.data_abertura.is_not(None), Edital.data_encerramento.is_not(None)))
+        .order_by(Edital.id)
+    ).all()
+    ids = []
+    for eid, abertura, encerramento in linhas:
+        if (abertura and abertura.time() == _hora_zero.min) or \
+           (encerramento and encerramento.time() == _hora_zero.min):
+            ids.append(eid)
+            if len(ids) >= limite:
+                break
+    return ids
 
 
 def _listar_arquivos_pncp(ed: Edital) -> dict:
@@ -4067,6 +4111,33 @@ def coletar_cron(bg: BackgroundTasks, request: Request):
     return {"ok": True, "mensagem": "Coleta iniciada (cron)."}
 
 
+@app.api_route("/api/cron/backfill-datas-pncp", methods=["GET", "POST"])
+def backfill_datas_pncp_cron(request: Request, limite: int = Query(50, ge=1, le=200),
+                             db: Session = Depends(get_session)):
+    """Backfill único (não recorrente): corrige em lote editais coletados
+    ANTES de data_abertura/data_encerramento passarem a guardar a hora (ver
+    _reconsultar_datas_pncp) -- a maioria se autocorrige sozinha na próxima
+    vez que alguém abre a página (repair-on-read em edital_detalhe), mas um
+    edital já encerrado, que ninguém mais vai abrir, nunca passaria por lá.
+    Protegido pela mesma X-Cron-Key de /api/coletar-cron (mesmo motivo: fora
+    do login Basic normal). Síncrono de propósito (não background) -- o
+    chamador precisa do resultado pra saber se ainda sobrou algo; rodar de
+    novo enquanto "processados" vier > 0 (idempotente: editais já corrigidos
+    não aparecem mais na varredura seguinte)."""
+    if not settings.CRON_SECRET:
+        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
+    enviado = request.headers.get("X-Cron-Key") or request.query_params.get("chave") or ""
+    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
+        raise HTTPException(403, "Chave inválida.")
+    ids = _editais_com_hora_zerada_ids(db, limite)
+    corrigidos = 0
+    for eid in ids:
+        ed = db.get(Edital, eid)
+        if ed and _reconsultar_datas_pncp(ed, db):
+            corrigidos += 1
+    return {"ok": True, "processados": len(ids), "corrigidos": corrigidos}
+
+
 @app.get("/api/coleta/status")
 def coleta_status(user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
@@ -4699,19 +4770,24 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
     3. Documentos de habilitação vencendo (mesmo limiar do checklist do
        edital, settings.LEMBRETE_DOC_DIAS -- ver checklist_habilitacao.py).
     4. Análises por IA que terminaram depois da última vez que o usuário
-       esteve naquele edital (Edital.analise_em > Match.interagido_em),
-       exigindo que ele já tenha visitado esse edital ALGUMA vez
-       (interagido_em IS NOT NULL) -- achado real (auditoria dos agentes
-       architect-reviewer/error-detective): analise_ia é cache POR EDITAL
-       (não por usuário, vários usuários podem ter Match no mesmo edital
-       público), então sem essa exigência um usuário que NUNCA visitou um
-       edital podia ganhar uma notificação de "análise concluída" só
-       porque OUTRO usuário rodou a análise -- um alerta sobre um trabalho
-       que nada tem a ver com ele, e que nunca some sozinho (só some
-       quando o usuário abre o edital, mas ele não tinha motivo pra abrir
-       algo que nunca visitou). Clicar pra ver JÁ atualiza interagido_em
-       (abrirPaginaEdital), então a notificação some sozinha da próxima
-       vez, sem precisar de estado de "lida" à parte.
+       viu especificamente a aba Análise (Edital.analise_em >
+       Match.analise_vista_em), exigindo que ele já tenha visitado esse
+       edital ALGUMA vez (interagido_em IS NOT NULL) -- achado real
+       (auditoria dos agentes architect-reviewer/error-detective):
+       analise_ia é cache POR EDITAL (não por usuário, vários usuários
+       podem ter Match no mesmo edital público), então sem essa exigência
+       um usuário que NUNCA visitou um edital podia ganhar uma notificação
+       de "análise concluída" só porque OUTRO usuário rodou a análise --
+       um alerta sobre um trabalho que nada tem a ver com ele.
+       analise_vista_em (não interagido_em) é o campo certo pra "já viu":
+       achado real (usuário reportou não ter sido notificado) --
+       interagido_em atualiza em QUALQUER aba do edital, então só reabrir
+       o edital por outro motivo (itens, cotação, documentos) apagava a
+       notificação sem o usuário nunca ter olhado o resultado. Abrir a aba
+       Análise (ou clicar na notificação, que leva pra ela) JÁ atualiza
+       analise_vista_em (registrar_interacao), então a notificação some
+       sozinha da próxima vez, sem precisar de estado de "lida" à parte --
+       mas navegar pelas outras abas não some mais com ela.
 
     Achado real (auditoria do agente performance-engineer, medido): as
     consultas antigas traziam a entidade ORM INTEIRA (Match/Edital/
@@ -4795,7 +4871,8 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                 .where(Match.usuario_id == user.id)
                 .where(Match.interagido_em.is_not(None))
                 .where(Edital.analise_em.is_not(None))
-                .where(Edital.analise_em > Match.interagido_em)
+                .where(or_(Match.analise_vista_em.is_(None),
+                          Edital.analise_em > Match.analise_vista_em))
                 .limit(_LIMITE_ITENS_NOTIFICACAO))
     for edital_id, orgao in db.execute(q_analise).all():
         itens.append({

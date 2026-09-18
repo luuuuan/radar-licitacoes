@@ -76,6 +76,34 @@ def test_registrar_interacao_edital_inexistente_da_404():
     assert exc.value.status_code == 404
 
 
+def test_registrar_interacao_aba_analise_marca_analise_vista_em():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, "ed1")
+
+    registrar_interacao(ed.id, aba="analise", user=u, db=db)
+
+    m = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert m.interagido_em is not None
+    assert m.analise_vista_em is not None
+
+
+def test_registrar_interacao_outra_aba_nao_marca_analise_vista_em():
+    """Achado real (usuário reportou não ter sido notificado sobre uma
+    análise concluída): só a aba Análise conta como "viu o resultado" --
+    abrir itens/cotação/documentos continua atualizando interagido_em (pro
+    card de recentes), mas não pode apagar a notificação de análise."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, "ed1")
+
+    registrar_interacao(ed.id, aba="itens", user=u, db=db)
+
+    m = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).first()
+    assert m.interagido_em is not None
+    assert m.analise_vista_em is None
+
+
 def test_registrar_interacao_nao_mexe_no_match_de_outro_usuario():
     db = _sessao()
     u1 = _usuario(db, email="u1@t.com")

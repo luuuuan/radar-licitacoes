@@ -113,6 +113,29 @@ def test_reconsulta_nao_quebra_com_id_externo_invalido(monkeypatch):
     assert ed.data_abertura == datetime.datetime(2026, 9, 9, 0, 0, 0)
 
 
+def test_reconsulta_usa_o_link_quando_id_externo_e_inesperado(monkeypatch):
+    """Robustez defensiva: se id_externo vier num formato que _ref_pncp não
+    consegue parsear, cai pro link do PNCP (mesmo formato
+    cnpj/ano/sequencial, ver _montar_link em connectors/pncp.py), que
+    continua confiável."""
+    db = _sessao()
+    ed = _edital(db, id_externo="formato-sem-numero-de-ano-valido",
+                link="https://pncp.gov.br/app/editais/03656200000195/2026/72",
+                data_abertura=datetime.datetime(2026, 9, 9, 0, 0, 0))
+
+    def _fake_get(url, timeout=None, headers=None):
+        assert "03656200000195" in url and "/2026/72" in url
+        return _RespostaFake(200, {
+            "dataAberturaProposta": "2026-09-09T10:00:00",
+            "dataEncerramentoProposta": "2026-09-22T08:29:00",
+        })
+    monkeypatch.setattr(app_main.requests, "get", _fake_get)
+
+    app_main._reconsultar_datas_pncp(ed, db)
+
+    assert ed.data_abertura == datetime.datetime(2026, 9, 9, 10, 0, 0)
+
+
 def test_reconsulta_falha_de_rede_nao_quebra_e_mantem_dado_antigo(monkeypatch):
     db = _sessao()
     ed = _edital(db, data_abertura=datetime.datetime(2026, 9, 9, 0, 0, 0))
