@@ -3078,9 +3078,16 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
         if cache.versao_documentos_calc != user.versao_documentos:
             resultado["verificacao_documentos_desatualizada"] = True
         return resultado
+    # order_by determinístico (achado real, ver comentário do orçamento de
+    # caracteres em verificar_documentos_usuario): sem isso, quais
+    # documentos entram primeiro (relevante só se o texto de todos juntos
+    # estourar o orçamento) dependia da ordem física do banco, não de
+    # nada com significado -- documento vencendo antes é mais urgente,
+    # então entra primeiro se algum dia sobrar de fora.
     docs_usuario = db.execute(
         select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True,  # noqa: E712
                                 Documento.texto_extraido.is_not(None))
+        .order_by(Documento.data_validade.asc().nulls_last())
     ).scalars().all()
     saida = None
     if docs_usuario:

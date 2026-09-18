@@ -101,6 +101,66 @@ def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
     assert r["itens"][1]["atendido"] is False
 
 
+# --------- orçamento de caracteres, não contagem fixa de 8 documentos --------- #
+# Achado real (usuário reportou, edital 126768): CNDT cadastrada, válida,
+# mas a verificação por IA disse "não atendido" -- a conta tinha 11
+# documentos cadastrados e o corte antigo era documentos_usuario[:8], um
+# limite FIXO de contagem. A CNDT (um dos últimos cadastrados) nunca era
+# nem mandada pra IA comparar. Texto extraído real costuma ser bem menor
+# que 3000 chars, então o teto de verdade (orçamento de caracteres) quase
+# sempre cabe muito mais que 8 documentos.
+
+def test_verificar_documentos_inclui_mais_de_8_quando_textos_sao_curtos(monkeypatch):
+    prompts_recebidos = []
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        prompts_recebidos.append(prompt)
+        return json.dumps({"itens": [
+            {"exigido": "CNDT", "atendido": True, "aplicavel": True,
+             "documento": "Certidão Trabalhista", "observacao": ""},
+        ]}), "ok"
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+
+    # 11 documentos com texto curto (~200 chars cada) -- realista (uma
+    # certidão de página única não chega nem perto de 3000 chars).
+    documentos = [
+        {"nome": f"Documento {i}", "texto": f"texto do documento numero {i} " * 8}
+        for i in range(1, 10)
+    ] + [{"nome": "Certidão Trabalhista", "texto": "CERTIDAO NEGATIVA DE DEBITOS TRABALHISTAS CNDT " * 8}]
+
+    ia.verificar_documentos_usuario(
+        "Objeto qualquer", {"fiscal_trabalhista": ["CNDT"]}, documentos, api_key="fake-key")
+
+    assert len(prompts_recebidos) == 1
+    # o 10º documento (fora do antigo corte fixo de 8) precisa aparecer.
+    assert "Certidão Trabalhista" in prompts_recebidos[0]
+    assert "CNDT" in prompts_recebidos[0]
+
+
+def test_verificar_documentos_ainda_respeita_orcamento_quando_textos_sao_grandes(monkeypatch):
+    """O corte por contagem virou corte por orçamento de caracteres -- não
+    vira "manda tudo sem limite nenhum" quando os documentos são grandes
+    (perto do teto de 3000 chars cada, como no achado real que motivou o
+    teto original de 24000 chars no prompt)."""
+    prompts_recebidos = []
+
+    def _gerar_fake(prompt, api_key=None, timeout=70):
+        prompts_recebidos.append(prompt)
+        return json.dumps({"itens": []}), "ok"
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+
+    # 20 documentos de ~3000 chars cada -- estoura o orçamento de 24000
+    # bem antes do 20º.
+    documentos = [{"nome": f"Documento {i}", "texto": "x" * 3000} for i in range(1, 21)]
+
+    ia.verificar_documentos_usuario(
+        "Objeto qualquer", {"fiscal_trabalhista": ["CND"]}, documentos, api_key="fake-key")
+
+    assert len(prompts_recebidos) == 1
+    assert len(prompts_recebidos[0]) < 40000   # não virou um prompt sem limite nenhum
+    assert "Documento 1" in prompts_recebidos[0]   # ao menos o primeiro sempre entra
+
+
 def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
     resposta_ia = json.dumps({"itens": [
         {"exigido": "", "atendido": True, "aplicavel": True, "documento": "x", "observacao": ""},

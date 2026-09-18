@@ -1276,15 +1276,34 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
         return {"status": "sem_requisitos"}
     requisitos = _formatar_requisitos(docs)
 
-    # até 8 documentos, ~3000 chars cada — o mesmo teto de prompt do
-    # analisar() principal (24000 chars) dividido entre vários documentos
-    # em vez de 1-2 arquivos grandes do edital.
+    # Achado real (usuário reportou: CNDT cadastrada e válida, IA disse
+    # "não atendido" -- edital 126768): o corte antigo era um limite FIXO
+    # de 8 documentos (documentos_usuario[:8]), não um orçamento de
+    # caracteres -- uma conta com mais de 8 documentos cadastrados
+    # (comum: um catálogo de habilitação típico já tem CND federal/
+    # estadual/municipal/FGTS/CNDT + Sicaf + contrato social + certidão
+    # simplificada, passa de 8 fácil) simplesmente PERDIA os documentos
+    # além do 8º -- a IA nunca via o texto deles, então "não atendido" pra
+    # esse documento estava certo dado o que foi mandado, só que o que foi
+    # mandado já tinha descartado o documento certo antes de perguntar.
+    # Texto extraído real costuma ser bem menor que 3000 chars (uma
+    # certidão de página única fica na casa de 1-2 mil), então o teto de
+    # verdade (24000 chars, mesmo orçamento do analisar() principal) quase
+    # sempre cabe bem mais que 8 documentos -- só para de incluir quando o
+    # ORÇAMENTO de caracteres estoura, não numa contagem arbitrária.
+    _MAX_DOCUMENTOS_CARACTERES = 24000
     partes = []
-    for d in documentos_usuario[:8]:
+    total_chars = 0
+    for d in documentos_usuario:
         nome = (d.get("nome") or "documento").strip()
         texto = (d.get("texto") or "").strip()[:3000]
-        if texto:
-            partes.append(f'### "{nome}"\n{texto}')
+        if not texto:
+            continue
+        bloco = f'### "{nome}"\n{texto}'
+        if partes and total_chars + len(bloco) > _MAX_DOCUMENTOS_CARACTERES:
+            break
+        partes.append(bloco)
+        total_chars += len(bloco)
     if not partes:
         return {"status": "sem_documentos"}
     documentos_txt = "\n\n".join(partes)
