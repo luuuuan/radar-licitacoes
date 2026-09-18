@@ -2134,6 +2134,13 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     ed = db.get(Edital, edital_id)
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
+    # achado real (usuário reportou, edital 136161): editais coletados
+    # antes de data_abertura/data_encerramento passarem a guardar a hora
+    # ficaram com hora zerada -- corrige sob demanda ao abrir a página
+    # (ver _reconsultar_datas_pncp). Antes de _status_prazo_edital/
+    # _bloqueio_edicao_edital logo abaixo, que dependem dessas datas.
+    if _datas_pncp_com_hora_zerada(ed):
+        _reconsultar_datas_pncp(ed, db)
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
 
@@ -2730,6 +2737,65 @@ def _ref_pncp(ed: Edital):
         return cnpj, int(ano), seq
     except Exception:
         return None
+
+
+# Achado real (usuário reportou, edital 136161): data_abertura/
+# data_encerramento gravadas ANTES de _parse_data_hora existir (ver
+# connectors/pncp.py) ficaram com hora zerada (meia-noite) -- a data em si
+# está certa, só a hora que não foi preservada na coleta original. A
+# coleta diária SÓ busca editais com janela de proposta ainda ABERTA
+# (/v1/contratacoes/proposta, ver connectors/pncp.py) -- um edital já
+# encerrado nunca mais aparece nela, então nunca se autocorrigiria sozinho
+# esperando a próxima coleta. Em vez de uma migração em massa (bate no
+# PNCP centenas de vezes de uma vez só, sem necessidade pra editais que
+# ninguém mais vai abrir), corrige sob demanda: toda vez que ALGUÉM abre a
+# página deste edital específico (edital_detalhe), se a hora estiver
+# zerada, reconsulta só ESTE edital no PNCP (1 chamada, a mesma fonte de
+# sempre) e corrige -- mesmo padrão já usado por arquivos_pncp_cache
+# (calcula/corrige no primeiro READ que precisar, não antecipadamente).
+def _datas_pncp_com_hora_zerada(ed: Edital) -> bool:
+    # import local de "time" (a CLASSE datetime.time, não o módulo time já
+    # importado no topo do arquivo pra time.sleep()) só pra evitar colisão
+    # de nome com esse módulo.
+    from datetime import time as _hora_zero
+    return bool(
+        (ed.data_abertura and ed.data_abertura.time() == _hora_zero.min)
+        or (ed.data_encerramento and ed.data_encerramento.time() == _hora_zero.min)
+    )
+
+
+def _reconsultar_datas_pncp(ed: Edital, db: Session) -> None:
+    """Silencioso de propósito: falha de rede ou edital sumido do PNCP não
+    pode quebrar a leitura normal da página -- só deixa a hora errada pra
+    tentar de novo na próxima vez que alguém abrir este edital."""
+    ref = _ref_pncp(ed)
+    if not ref:
+        return
+    cnpj, ano, seq = ref
+    url = f"{settings.PNCP_BASE_URL.rstrip('/')}/v1/orgaos/{cnpj}/compras/{ano}/{seq}"
+    try:
+        r = requests.get(url, timeout=15,
+                         headers={"Accept": "application/json", "User-Agent": "RadarLicitacoes/1.0"})
+    except requests.RequestException:
+        return
+    if r.status_code != 200:
+        return
+    try:
+        reg = r.json()
+    except ValueError:
+        return
+    from .connectors.pncp import _parse_data_hora
+    nova_abertura = _parse_data_hora(reg.get("dataAberturaProposta"))
+    nova_encerramento = _parse_data_hora(reg.get("dataEncerramentoProposta"))
+    mudou = False
+    if nova_abertura and nova_abertura != ed.data_abertura:
+        ed.data_abertura = nova_abertura
+        mudou = True
+    if nova_encerramento and nova_encerramento != ed.data_encerramento:
+        ed.data_encerramento = nova_encerramento
+        mudou = True
+    if mudou:
+        db.commit()
 
 
 def _listar_arquivos_pncp(ed: Edital) -> dict:
