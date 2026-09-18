@@ -28,6 +28,15 @@ _SINONIMOS = {
     "pgfn": "procuradoria geral da fazenda nacional",
     "sicaf": "sistema de cadastramento unificado de fornecedores",
     "me epp": "microempresa empresa de pequeno porte",
+    # achado real (edital 136161): o edital costuma escrever a exigência
+    # como "Fazenda Nacional (Certidão conjunta RFB/PGFN)", mas a certidão
+    # de verdade é emitida com um nome BEM diferente ("Certidão Negativa de
+    # Débitos relativos aos Tributos Federais e à Dívida Ativa da União") --
+    # sem essa ponte de vocabulário, as duas descrições do MESMO documento
+    # não compartilham palavra nenhuma que importe, e o fuzzy ficava sem
+    # sinal pra bater com o documento certo (ver _LIMIAR_MATCH).
+    "fazenda nacional": "tributos federais divida ativa uniao receita federal fazenda nacional",
+    "rfb": "receita federal do brasil",
 }
 # mais longo primeiro: "cnd" é substring de "cndt" — se "cnd" fosse
 # substituído antes, corromperia "cndt" e a regra certa nunca mais bateria.
@@ -51,14 +60,30 @@ _CATEGORIAS = {
 # "credenciamento no Sicaf" bateram todos com uma CERTIDÃO NEGATIVA DE
 # DÉBITOS cadastrada sem ter NADA a ver — e como essa certidão estava
 # vencida, isso vazava um "vencido há Xd" falso pros itens errados.
-# Testado com pares reais que deveriam bater (CRF/FGTS, CNDT, alvará,
-# atestado técnico, Sicaf...) — todos ficam >= 0.65 — contra pares que não
-# deveriam (declaração vs. certidão não relacionada) — todos <= 0.51. 0.55
-# fica no meio dessa lacuna, cortando os falsos positivos observados; o
-# preço é perder matches legítimos com frase bem vaga e curta demais (ex.:
-# "prova de regularidade com a Fazenda Estadual", ~0.50) — mas isso vira
-# "não cadastrado" (seguro), nunca um "vencido" inventado (perigoso).
-_LIMIAR_MATCH = 0.55
+#
+# 2º achado real (edital 136161): mesmo com 0.55, "Certificado de
+# Regularidade do FGTS - CRF" batia com a exigência "Prova de regularidade
+# fiscal perante a Fazenda Nacional (RFB/PGFN)" (score 0.71) -- e pior, uma
+# "Certidão Negativa de Processo - TCU" (documento sem NADA a ver) batia com
+# "CNDT" (0.75). Causa: token_set_ratio tem um viés — quando o candidato
+# cadastrado é um nome CURTO e o exigido é uma frase LONGA, poucas palavras
+# de ligação em comum (ex.: só "de"/"regularidade") já inflam o score,
+# porque a comparação interna do algoritmo usa a INTERSEÇÃO como uma das
+# pontas (curta = parecida com qualquer outra coisa curta). token_sort_ratio
+# não tem esse viés (compara as strings inteiras, ordenadas), mas sozinho é
+# rígido demais pra frases com ordem de palavras diferente. min(set, sort)
+# —  só considera match quando os DOIS concordam — elimina os falsos
+# positivos observados sem enfraquecer os pares que deveriam bater.
+#
+# Testado com pares reais que deveriam bater (CRF/FGTS, CNDT, Fazenda
+# Nacional/RFB-PGFN, Fazenda Estadual, Fazenda Municipal, alvará, Sicaf,
+# contrato social...) usando min(set, sort) — todos ficam >= 0.49 — contra
+# pares que não deveriam (declaração vs. certidão não relacionada, CRF vs.
+# Fazenda Nacional, TCU vs. CNDT, Sicaf vs. certidão federal) — todos
+# <= 0.46. 0.48 fica no meio dessa lacuna. O preço continua sendo perder
+# matches legítimos com frase muito vaga/curta — mas isso vira "não
+# cadastrado" (seguro), nunca um match errado com falsa confiança (perigoso).
+_LIMIAR_MATCH = 0.48
 
 
 def _normalizar_doc(nome: str) -> str:
@@ -124,7 +149,11 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
             alvo = _normalizar_doc(exigido)
             melhor, melhor_score = None, 0.0
             for c in candidatos:
-                score = fuzz.token_set_ratio(alvo, c["_norm"]) / 100.0
+                # min(set, sort): ver _LIMIAR_MATCH -- token_set_ratio
+                # sozinho é enviesado a favor de candidatos com nome CURTO
+                # (poucas palavras de ligação em comum já infla o score).
+                score = min(fuzz.token_set_ratio(alvo, c["_norm"]),
+                           fuzz.token_sort_ratio(alvo, c["_norm"])) / 100.0
                 if score > melhor_score:
                     melhor, melhor_score = c, score
             if melhor and melhor_score >= _LIMIAR_MATCH:
