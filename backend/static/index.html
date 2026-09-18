@@ -2205,8 +2205,13 @@ const _MESES_NOME=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho'
   'Agosto','Setembro','Outubro','Novembro','Dezembro'];
 // parse manual (sem `new Date(iso)`) de propósito — evita o dia mudar por
 // causa do fuso ao interpretar "YYYY-MM-DD" como UTC meia-noite.
+// split('T')[0] primeiro: iso pode vir só com data ("AAAA-MM-DD", ex.:
+// dias[].data da agenda) ou com hora também ("AAAA-MM-DDTHH:MM:SS", ex.:
+// data_sessao/data de edital, desde que data_abertura passou a guardar
+// hora) -- sem isolar a data antes do split('-'), o "T09:00:00" colado no
+// dia virava NaN.
 function _diaMes(iso){
-  const [,mes,dia] = iso.split('-').map(Number);
+  const [,mes,dia] = iso.split('T')[0].split('-').map(Number);
   return {dia, mes: _MESES_ABREV[mes-1]};
 }
 function _hojeIsoLocal(){
@@ -2232,7 +2237,10 @@ function _agendaHTML(r){
     // abertura) -- pedido do usuário: quando é o mesmo edital nos dois
     // casos, mostrar só o verde.
     if(d.tem_participacao) cls.push('part'); else if(d.tem_sessao) cls.push('tem');
-    const doDia = r.sessoes.filter(s=>s.data_sessao===d.data);
+    // s.data_sessao agora vem com hora ("AAAA-MM-DDTHH:MM:SS") -- d.data
+    // continua só data (é um bucket de DIA do calendário semanal). Compara
+    // só os 10 primeiros caracteres (a data), senão nunca bate.
+    const doDia = r.sessoes.filter(s=>s.data_sessao.slice(0,10)===d.data);
     let onclick = '';
     if(doDia.length===1) onclick = ` onclick="abrirPaginaEdital(${doDia[0].edital_id})"`;
     else if(doDia.length>1) onclick = ` onclick="_abrirAgendaDoDia('${d.data}')"`;
@@ -2277,7 +2285,8 @@ function _agendaHTML(r){
 // modal; ver _agendaHTML). Reaproveita _agendaAtual, sem chamada nova.
 function _abrirAgendaDoDia(dataIso){
   if(!_agendaAtual) return;
-  const doDia = _agendaAtual.sessoes.filter(s=>s.data_sessao===dataIso);
+  // ver mesmo achado em _agendaHTML -- s.data_sessao tem hora, dataIso não.
+  const doDia = _agendaAtual.sessoes.filter(s=>s.data_sessao.slice(0,10)===dataIso);
   const {dia,mes} = _diaMes(dataIso);
   const linhas = doDia.map(s=>{
     const local = [s.municipio, s.uf].filter(Boolean).join('/');
@@ -2624,6 +2633,22 @@ function motivoAmigavel(motivo){
 }
 function fmtMoeda(v){ if(v==null) return '—';
   return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
+
+// data_abertura/data_encerramento agora vêm com hora (isoformat completo,
+// "AAAA-MM-DDTHH:MM:SS") -- pedido do usuário: mostrar a hora de início/fim
+// de recebimento de propostas, não só a data. new Date(iso) sem sufixo de
+// fuso é interpretado como HORA LOCAL do navegador pelo padrão ISO 8601
+// (ao contrário de "AAAA-MM-DD" sozinho, que o JS trata como UTC) -- como o
+// backend já grava tudo em horário de Brasília sem fuso explícito (mesmo
+// padrão usado no resto do app), isso já cai certo sem conversão manual.
+function fmtDataHora(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return '';
+  const data = d.toLocaleDateString('pt-BR');
+  const hora = d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+  return `${data} às ${hora}`;
+}
 
 // statusPrazo (novo): "aguardando"/"recebendo"/"encerrado" -- diz em qual
 // FASE do prazo o edital está (ver _status_prazo_edital no backend).
@@ -4774,7 +4799,8 @@ function _renderCabecalhoEdital(){
       ['CNPJ do órgão', e.cnpj_orgao ? mascaraDoc(e.cnpj_orgao) : ''],
       ['Cidade/Estado', [e.municipio, e.uf].filter(Boolean).join('/')],
       ['Plataforma', e.plataforma],
-      ['Data limite para envio de proposta', e.data_encerramento ? e.data_encerramento.split('-').reverse().join('/') : ''],
+      ['Início do recebimento de propostas', fmtDataHora(e.data_abertura)],
+      ['Fim do recebimento de propostas', fmtDataHora(e.data_encerramento)],
     ])}
   </div>`;
 }

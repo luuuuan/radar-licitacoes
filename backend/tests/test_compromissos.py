@@ -74,7 +74,10 @@ def test_ordena_por_data():
 
     r = compromissos(inicio=datetime.date(2026, 8, 18), fim=datetime.date(2026, 8, 24), user=u, db=db)
 
-    assert [c["data"] for c in r["compromissos"]] == ["2026-08-19", "2026-08-23"]
+    # "2026-08-19T00:00:00" (não "2026-08-19"): Edital.data_abertura agora
+    # guarda hora (ver _parse_data_hora em connectors/pncp.py) -- só o
+    # documento (Documento.data_validade, ainda Date puro) fica sem hora.
+    assert [c["data"] for c in r["compromissos"]] == ["2026-08-19T00:00:00", "2026-08-23"]
 
 
 def test_edital_com_status_diferente_de_vou_participar_fica_de_fora():

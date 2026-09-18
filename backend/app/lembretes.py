@@ -43,7 +43,10 @@ def verificar_aberturas(db: Session) -> int:
         usuario = db.get(Usuario, match.usuario_id)
         if not usuario or not usuario.ativo or not usuario.avisar_abertura:
             continue
-        dias = (ed.data_abertura - hoje).days
+        # .date(): data_abertura agora guarda hora (ver _parse_data_hora em
+        # connectors/pncp.py) -- subtrair de "hoje" (date) direto quebraria
+        # com TypeError; esta contagem é em DIAS, não precisa da hora exata.
+        dias = (ed.data_abertura.date() - hoje).days
         if dias > max(0, usuario.dias_antecedencia):
             continue
         por_usuario.setdefault(usuario.id, []).append(_item_edital(ed, nivel="forte"))
@@ -77,7 +80,8 @@ def verificar_prazos(db: Session) -> int:
     por_usuario: dict[int, list] = {}
     marcados: dict[int, list] = {}
     for match, ed in db.execute(q).all():
-        dias = (ed.data_encerramento - hoje).days
+        # .date(): ver mesmo achado em verificar_aberturas, acima.
+        dias = (ed.data_encerramento.date() - hoje).days
         if dias < 0 or dias > settings.LEMBRETE_PRAZO_DIAS:
             continue
         usuario = db.get(Usuario, match.usuario_id)

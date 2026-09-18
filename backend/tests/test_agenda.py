@@ -142,7 +142,11 @@ def test_sessao_expoe_data_sessao_igual_a_abertura():
 
     r = agenda(offset=0, user=u, db=db)
 
-    assert r["sessoes"][0]["data_sessao"] == abertura.isoformat()
+    # datetime, não date: Edital.data_abertura agora guarda hora (ver
+    # _parse_data_hora em connectors/pncp.py) -- isoformat() inclui a hora
+    # (meia-noite aqui, já que o fixture manda um date puro).
+    assert r["sessoes"][0]["data_sessao"] == datetime.datetime.combine(
+        abertura, datetime.time.min).isoformat()
 
 
 # --------- ponto verde: editais marcados "vou participar" --------- #

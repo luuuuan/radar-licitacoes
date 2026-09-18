@@ -154,8 +154,12 @@ class Edital(Base):
     municipio: Mapped[str | None] = mapped_column(String(120), nullable=True)
     valor_estimado: Mapped[float | None] = mapped_column(Float, nullable=True)
     data_publicacao: Mapped[date | None] = mapped_column(Date, nullable=True)
-    data_abertura: Mapped[date | None] = mapped_column(Date, nullable=True)
-    data_encerramento: Mapped[date | None] = mapped_column(Date, nullable=True)  # fim recebimento propostas
+    # DateTime (não Date): pedido do usuário -- a UI mostra a hora de
+    # início/fim de recebimento de propostas, e o status "recebendo
+    # proposta"/"encerrado" (_status_prazo_edital, main.py) respeita a hora,
+    # não só o dia. Migração de coluna em database.py (era Date).
+    data_abertura: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    data_encerramento: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # fim recebimento propostas
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
     # sistema/plataforma onde a disputa ocorre (ex.: "BLL Compras",
     # "ComprasNet"), derivado do domínio de linkSistemaOrigem (campo da

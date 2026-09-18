@@ -10,7 +10,7 @@ atualizado. Dois efeitos colaterais reais:
    da aba de ativos (que filtra por data_encerramento >= hoje).
 Rode com:  cd backend && pytest
 """
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -58,7 +58,11 @@ def test_edital_ja_existente_tem_data_encerramento_atualizada():
     db.commit()
 
     ed = db.query(Edital).filter_by(id_externo="e1").one()
-    assert ed.data_encerramento == date(2026, 3, 15)
+    # datetime, não date: Edital.data_encerramento agora guarda hora (ver
+    # _parse_data_hora em connectors/pncp.py) -- o valor lido de volta do
+    # banco é sempre datetime, mesmo quando o fixture manda um date puro
+    # (fica meia-noite).
+    assert ed.data_encerramento == datetime(2026, 3, 15)
 
 
 def test_edital_ja_existente_ganha_itens_que_faltavam():

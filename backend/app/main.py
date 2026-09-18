@@ -1342,12 +1342,30 @@ def _dias_restantes_edital(ed: Edital) -> int | None:
     dias_restantes negativo tem que refletir o prazo FINAL de verdade
     (data_encerramento), não só o início. Sem data_encerramento cadastrada,
     cai de volta pra data_abertura (mesmo comportamento de antes, única
-    informação disponível)."""
-    hoje = date.today()
-    if ed.data_abertura and hoje < ed.data_abertura:
-        return (ed.data_abertura - hoje).days
-    limite = ed.data_encerramento or ed.data_abertura
-    return (limite - hoje).days if limite else None
+    informação disponível).
+
+    agora (não date.today()) pra saber se JÁ abriu: pedido do usuário --
+    data_abertura/data_encerramento agora guardam a HORA de verdade (ver
+    _parse_data_hora em connectors/pncp.py), e a fase "aguardando"/
+    "recebendo"/"encerrado" (_status_prazo_edital, logo abaixo) precisa
+    respeitar ela -- um edital que abre às 14h de hoje ainda não abriu às
+    9h de hoje.
+
+    O FALLBACK pra data_abertura (sem data_encerramento cadastrada) continua
+    por DIA, não por hora: data_abertura só diz QUANDO a janela abriu, não
+    quando fecha -- comparar pela hora exata faria um edital "encerrar"
+    minutos depois de ter aberto, só por faltar o dado real de fim (achado
+    real ao testar: KPI "editais do dia" zerava horas depois da meia-noite
+    porque um edital que abre hoje, sem data_encerramento, virava
+    "encerrado" quase na hora)."""
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    if ed.data_abertura and agora < ed.data_abertura:
+        return (ed.data_abertura - agora).days
+    if ed.data_encerramento:
+        return (ed.data_encerramento - agora).days
+    if ed.data_abertura:
+        return (ed.data_abertura.date() - agora.date()).days
+    return None
 
 
 def _status_prazo_edital(ed: Edital) -> str:
@@ -1361,14 +1379,41 @@ def _status_prazo_edital(ed: Edital) -> str:
     Companheiro de _dias_restantes_edital (mesmas datas, mesmo fallback pra
     data_abertura quando não tem data_encerramento cadastrada) -- devolve a
     FASE em vez da contagem, porque um dias_restantes positivo sozinho não
-    diz se ainda não abriu ou se já abriu e ainda não fechou."""
-    hoje = date.today()
-    if ed.data_abertura and hoje < ed.data_abertura:
+    diz se ainda não abriu ou se já abriu e ainda não fechou.
+
+    agora (não date.today()) pra data_encerramento de verdade: pedido do
+    usuário -- um edital que fecha às 09h de hoje já está "encerrado" às
+    10h do mesmo dia, não o dia inteiro. O fallback pra data_abertura
+    (sem data_encerramento cadastrada) continua por DIA -- ver
+    _dias_restantes_edital, mesmo achado real."""
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    if ed.data_abertura and agora < ed.data_abertura:
         return "aguardando"
-    limite = ed.data_encerramento or ed.data_abertura
-    if not limite:
-        return "aguardando"
-    return "encerrado" if hoje > limite else "recebendo"
+    if ed.data_encerramento:
+        return "encerrado" if agora > ed.data_encerramento else "recebendo"
+    if ed.data_abertura:
+        return "encerrado" if agora.date() > ed.data_abertura.date() else "recebendo"
+    return "aguardando"
+
+
+def _condicoes_prazo_editais(agora: datetime, hoje: date) -> tuple:
+    """Versão SQL de _status_prazo_edital -- (ativo, encerrado), duas
+    condições WHERE reaproveitadas em toda consulta que separa editais por
+    prazo (listagem, resumo). Mesma regra: data_encerramento de verdade
+    compara pela HORA exata; sem ela, cai pra data_abertura só como sinal
+    aproximado, comparado por DIA (não pela hora exata -- ela só diz quando
+    a janela abriu, não quando fecha; comparar pela hora faria um edital
+    "encerrar" minutos depois de abrir)."""
+    tem_fim = Edital.data_encerramento.is_not(None)
+    ativo = (
+        (tem_fim & (Edital.data_encerramento >= agora))
+        | (~tem_fim & (Edital.data_abertura.is_(None) | (Edital.data_abertura >= hoje)))
+    )
+    encerrado = (
+        (tem_fim & (Edital.data_encerramento < agora))
+        | (~tem_fim & Edital.data_abertura.is_not(None) & (Edital.data_abertura < hoje))
+    )
+    return ativo, encerrado
 
 
 def _bloqueio_edicao_edital(ed: Edital, match: Match | None, user: Usuario, db: Session) -> str | None:
@@ -1428,6 +1473,12 @@ def _query_editais_filtrada(
     endpoints (ver test_listar_plataformas_concorda_com_listar_editais_no_
     mesmo_filtro em test_editais_filtros.py, que fixa esse contrato)."""
     hoje_data = date.today()
+    # agora (não hoje_data): pedido do usuário -- "ativos" x "encerrados"
+    # também precisa respeitar a hora, não só o dia (ver _status_prazo_edital
+    # sobre o mesmo achado no badge por edital). Comparar prazo_efetivo só
+    # contra a MEIA-NOITE de hoje deixava um edital que já fechou hoje de
+    # manhã aparecendo em "ativos" a tarde inteira.
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
     if todos_editais:
         # Pedido do usuário: o filtro de plataforma (e a listagem em geral)
         # sempre foi restrito a Match.usuario_id == user.id -- oferecer uma
@@ -1470,7 +1521,12 @@ def _query_editais_filtrada(
     if apenas_interessantes:
         filtro.append(Match.interessante == True)  # noqa: E712
     if hoje:
-        filtro.append(Edital.data_abertura == date.today())
+        # data_abertura agora guarda hora (ver _parse_data_hora) -- "==
+        # date.today()" só bateria com meia-noite exata. Faixa do dia
+        # inteiro (meia-noite de hoje até meia-noite de amanhã).
+        _hoje = date.today()
+        filtro.append(Edital.data_abertura >= _hoje)
+        filtro.append(Edital.data_abertura < _hoje + timedelta(days=1))
     # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
     if tipo != "todos":
         prefixo = "m" if tipo == "produtos" else "s"
@@ -1485,7 +1541,10 @@ def _query_editais_filtrada(
     if data_de is not None:
         filtro.append(Edital.data_abertura >= data_de)
     if data_ate is not None:
-        filtro.append(Edital.data_abertura <= data_ate)
+        # data_abertura agora guarda hora -- "<= data_ate" (meia-noite)
+        # excluiria qualquer edital do próprio dia data_ate com hora > 0.
+        # Fim do dia (< o dia seguinte) inclui o dia inteiro.
+        filtro.append(Edital.data_abertura < data_ate + timedelta(days=1))
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
     # que pedem isso, em vez de precisar abrir cada um pra conferir. Ver
@@ -1506,15 +1565,16 @@ def _query_editais_filtrada(
     # como encerrado incorretamente. Ver _dias_restantes_edital, mesma
     # lógica pro badge/ordenação da lista.
     prazo_efetivo = func.coalesce(Edital.data_encerramento, Edital.data_abertura)
+    ativo_cond, encerrado_cond = _condicoes_prazo_editais(agora, hoje_data)
     if vista == "ativos":
-        filtro.append((prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje_data))
+        filtro.append(ativo_cond)
     elif vista == "encerrados":
         # prazo passou E eu participei (proposta enviada / ganho / perdido)
         # -- exige Match.status, então todos_editais=True não muda nada
         # nesta vista (edital sem Match nunca teve "participação" pra
         # contar): a diferença entre os dois modos só aparece em vista
         # "ativos"/"todos", que não dependem de status nenhum.
-        filtro.append(prazo_efetivo < hoje_data)
+        filtro.append(encerrado_cond)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
     for f in filtro:
         base = base.where(f)
@@ -1630,6 +1690,7 @@ def listar_editais(
     db: Session = Depends(get_session),
 ):
     hoje_data = date.today()   # reusado mais abaixo no bloco de sem_match
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)   # idem -- ver _query_editais_filtrada
     eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
     base, prazo_efetivo = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,
@@ -1751,8 +1812,8 @@ def listar_editais(
             .where(sub_itens_sm.exists())
         )
         if vista == "ativos":
-            q_sem_match = q_sem_match.where(
-                (prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje_data))
+            ativo_cond_sm, _ = _condicoes_prazo_editais(agora, hoje_data)
+            q_sem_match = q_sem_match.where(ativo_cond_sm)
         # mesmos filtros de edital aplicados na busca principal (uf, valor,
         # tipo, hoje, data_de/data_ate) — achado real: esta consulta só levava
         # em conta o termo buscado e a "vista", ignorando os demais filtros da
@@ -1780,9 +1841,12 @@ def listar_editais(
         if data_de is not None:
             q_sem_match = q_sem_match.where(Edital.data_abertura >= data_de)
         if data_ate is not None:
-            q_sem_match = q_sem_match.where(Edital.data_abertura <= data_ate)
+            # ver o mesmo achado em _query_editais_filtrada/filtro "hoje"
+            # logo abaixo -- data_abertura agora guarda hora.
+            q_sem_match = q_sem_match.where(Edital.data_abertura < data_ate + timedelta(days=1))
         if hoje:
-            q_sem_match = q_sem_match.where(Edital.data_abertura == date.today())
+            q_sem_match = q_sem_match.where(Edital.data_abertura >= hoje_data)
+            q_sem_match = q_sem_match.where(Edital.data_abertura < hoje_data + timedelta(days=1))
         # eager load de Edital.itens (selectinload = 1 query IN batch pra
         # todos os editais da página, não 1 SELECT por edital dentro do loop
         # abaixo) — achado real (auditoria do agente code-reviewer): sem
@@ -3585,7 +3649,7 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
     orgao_dados = (analise or {}).get("dados_orgao") or {}
     plataforma = orgao_dados.get("plataforma") or ""
     data_sessao = orgao_dados.get("data_sessao") or (
-        ed.data_abertura.strftime("%d/%m/%Y") if ed.data_abertura else "")
+        ed.data_abertura.strftime("%d/%m/%Y %Hh%M") if ed.data_abertura else "")
     partes = [p for p in ([f"Nº {numero}"] if numero else []) + [plataforma, data_sessao] if p]
     return " - ".join([abrev] + partes) if abrev else " - ".join(partes)
 
@@ -4026,9 +4090,10 @@ def resumo(user: Usuario = Depends(_auth.get_current_user),
     # prazo efetivo = data_encerramento se houver, senão data_abertura --
     # mesma lógica de listar_editais/_dias_restantes_edital (ver comentário
     # lá: data_abertura sozinha marca como encerrado um edital cuja janela
-    # de propostas ainda está aberta).
-    prazo_efetivo = func.coalesce(Edital.data_encerramento, Edital.data_abertura)
-    ativo = (prazo_efetivo.is_(None)) | (prazo_efetivo >= hoje)
+    # de propostas ainda está aberta). agora (não hoje): mesmo achado de
+    # _status_prazo_edital -- "ativo" precisa respeitar a hora.
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    ativo, _ = _condicoes_prazo_editais(agora, hoje)
     meu = Match.usuario_id == user.id
 
     total_prod = db.scalar(
@@ -4052,7 +4117,8 @@ def resumo(user: Usuario = Depends(_auth.get_current_user),
     do_dia, valor_do_dia = db.execute(
         select(func.count(Match.id), func.sum(Edital.valor_estimado))
         .join(Edital, Match.edital_id == Edital.id)
-        .where(ativo).where(meu).where(Edital.data_abertura == hoje)
+        .where(ativo).where(meu)
+        .where(Edital.data_abertura >= hoje, Edital.data_abertura < hoje + timedelta(days=1))
     ).one()
     return {
         "produtos": total_prod, "editais": total_editais,
@@ -4083,11 +4149,19 @@ def agenda(offset: int = 0, user: Usuario = Depends(_auth.get_current_user),
     linhas = db.execute(
         select(Edital, Match).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
-        .where(Edital.data_abertura.between(inicio, fim))
+        # data_abertura agora guarda hora -- between(inicio, fim) trataria
+        # fim como meia-noite e excluiria sessões do próprio último dia com
+        # hora > 0. Fim exclusivo do dia seguinte inclui o dia inteiro.
+        .where(Edital.data_abertura >= inicio, Edital.data_abertura < fim + timedelta(days=1))
         .order_by(Edital.data_abertura)
     ).all()
-    datas_com_sessao = {ed.data_abertura for ed, _m in linhas}
-    datas_com_participacao = {ed.data_abertura for ed, m in linhas if m.status == STATUS_PARTICIPACAO}
+    # .date(): o calendário agrupa por DIA (qual dia tem sessão), não pela
+    # hora exata -- comparar um set de datetime contra as datas soltas do
+    # loop abaixo (inicio + timedelta(days=i), sempre date) nunca bateria
+    # (date == datetime é sempre False em Python), fazendo "tem_sessao"
+    # ficar sempre False pra tudo.
+    datas_com_sessao = {ed.data_abertura.date() for ed, _m in linhas}
+    datas_com_participacao = {ed.data_abertura.date() for ed, m in linhas if m.status == STATUS_PARTICIPACAO}
     dias = [{"data": (inicio + timedelta(days=i)).isoformat(),
              "tem_sessao": (inicio + timedelta(days=i)) in datas_com_sessao,
              "tem_participacao": (inicio + timedelta(days=i)) in datas_com_participacao} for i in range(7)]
@@ -4249,20 +4323,30 @@ def compromissos(inicio: date, fim: date, user: Usuario = Depends(_auth.get_curr
     editais = db.execute(
         select(Edital).join(Match, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id, Match.status == STATUS_PARTICIPACAO)
-        .where(Edital.data_abertura.between(inicio, fim))
+        # ver o mesmo achado em /api/agenda -- data_abertura agora guarda
+        # hora, "fim" como limite superior tem que ser exclusivo do dia
+        # seguinte pra incluir o próprio dia "fim" inteiro.
+        .where(Edital.data_abertura >= inicio, Edital.data_abertura < fim + timedelta(days=1))
     ).scalars().all()
 
+    # "_dia" (não "data"): Edital.data_abertura agora guarda hora, então
+    # "data" (isoformat completo) vira uma string DIFERENTE de
+    # Documento.data_validade (ainda só data) mesmo no mesmo dia -- juntar
+    # os dois no mesmo set pra achar "dias com compromisso" duplicava o
+    # mesmo dia (uma entrada "2026-08-20", outra "2026-08-20T00:00:00").
+    # "_dia" fica só a DATA (sem hora) dos dois lados, exclusivo pro
+    # agrupamento -- "data" continua com a hora, pra exibição/ordenação.
     compromissos_lista = [{
-        "tipo": "documento", "data": d.data_validade.isoformat(),
+        "tipo": "documento", "data": d.data_validade.isoformat(), "_dia": d.data_validade.isoformat(),
         "documento_id": d.id, "nome": d.nome, "link": d.link,
     } for d in docs] + [{
-        "tipo": "edital", "data": ed.data_abertura.isoformat(),
+        "tipo": "edital", "data": ed.data_abertura.isoformat(), "_dia": ed.data_abertura.date().isoformat(),
         "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
         "modalidade": ed.modalidade, "municipio": ed.municipio, "uf": ed.uf,
         "valor_estimado": ed.valor_estimado,
     } for ed in editais]
     compromissos_lista.sort(key=lambda c: c["data"])
-    dias_com_compromisso = sorted({c["data"] for c in compromissos_lista})
+    dias_com_compromisso = sorted({c.pop("_dia") for c in compromissos_lista})
     return {"inicio": inicio.isoformat(), "fim": fim.isoformat(),
             "dias_com_compromisso": dias_com_compromisso, "compromissos": compromissos_lista}
 
@@ -4580,12 +4664,19 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
               .where(Match.usuario_id == user.id)
               .where(Edital.data_encerramento.is_not(None))
               .where(Edital.data_encerramento >= hoje)
-              .where(Edital.data_encerramento <= hoje + timedelta(days=settings.LEMBRETE_PRAZO_DIAS))
+              # data_encerramento agora guarda hora -- "<=" trataria o
+              # último dia da janela como meia-noite, excluindo qualquer
+              # encerramento desse mesmo dia com hora > 0. "<" do dia
+              # seguinte inclui o dia inteiro.
+              .where(Edital.data_encerramento < hoje + timedelta(days=settings.LEMBRETE_PRAZO_DIAS + 1))
               .where(or_(Match.status == STATUS_PARTICIPACAO,
                         Match.interessante.is_(True), Match.nivel == "forte"))
               .limit(_LIMITE_ITENS_NOTIFICACAO))
     for edital_id, orgao, data_encerramento in db.execute(q_prazo).all():
-        dias = (data_encerramento - hoje).days
+        # .date(): esta contagem é em DIAS ("faltam X dias"), não precisa da
+        # hora exata -- data_encerramento (datetime) - hoje (date) quebraria
+        # com TypeError (não dá pra subtrair datetime de date direto).
+        dias = (data_encerramento.date() - hoje).days
         itens.append({
             "tipo": "prazo", "edital_id": edital_id, "orgao": orgao,
             "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
@@ -4600,7 +4691,8 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                      .where(Match.nivel == "forte")
                      .where(Edital.data_abertura.is_not(None))
                      .where(Edital.data_abertura >= hoje)
-                     .where(Edital.data_abertura <= hoje + timedelta(days=janela)))
+                     # ver mesmo achado no q_prazo acima
+                     .where(Edital.data_abertura < hoje + timedelta(days=janela + 1)))
         total_abrindo = db.execute(q_abertura).scalar_one()
         if total_abrindo:
             itens.append({

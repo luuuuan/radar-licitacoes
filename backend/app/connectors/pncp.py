@@ -50,7 +50,11 @@ MODALIDADE_NOME = {
 }
 
 
-def _parse_data(valor: str | None) -> date | None:
+def _parse_data_hora(valor: str | None) -> datetime | None:
+    """Mesmo parsing de _parse_data, mas preserva a hora -- usado pelos
+    campos onde o horário importa de verdade (dataAberturaProposta/
+    dataEncerramentoProposta: "recebendo proposta"/"encerrado" precisa
+    respeitar a hora, não só o dia, e a UI mostra a hora pro usuário)."""
     if not valor:
         return None
     # Achado real (auditoria do agente debugger): o `if/else` dentro do
@@ -70,13 +74,18 @@ def _parse_data(valor: str | None) -> date | None:
         ("%Y-%m-%dT%H:%M:%S.%f", 26),
     ):
         try:
-            return datetime.strptime(valor[:comprimento], fmt).date()
+            return datetime.strptime(valor[:comprimento], fmt)
         except (ValueError, TypeError):
             continue
     try:
-        return datetime.fromisoformat(valor.replace("Z", "")).date()
+        return datetime.fromisoformat(valor.replace("Z", ""))
     except (ValueError, TypeError):
         return None
+
+
+def _parse_data(valor: str | None) -> date | None:
+    dt = _parse_data_hora(valor)
+    return dt.date() if dt else None
 
 
 # Nomes "bonitos" só pros domínios que a gente reconhece com confiança —
@@ -335,8 +344,8 @@ class PNCPConnector(BaseConnector):
             municipio=unidade.get("municipioNome"),
             valor_estimado=reg.get("valorTotalEstimado"),
             data_publicacao=_parse_data(reg.get("dataPublicacaoPncp")),
-            data_abertura=_parse_data(reg.get("dataAberturaProposta")),
-            data_encerramento=_parse_data(reg.get("dataEncerramentoProposta")),
+            data_abertura=_parse_data_hora(reg.get("dataAberturaProposta")),
+            data_encerramento=_parse_data_hora(reg.get("dataEncerramentoProposta")),
             link=self._montar_link(reg),
             plataforma=_plataforma_de_link(reg.get("linkSistemaOrigem")),
             link_sistema_origem=_link_valido(reg.get("linkSistemaOrigem")),

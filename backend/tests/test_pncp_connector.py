@@ -15,9 +15,11 @@ Achados da auditoria do agente debugger em app/connectors/pncp.py:
 Sem HTTP de verdade -- troca self.http (requests.Session) por uma sessão
 fake com uma fila de respostas. Rode com:  cd backend && pytest
 """
-from datetime import date
+from datetime import date, datetime
 
-from app.connectors.pncp import PNCPConnector, _parse_data, _plataforma_de_link, _link_valido, MODALIDADE_NOME
+from app.connectors.pncp import (
+    PNCPConnector, _parse_data, _parse_data_hora, _plataforma_de_link, _link_valido, MODALIDADE_NOME,
+)
 
 
 class _RespostaFake:
@@ -78,6 +80,36 @@ def test_parse_data_com_timezone_cai_no_fallback_fromisoformat():
 
 def test_parse_data_invalida_devolve_none():
     assert _parse_data("isso nao e uma data") is None
+
+
+# --------- _parse_data_hora: preserva a hora (pedido do usuário) --------- #
+# Achado real: dataAberturaProposta/dataEncerramentoProposta do PNCP sempre
+# vinham com hora de verdade, mas _parse_data descartava com .date() --
+# nunca dava pra mostrar nem respeitar a hora de início/fim de recebimento
+# de propostas. _parse_data_hora é o mesmo parsing, sem o .date() final.
+
+def test_parse_data_hora_preserva_hora_e_minuto():
+    assert _parse_data_hora("2024-01-15T10:30:00") == datetime(2024, 1, 15, 10, 30, 0)
+
+
+def test_parse_data_hora_so_data_vira_meia_noite():
+    assert _parse_data_hora("2024-01-15") == datetime(2024, 1, 15, 0, 0, 0)
+
+
+def test_parse_data_hora_com_fracao_de_segundo_preserva_hora():
+    assert _parse_data_hora("2024-01-15T10:30:00.123456") == datetime(2024, 1, 15, 10, 30, 0)
+
+
+def test_parse_data_hora_none_ou_invalida_devolve_none():
+    assert _parse_data_hora(None) is None
+    assert _parse_data_hora("isso nao e uma data") is None
+
+
+def test_parse_data_ainda_descarta_a_hora_pra_quem_so_quer_a_data():
+    """_parse_data (usado por data_publicacao) continua devolvendo só a
+    data -- só dataAberturaProposta/dataEncerramentoProposta (ver
+    PNCPConnector.mapear) passaram a usar _parse_data_hora."""
+    assert _parse_data("2024-01-15T10:30:00") == date(2024, 1, 15)
 
 
 # --------- _coletar_itens: paginação --------- #

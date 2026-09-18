@@ -34,6 +34,15 @@ def _parse_data(valor: str | None) -> date | None:
     return None
 
 
+def _parse_data_meia_noite(valor: str | None) -> datetime | None:
+    """EditalColetado.data_abertura agora é datetime (pedido do usuário: a
+    UI mostra a hora e o status "recebendo/encerrado" passa a respeitar
+    ela) -- esta fonte (Portal da Transparência) só manda a DATA, sem
+    horário nenhum, então vira meia-noite em vez de deixar sem hora."""
+    d = _parse_data(valor)
+    return datetime.combine(d, datetime.min.time()) if d else None
+
+
 class TransparenciaConnector(BaseConnector):
     nome = "transparencia"
 
@@ -139,7 +148,7 @@ class TransparenciaConnector(BaseConnector):
                 municipio=reg.get("municipio") or None,
                 valor_estimado=valor,
                 data_publicacao=_parse_data(reg.get("dataPublicacao") or reg.get("dataResultadoCompra")),
-                data_abertura=_parse_data(reg.get("dataAbertura")),
+                data_abertura=_parse_data_meia_noite(reg.get("dataAbertura")),
                 link=reg.get("linkLicitacao") or None,
                 itens=[ItemColetado(numero=1, descricao=objeto[:300])] if objeto else [],
                 raw=reg,

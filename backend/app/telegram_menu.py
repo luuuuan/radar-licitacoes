@@ -58,7 +58,8 @@ def _pendentes_prazo(db: Session, usuario: Usuario, slot: int = 1) -> list[tuple
          .where(or_(Match.interessante == True, Match.nivel == "forte")))  # noqa: E712
     resultado = []
     for m, ed in db.execute(q).all():
-        dias = (ed.data_encerramento - hoje).days
+        # .date(): data_encerramento agora guarda hora -- ver lembretes.py
+        dias = (ed.data_encerramento.date() - hoje).days
         if 0 <= dias <= settings.LEMBRETE_PRAZO_DIAS:
             resultado.append((m, ed))
     return resultado
@@ -75,7 +76,7 @@ def _pendentes_abertura(db: Session, usuario: Usuario, slot: int = 1) -> list[tu
          .where(Edital.data_abertura.is_not(None), Edital.data_abertura >= hoje))
     resultado = []
     for m, ed in db.execute(q).all():
-        dias = (ed.data_abertura - hoje).days
+        dias = (ed.data_abertura.date() - hoje).days
         if dias <= max(0, usuario.dias_antecedencia):
             resultado.append((m, ed))
     return resultado

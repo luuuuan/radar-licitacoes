@@ -34,6 +34,13 @@ def _link_edital(ed) -> str | None:
     return ed.link
 
 
+def _fmt_data_hora(dt) -> str:
+    """"2026-09-19 09:00:00" (str() puro de datetime) não é legível numa
+    notificação -- pedido do usuário: mostrar a hora de início/fim de
+    recebimento de propostas, formatada."""
+    return dt.strftime("%d/%m/%Y às %Hh%M") if dt else ""
+
+
 def item_edital(ed, nivel: str | None = None) -> dict:
     """Constrói o dict padrão de um edital a partir do modelo Edital, usado
     tanto pelo aviso de novas oportunidades quanto pelos lembretes de prazo/
@@ -43,8 +50,8 @@ def item_edital(ed, nivel: str | None = None) -> dict:
         "objeto": ed.objeto, "orgao": ed.orgao,
         "municipio": ed.municipio, "uf": ed.uf, "link": _link_edital(ed),
         "valor_estimado": ed.valor_estimado,
-        "abertura": str(ed.data_abertura) if ed.data_abertura else "",
-        "encerramento": str(ed.data_encerramento) if ed.data_encerramento else "",
+        "abertura": _fmt_data_hora(ed.data_abertura),
+        "encerramento": _fmt_data_hora(ed.data_encerramento),
         "nivel": nivel,
     }
 

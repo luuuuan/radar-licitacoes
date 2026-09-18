@@ -44,7 +44,9 @@ def test_detalhe_inclui_plataforma_e_data_encerramento():
 
     assert r["edital"]["plataforma"] == "ComprasNet"
     assert r["edital"]["link_sistema_origem"] == "https://comprasnet.gov.br/pregao/123"
-    assert r["edital"]["data_encerramento"] == "2026-10-15"
+    # T00:00:00: data_encerramento agora guarda hora (ver _parse_data_hora
+    # em connectors/pncp.py) -- isoformat() de datetime inclui a hora.
+    assert r["edital"]["data_encerramento"] == "2026-10-15T00:00:00"
     assert r["edital"]["municipio"] == "Campinas"
     assert r["edital"]["uf"] == "SP"
 

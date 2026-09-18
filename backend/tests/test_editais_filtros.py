@@ -5,7 +5,7 @@ a função da rota diretamente com os parâmetros já resolvidos (o jeito que o
 FastAPI resolveria via Query(...), sem depender da injeção de dependência).
 Rode com:  cd backend && pytest
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -304,7 +304,12 @@ def test_vista_ativos_inclui_edital_com_abertura_passada_mas_encerramento_futuro
 
     assert r["total"] == 1
     assert r["resultados"][0]["edital_id"] == ed.id
-    assert r["resultados"][0]["dias_restantes"] == 10
+    # 9, não 10: data_encerramento agora guarda hora (meia-noite, por ser
+    # um `date` puro no fixture) -- "agora" (rodando depois da meia-noite
+    # de hoje) já consumiu uma fração do 1º dia, então faltam 9 dias
+    # inteiros + uma fração, e .days arredonda pra baixo. Pedido do
+    # usuário: a contagem passou a respeitar a hora, não só o dia.
+    assert r["resultados"][0]["dias_restantes"] == 9
 
 
 def test_vista_ativos_exclui_edital_com_abertura_e_encerramento_passados():
@@ -331,7 +336,10 @@ def test_dias_restantes_antes_da_abertura_conta_ate_abertura_nao_ate_encerrament
     r = _listar(db, u, vista="ativos")
 
     assert r["resultados"][0]["edital_id"] == ed.id
-    assert r["resultados"][0]["dias_restantes"] == 3
+    # 2, não 3: mesmo achado do teste de cima -- "agora" já passou da
+    # meia-noite de hoje, então até a meia-noite de daqui a 3 dias faltam
+    # 2 dias inteiros + uma fração.
+    assert r["resultados"][0]["dias_restantes"] == 2
 
 
 # --------- status_prazo: "Recebendo proposta" entre início e fim --------- #
@@ -397,19 +405,53 @@ def test_status_prazo_no_dia_exato_da_abertura_ja_e_recebendo():
     assert r["resultados"][0]["status_prazo"] == "recebendo"
 
 
-def test_status_prazo_no_dia_exato_do_encerramento_ainda_e_recebendo():
-    """O prazo vale até o fim do dia de data_encerramento -- só vira
-    "encerrado" no dia SEGUINTE."""
+def test_status_prazo_respeita_a_hora_exata_do_encerramento():
+    """Pedido do usuário: "encerrado"/"recebendo proposta" tem que respeitar
+    a HORA de data_encerramento, não só o dia -- um edital que fecha às 09h
+    de hoje já está encerrado às 10h do mesmo dia, não o dia inteiro (achado
+    anterior a este pedido: data_encerramento só guardava a data, sem hora;
+    ver _parse_data_hora em connectors/pncp.py)."""
+    db = _sessao()
+    u = _usuario(db)
+    agora = datetime.now()
+    ed_ainda_recebendo = _edital_com_match(
+        db, u, "ed-ainda-recebendo",
+        data_abertura=agora - timedelta(days=10),
+        data_encerramento=agora + timedelta(hours=2))
+    ed_ja_encerrado = _edital_com_match(
+        db, u, "ed-ja-encerrado",
+        data_abertura=agora - timedelta(days=10),
+        data_encerramento=agora - timedelta(hours=2))
+
+    r = _listar(db, u, vista="todos")
+    por_id = {item["edital_id"]: item for item in r["resultados"]}
+
+    assert por_id[ed_ainda_recebendo.id]["status_prazo"] == "recebendo"
+    assert por_id[ed_ja_encerrado.id]["status_prazo"] == "encerrado"
+
+
+def test_status_prazo_sem_data_encerramento_cadastrada_so_encerra_no_dia_seguinte_a_abertura():
+    """Sem data_encerramento cadastrada, o fallback é data_abertura -- mas
+    ela só diz QUANDO a janela abriu, não quando fecha, então o corte
+    continua por DIA (não pela hora exata): um edital que abriu hoje de
+    manhã não pode "encerrar" hoje à tarde só porque falta o dado real de
+    fim (achado real ao testar a mudança acima: um edital assim virava
+    "encerrado" minutos depois de abrir, e a IndexError em
+    test_status_prazo_no_dia_exato_do_encerramento_ainda_e_recebendo, o
+    teste que este substitui, veio de outro sintoma do mesmo bug)."""
     db = _sessao()
     u = _usuario(db)
     hoje = date.today()
-    ed = _edital_com_match(db, u, "ed1",
-                           data_abertura=hoje - timedelta(days=10), data_encerramento=hoje)
+    ed_abriu_hoje = _edital_com_match(db, u, "ed-abriu-hoje",
+                                      data_abertura=hoje, data_encerramento=None)
+    ed_abriu_ontem = _edital_com_match(db, u, "ed-abriu-ontem",
+                                       data_abertura=hoje - timedelta(days=1), data_encerramento=None)
 
-    r = _listar(db, u, vista="ativos")
+    r = _listar(db, u, vista="todos")
+    por_id = {item["edital_id"]: item for item in r["resultados"]}
 
-    assert r["resultados"][0]["edital_id"] == ed.id
-    assert r["resultados"][0]["status_prazo"] == "recebendo"
+    assert por_id[ed_abriu_hoje.id]["status_prazo"] == "recebendo"
+    assert por_id[ed_abriu_ontem.id]["status_prazo"] == "encerrado"
 
 
 def test_status_prazo_sem_nenhuma_data_e_aguardando():
@@ -448,7 +490,9 @@ def test_sem_match_inclui_edital_com_abertura_passada_mas_encerramento_futuro():
 
     assert len(r["sem_match"]) == 1
     assert r["sem_match"][0]["edital_id"] == ed.id
-    assert r["sem_match"][0]["dias_restantes"] == 10
+    # 9, não 10 -- ver mesmo achado em test_vista_ativos_inclui_edital_com_
+    # abertura_passada_mas_encerramento_futuro, acima.
+    assert r["sem_match"][0]["dias_restantes"] == 9
 
 
 def test_sem_match_limitado_a_20_resultados():

@@ -208,6 +208,24 @@ def _migrar_colunas_novas() -> None:
                 conn.rollback()
                 log.warning("Migração documentos.data_validade (DROP NOT NULL): %s", e)
 
+            # editais.data_abertura/data_encerramento eram DATE -- pedido do
+            # usuário: mostrar a hora de início/fim de recebimento de
+            # propostas e respeitar ela no status "recebendo proposta"/
+            # "encerrado" (_status_prazo_edital, main.py). O PNCP já manda a
+            # hora (ver _parse_data_hora em connectors/pncp.py), só nunca
+            # tinha sido preservada. DATE -> TIMESTAMP é um cast seguro (só
+            # alarga, linhas existentes ganham 00:00:00) -- ALTER COLUMN é
+            # no-op se já for TIMESTAMP (não dá erro nem reescreve a tabela).
+            for coluna in ("data_abertura", "data_encerramento"):
+                try:
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                    conn.execute(text(
+                        f"ALTER TABLE editais ALTER COLUMN {coluna} TYPE TIMESTAMP"))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    log.warning("Migração editais.%s (DATE -> TIMESTAMP): %s", coluna, e)
+
 
 def _migrar_indices_novos() -> None:
     """Índices adicionados após a 1ª versão (mesma lógica de _migrar_colunas_novas,

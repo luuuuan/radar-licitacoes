@@ -1,7 +1,7 @@
 """Interface base para conectores de portais de licitação."""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 
 @dataclass
@@ -28,8 +28,15 @@ class EditalColetado:
     municipio: str | None = None
     valor_estimado: float | None = None
     data_publicacao: date | None = None
-    data_abertura: date | None = None
-    data_encerramento: date | None = None
+    # datetime (não date): pedido do usuário -- data de início/fim de
+    # recebimento de propostas precisa mostrar a HORA (ex.: "09h00") e o
+    # status "recebendo proposta"/"encerrado" precisa respeitar a hora, não
+    # só o dia (um edital que fecha às 09h de hoje já está encerrado, não
+    # "encerra hoje" o dia inteiro). O PNCP já manda a hora no campo raw
+    # (dataAberturaProposta/dataEncerramentoProposta) -- só nunca foi
+    # preservada (ver _parse_data_hora em connectors/pncp.py).
+    data_abertura: datetime | None = None
+    data_encerramento: datetime | None = None
     link: str | None = None
     plataforma: str | None = None
     link_sistema_origem: str | None = None
