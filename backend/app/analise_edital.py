@@ -1060,12 +1060,15 @@ def _prioridade_arquivo(a: dict) -> int:
 
 # Achado real (edital 125821): quando o texto do edital estoura o teto de
 # tamanho de requisição do Gemini (HTTP 413 -- limite exato não é
-# documentado publicamente), a retentativa dentro de analisar() trunca pro
-# último valor que já rodou de verdade em produção sem erro, em vez de
-# desistir de vez. Módulo-level (não dentro de analisar()) porque o 413
-# pode acontecer também no caminho de texto_pronto (cache), que pula o
-# bloco onde MAX_TOTAL é calculado.
-_MAX_TOTAL_SEGURO_413 = 80000
+# documentado publicamente, e nem sempre é sobre tamanho -- ver comentário
+# de MAX_TOTAL sobre o 413 persistindo mesmo numa retentativa deste mesmo
+# valor), a retentativa dentro de analisar() trunca pra bem menos que
+# MAX_TOTAL (80000) e tenta mais uma vez, em vez de desistir de vez --
+# defesa extra pro caso raro de um documento único, sem zip/múltiplos
+# arquivos, sozinho já passar de 40000 chars. Módulo-level (não dentro de
+# analisar()) porque o 413 pode acontecer também no caminho de
+# texto_pronto (cache), que pula o bloco onde MAX_TOTAL é calculado.
+_MAX_TOTAL_SEGURO_413 = 40000
 
 
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
@@ -1108,15 +1111,22 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # valor. max_paginas também sobe (senão o PDF para de ser lido bem
         # antes de bater esse teto de caracteres).
         #
-        # 80000 -> 200000 (achado real, edital 125821, PNCP
-        # 88830609000139/2026/371): depois de corrigir a leitura de .odt
-        # (ver _e_odt), um edital com catálogo de 90+ itens ESTOURAVA DE
-        # VERDADE o teto de 80000 no meio da tabela de itens do Anexo I --
-        # a seção de habilitação/prazos/multas já tinha sido capturada
-        # antes do corte (não é a mesma classe de bug do .odt, que perdia
-        # o documento inteiro), mas o usuário pediu pra também cobrir esse
-        # caso por completo.
-        MAX_TOTAL = 200000
+        # Chegou a subir pra 200000 (achado real, edital 125821, PNCP
+        # 88830609000139/2026/371, catálogo de 90+ itens estourando o teto
+        # de 80000 no meio da tabela do Anexo I) -- revertido de volta
+        # depois que 200000 reproduziu HTTP 413 do Gemini DE VERDADE em
+        # produção, de forma persistente (não só na 1ª tentativa: refiz a
+        # análise várias vezes, com cooldown real entre elas, e continuou
+        # 413 mesmo na retentativa truncada pro próprio valor antigo de
+        # 80000 -- ver _MAX_TOTAL_SEGURO_413 logo abaixo, que cobre esse
+        # caso residual). Não achei o limite exato/documentado que o
+        # Gemini aceita nesse campo -- 80000 é o último valor confirmado
+        # estável em produção; mirar um número maior de novo arriscaria
+        # reproduzir o mesmo problema pra qualquer edital grande, não só
+        # este. Fica como está até haver um jeito confiável de confirmar
+        # um teto maior (ex.: erro mais específico do Gemini, ou suporte
+        # oficial confirmando o limite real).
+        MAX_TOTAL = 80000
         partes, fontes = [], []
         falhou_download = False
         for a in candidatos[:5]:
