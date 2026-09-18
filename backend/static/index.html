@@ -4434,6 +4434,12 @@ async function _excluirComparacaoIA(numero, btn){
     p.textContent = 'Todos os itens desta comparação foram excluídos da lista.';
     wrapper.replaceWith(p);
   }
+  // mesmo achado real de adicionarItemIaNaCotacao: sem re-sincronizar
+  // _analiseCache com o DOM já editado (linha excluída), sair da aba e
+  // voltar reescrevia tudo com o cache velho e trazia o item excluído de
+  // volta -- o comentário acima já sabia disso pro caso "último item", mas
+  // o mesmo risco existe pra qualquer exclusão, não só a última.
+  if(_analiseCache) _analiseCache = $('#edital-conteudo').innerHTML;
 }
 
 async function adicionarItemIaNaCotacao(numero, produtoId, btn){
@@ -4450,6 +4456,14 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
     _marcarSelecaoCotacao(numero, true);
     _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
     if(btn){ btn.innerHTML = ICN.check+' na cotação'; btn.style.cssText = _estiloBotaoCotacao(true); }
+    // achado real: o botão em tela já ficava certo ("na cotação"), mas
+    // _analiseCache (o HTML pronto que abaEdital('analise') reusa sem ir ao
+    // servidor de novo) continuava com a versão de ANTES desse clique --
+    // sair da aba e voltar reescrevia o conteúdo inteiro com o cache velho,
+    // e o botão voltava pra "+ Adicionar na cotação" mesmo já confirmado.
+    // Re-sincroniza o cache com o DOM atual (mesmo risco existe em
+    // _excluirComparacaoIA, ver lá).
+    if(_analiseCache) _analiseCache = $('#edital-conteudo').innerHTML;
     toast('Item confirmado e adicionado à cotação.', 'ok');
   }catch(e){
     if(btn) btn.disabled = false;
