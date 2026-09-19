@@ -93,7 +93,37 @@
      único elemento com estado (id="coleta-status" etc.) em vez de duplicar
      e arriscar desincronizar. O botão de tema NÃO entra mais aqui — é fixo
      no canto da tela, ver #btn-tema logo abaixo. */
-  #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px}
+  #slot-header-extra-desktop,#slot-header-extra{display:flex;align-items:center;gap:8px;min-width:0}
+  /* achado real (auditoria de responsividade): sem min-width:0 aqui, esse
+     bloco (dentro de .header-meio, que já tem min-width:0 e pode ser
+     espremido a poucos px quando a tela é estreita mas ainda não caiu no
+     breakpoint mobile de 680px -- ex.: tablet em pé, 768px) não encolhia de
+     verdade -- ficava do tamanho do próprio conteúdo (badge de status +
+     botão Recalcular) e vazava por cima do botão "Coletar agora" ao lado,
+     deixando os dois ilegíveis/inacessíveis. #coleta-status abaixo (max-width
+     + "…") cuida do resto: sem ele, mesmo com min-width:0 aqui o texto do
+     status só quebraria em várias linhas, cabendo mas feio. */
+  #coleta-status{max-width:150px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;display:inline-block;vertical-align:middle}
+  /* razão social truncada de forma incondicional (não só no modo compacto
+     ≥1500px, ver regra própria mais abaixo) -- achado real: .header-conta-
+     desktop tem flex-shrink:0 (nunca encolhe), então um nome de empresa
+     comprido sozinho já empurrava o botão "Sair" pra fora da viewport em
+     telas de tablet estreito (~681-720px), com html{overflow-x:hidden}
+     tornando "Sair" impossível de tocar (não só feio -- inacessível). */
+  #user-nome{max-width:140px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;display:inline-block;vertical-align:middle}
+  /* mesmo achado do #coleta-status acima, pro botão "Recalcular" vizinho:
+     "Recalcular" é uma palavra só (sem espaço pra quebrar linha), então sem
+     isso o <button> nunca encolhia de verdade e uma fatia dele (a parte da
+     direita) ficava embaixo do botão "Coletar agora" seguinte -- mesma cor
+     de fundo dos dois (--accent) escondia o bug a olho nu, mas aquela fatia
+     ficava impossível de clicar (o elemento por cima no DOM capturava o
+     toque). Só no slot desktop -- o mobile (#slot-header-extra-mobile) já
+     tem a própria regra (width:auto) mais abaixo, sem esse problema (empilha
+     em vez de dividir a mesma linha). */
+  #slot-header-extra-desktop #btn-recalcular{min-width:0;max-width:110px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* botão de tema: fixo no canto inferior direito em qualquer tamanho de
      tela (pedido explícito -- antes vivia dentro do cabeçalho e ia pra
      gaveta no mobile, ver comentário no HTML). z-index abaixo de .modal
@@ -599,7 +629,12 @@
     #slot-header-extra-mobile #slot-header-extra{flex-wrap:wrap;gap:8px;
       width:100%;padding:10px 10px 14px;margin-bottom:6px;
       border-bottom:1px solid var(--line)}
-    #slot-header-extra-mobile #coleta-status{flex:1 1 100%;font-size:12.5px;padding:6px 10px}
+    /* max-width:none -- a gaveta tem a linha só pra esse badge (flex:1 1
+       100%, sem "Coletar agora" disputando espaço do lado, ver #btn-coletar
+       "order:3" logo abaixo), então o max-width:150px do #coleta-status
+       "geral" (pensado pro cabeçalho desktop/tablet apertado, ver comentário
+       lá) só cortava o texto sem necessidade aqui dentro. */
+    #slot-header-extra-mobile #coleta-status{flex:1 1 100%;font-size:12.5px;padding:6px 10px;max-width:none}
     /* "nav button" (regra geral da gaveta, mais acima) força width:100% e
        zera o fundo -- sobrescreve aqui pra manter o visual de botão cheio */
     #slot-header-extra-mobile #btn-recalcular{
@@ -642,7 +677,14 @@
       margin-top:auto;padding-top:14px;border-top:1px solid var(--line)}
     .nav-footer .nav-user-nome{flex:1;min-width:0;font-size:13px;color:var(--muted);
       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .nav-footer .btn{flex-shrink:0}
+    /* width:auto sobrescrevendo de propósito -- achado real (auditoria de
+       responsividade): "Sair" é um <button> dentro de <nav>, então herdava o
+       "nav button{width:100%}" genérico (regra pros itens da lista logo
+       acima) e ocupava a linha INTEIRA da gaveta -- disputando espaço com
+       .nav-user-nome (flex:1) só que já sem sobrar nada, o nome da empresa
+       colapsava pra 0px de largura e sumia por completo, mesmo com texto
+       presente no DOM. */
+    .nav-footer .btn{flex-shrink:0;width:auto}
     .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px}
     /* "Meu negócio"/"Conta" viram só um rótulo de seção no celular (o dropdown
        é irrelevante aqui, os itens já ficam expandidos direto na lista) */
@@ -1590,8 +1632,8 @@
           background:var(--panel2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
         </div>
-        <div style="flex:1">
-          <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" onchange="selecionarLogoPerfil(this)">
+        <div style="flex:1;min-width:0">
+          <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="max-width:100%" onchange="selecionarLogoPerfil(this)">
           <div class="muted" style="font-size:11px;margin-top:4px">Recomendado: imagem quadrada (largura = altura), a partir de 300x300px. PNG com fundo transparente fica melhor.</div>
           <div class="muted" id="pf-logo-status" style="font-size:11px;margin-top:4px"></div>
           <button type="button" class="btn perigo" id="pf-logo-remover" style="display:none;margin-top:6px;padding:4px 10px;font-size:12px" onclick="removerLogoPerfil()">Remover logo</button>

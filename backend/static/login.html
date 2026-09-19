@@ -110,6 +110,15 @@
   .wizard-nav .btn{width:auto;margin-top:0;padding:9px 22px}
   .wizard-nav .espaco{flex:1}
   .logo-upload{display:flex;align-items:center;gap:14px;margin-top:6px}
+  /* achado real (auditoria de responsividade, mesmo padrão do "Logo da
+     empresa" em Meu perfil no app principal): sem min-width:0 no filho
+     flex:1, o <input type=file> (controle nativo do navegador, sem
+     max-width intrínseco) não encolhia de verdade em telas de celular --
+     ficava mais largo que o wizard-viewport (que só não vira scroll
+     horizontal da PÁGINA porque tem overflow:hidden, mas ainda cortava o
+     "Escolher arquivo"/"Nenhum arquivo selecionado" visualmente). */
+  .logo-upload > div[style*="flex:1"]{min-width:0}
+  .logo-upload input[type=file]{max-width:100%}
   .logo-preview{width:64px;height:64px;border-radius:10px;border:1px dashed var(--line);
     background:var(--panel2);display:flex;align-items:center;justify-content:center;
     overflow:hidden;flex-shrink:0}
