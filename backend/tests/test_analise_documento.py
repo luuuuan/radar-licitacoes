@@ -97,8 +97,10 @@ def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
     assert r["status"] == "ok"
     assert len(r["itens"]) == 2
     assert r["itens"][0]["atendido"] is True
+    assert r["itens"][0]["status"] == "atendido"
     assert r["itens"][0]["documento"] == "ficha_tecnica.pdf"
     assert r["itens"][1]["atendido"] is False
+    assert r["itens"][1]["status"] == "nao_atendido"
 
 
 # --------- orçamento de caracteres, não contagem fixa de 8 documentos --------- #
@@ -173,13 +175,16 @@ def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
     assert r["itens"][0]["exigido"] == "CND"
 
 
-def test_verificar_documentos_item_nao_aplicavel_e_removido_da_lista(monkeypatch):
+def test_verificar_documentos_item_nao_aplicavel_fica_marcado_mas_nao_some(monkeypatch):
     """Pedido do usuário (a partir de um caso real, edital com exigência
     alternativa por tipo de empresa: "sociedade empresária ou EIRELI" não
     se aplica a um fornecedor cadastrado como MEI) -- a IA já reconhecia
     isso no texto da observação, mas ainda marcava ✗ (não atendido) como se
-    fosse uma pendência real. Item com aplicavel=false nem entra na lista
-    (não conta em atendidos/total, não mostra X nenhum)."""
+    fosse uma pendência real. Achado real (edital 136161): a 1ª correção
+    fazia o item aplicavel=false sumir da lista por completo, o que deixava
+    a Verificação por IA com menos itens que o checklist por nome (que
+    lista tudo), sem explicar por quê. Agora o item continua na lista, só
+    que com status="nao_aplicavel" em vez de ✓/✗."""
     resposta_ia = json.dumps({"itens": [
         {"exigido": "Sociedade empresária ou EIRELI: ato constitutivo", "atendido": False, "aplicavel": False,
          "documento": "", "observacao": "Não aplicável -- fornecedor cadastrado como MEI"},
@@ -194,8 +199,12 @@ def test_verificar_documentos_item_nao_aplicavel_e_removido_da_lista(monkeypatch
         [{"nome": "cnd.pdf", "texto": "certidão negativa " * 5}], api_key="fake-key")
 
     assert r["status"] == "ok"
-    assert len(r["itens"]) == 1
-    assert r["itens"][0]["exigido"] == "CND Receita Federal"
+    assert len(r["itens"]) == 2
+    nao_aplicavel = next(i for i in r["itens"] if i["exigido"].startswith("Sociedade"))
+    assert nao_aplicavel["status"] == "nao_aplicavel"
+    assert nao_aplicavel["atendido"] is False
+    cnd = next(i for i in r["itens"] if i["exigido"] == "CND Receita Federal")
+    assert cnd["status"] == "atendido"
 
 
 def test_verificar_documentos_item_sem_campo_aplicavel_conta_como_aplicavel(monkeypatch):
@@ -210,6 +219,57 @@ def test_verificar_documentos_item_sem_campo_aplicavel_conta_como_aplicavel(monk
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert len(r["itens"]) == 1
     assert r["itens"][0]["exigido"] == "CND Receita Federal"
+    assert r["itens"][0]["status"] == "nao_atendido"
+
+
+def test_verificar_documentos_declaracoes_entram_como_itens_informativos(monkeypatch):
+    """Pedido do usuário (edital 136161): declarações não são mandadas pra
+    IA verificar (ver _formatar_requisitos), mas continuam entrando no
+    resultado final como itens informativos (status="declaracao"), pra
+    Verificação por IA mostrar os mesmos itens que o checklist por nome."""
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "CND Receita Federal", "atendido": True, "aplicavel": True,
+         "documento": "cnd.pdf", "observacao": ""},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+
+    r = ia.verificar_documentos_usuario(
+        "Objeto",
+        {"fiscal_trabalhista": ["CND Receita Federal"],
+         "declaracoes": [
+             {"nome": "Declaração de ME/EPP", "modelo_orgao": True, "detalhe": "Anexo IV"},
+             {"nome": "Declaração de elaboração independente", "modelo_orgao": False, "detalhe": ""},
+         ]},
+        [{"nome": "cnd.pdf", "texto": "certidão negativa " * 5}], api_key="fake-key")
+
+    assert r["status"] == "ok"
+    assert len(r["itens"]) == 3
+    decl1 = next(i for i in r["itens"] if i["exigido"] == "Declaração de ME/EPP")
+    assert decl1["status"] == "declaracao"
+    assert decl1["atendido"] is False
+    assert "Anexo IV" in decl1["observacao"]
+    assert "Modelo pronto" in decl1["observacao"]
+    decl2 = next(i for i in r["itens"] if i["exigido"] == "Declaração de elaboração independente")
+    assert "redigir texto próprio" in decl2["observacao"]
+
+
+def test_verificar_documentos_so_declaracoes_sem_requisito_verificavel_retorna_ok_sem_chamar_ia(monkeypatch):
+    """Edge case: edital só tem declarações, nenhum documento das 4
+    categorias verificáveis por conteúdo -- mostra as declarações mesmo
+    assim, sem gastar uma chamada de IA à toa (não há nada pra ela checar)."""
+    chamou = []
+    monkeypatch.setattr(ia, "_gerar", lambda *a, **k: chamou.append(1))
+
+    r = ia.verificar_documentos_usuario(
+        "Objeto",
+        {"juridica": [], "fiscal_trabalhista": [], "tecnica": [], "economico_financeira": [],
+         "declaracoes": [{"nome": "Declaração de ME/EPP", "modelo_orgao": True, "detalhe": ""}]},
+        [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
+
+    assert chamou == []
+    assert r["status"] == "ok"
+    assert len(r["itens"]) == 1
+    assert r["itens"][0]["status"] == "declaracao"
 
 
 def test_verificar_documentos_erro_ia_propaga_status(monkeypatch):

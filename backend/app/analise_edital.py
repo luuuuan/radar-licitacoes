@@ -54,7 +54,14 @@ VERSAO_PROMPT = 12
 # achado real do edital 126768 -- sem incrementar aqui, quem já tinha
 # rodado a verificação incompleta continuaria vendo o resultado velho
 # mesmo depois do código corrigido).
-VERSAO_VERIFICACAO_DOCUMENTOS = 2
+# v3 = pedido do usuário (edital 136161: "habilitação jurídica" mostrava 18
+# itens no checklist por nome, mas só 11 apareciam aqui): itens com
+# aplicavel=false não somem mais da lista, viram status="nao_aplicavel";
+# declarações (antes de fora por completo, ver _formatar_requisitos) agora
+# entram como itens informativos status="declaracao" -- a lista passa a
+# mostrar os MESMOS itens do checklist por nome, só que cada um explicando
+# por que não vira ✓/✗ quando for o caso, em vez de esconder.
+VERSAO_VERIFICACAO_DOCUMENTOS = 3
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -1405,6 +1412,36 @@ def _formatar_requisitos(documentos_habilitacao: dict) -> str:
     return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
 
 
+def _itens_declaracao(declaracoes: list | None) -> list[dict]:
+    """Declarações não são documento fixo reaproveitável (ver
+    _formatar_requisitos) -- não tem como cruzar por CONTEÚDO contra nada
+    cadastrado, então nunca são mandadas pra IA verificar. Pedido do
+    usuário (edital 136161): antes disso elas simplesmente não apareciam
+    na Verificação por IA, o que fazia a lista parecer menor do que o
+    checklist por nome (que lista tudo) sem explicar por quê. Entram aqui
+    como itens informativos (status="declaracao"), não como pendência."""
+    itens = []
+    for d in (declaracoes or []):
+        if not isinstance(d, dict) or not d.get("nome"):
+            continue
+        modelo = d.get("modelo_orgao")
+        if modelo is True:
+            nota = "Modelo pronto fornecido pelo órgão — só preencher e assinar."
+        elif modelo is False:
+            nota = "Sem modelo do órgão — redigir texto próprio."
+        else:
+            nota = "Declaração a preencher especificamente para este edital."
+        detalhe = (d.get("detalhe") or "").strip()
+        itens.append({
+            "exigido": str(d.get("nome")),
+            "status": "declaracao",
+            "atendido": False,
+            "documento": "",
+            "observacao": f"{nota} {detalhe}".strip(),
+        })
+    return itens
+
+
 def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
                                  documentos_usuario: list[dict], api_key: str | None = None) -> dict:
     """Cruza os documentos que o usuário já tem cadastrados (cada um com
@@ -1423,7 +1460,12 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
 
     docs = documentos_habilitacao or {}
     tem_requisito = any(docs.get(c) for c in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira"))
+    itens_declaracao = _itens_declaracao(docs.get("declaracoes"))
     if not tem_requisito:
+        # nada pra verificar por conteúdo, mas pode haver declaração(ões)
+        # pra mostrar mesmo assim -- não precisa de IA pra isso.
+        if itens_declaracao:
+            return {"status": "ok", "itens": itens_declaracao}
         return {"status": "sem_requisitos"}
     requisitos = _formatar_requisitos(docs)
 
@@ -1477,18 +1519,26 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
         # pedido do usuário: exigência alternativa que não se aplica a este
         # fornecedor (ex.: exigência de sociedade empresária quando os
         # documentos cadastrados mostram que o fornecedor é MEI) não é uma
-        # pendência -- nem entra na lista, não conta em "atendidos/total"
-        # nem mostra ✗. Só pula quando a IA disse EXPLICITAMENTE false; sem
-        # essa informação (chave ausente, formato antigo de cache) trata
-        # como aplicável, igual o prompt pede.
-        if it.get("aplicavel") is False:
-            continue
+        # pendência real -- vira status="nao_aplicavel" em vez de ✓/✗, mas
+        # continua na lista (achado real, edital 136161: sumir deixava a
+        # Verificação por IA com menos itens que o checklist por nome, sem
+        # explicar por quê). Só marca assim quando a IA disse EXPLICITAMENTE
+        # false; sem essa informação (chave ausente, formato antigo de
+        # cache) trata como aplicável, igual o prompt pede.
+        aplicavel = it.get("aplicavel")
+        atendido = bool(it.get("atendido"))
+        if aplicavel is False:
+            status, atendido = "nao_aplicavel", False
+        else:
+            status = "atendido" if atendido else "nao_atendido"
         itens.append({
             "exigido": str(it.get("exigido")),
-            "atendido": bool(it.get("atendido")),
+            "status": status,
+            "atendido": atendido,
             "documento": str(it.get("documento") or ""),
             "observacao": str(it.get("observacao") or ""),
         })
+    itens.extend(itens_declaracao)
     return {"status": "ok", "itens": itens}
 
 

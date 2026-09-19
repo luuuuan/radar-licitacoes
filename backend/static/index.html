@@ -4304,7 +4304,13 @@ function _verificacaoDocumentosIAHTML(v, desatualizada){
   if(!v.itens.length){
     return `<div class="muted" style="margin-top:10px;font-size:12px">Verificação rodou, mas não encontrou exigências de habilitação claras pra cruzar com seus documentos.</div>`;
   }
-  const atendidos = v.itens.filter(i=>i.atendido).length;
+  // achado real (usuário reportou, edital 136161): "atendidos/total" só
+  // conta itens que fazem sentido como pendência real -- "não aplicável"
+  // (alternativa de tipo de empresa que não é a sua) e "declaração" (não é
+  // documento pra ter cadastrado) continuam na lista, mas de fora da conta,
+  // senão pareceria que sobrou coisa pendente sem sobrar de verdade.
+  const checaveis = v.itens.filter(i=>i.status==='atendido'||i.status==='nao_atendido');
+  const atendidos = checaveis.filter(i=>i.status==='atendido').length;
   const _motivoBloqV = _motivoBloqueioEdicao();
   const aviso = desatualizada ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
     ⚠ Seus documentos cadastrados mudaram desde esta verificação — o resultado abaixo pode estar desatualizado.
@@ -4312,14 +4318,22 @@ function _verificacaoDocumentosIAHTML(v, desatualizada){
   </div>` : '';
   return `<div style="margin-top:14px">
     ${aviso}
-    <strong>Verificação por IA dos seus documentos (${atendidos}/${v.itens.length} atendidos)</strong>
+    <strong>Verificação por IA dos seus documentos (${atendidos}/${checaveis.length} atendidos)</strong>
     <p class="muted" style="font-size:11px;margin:2px 0 6px">Lê o conteúdo dos arquivos anexados na aba Documentos — diferente do checklist acima, que só compara pelo nome cadastrado.</p>
     <ul style="margin:4px 0 0;padding-left:18px">
-      ${v.itens.map(i=>`<li style="margin:3px 0;font-size:13px">
-        <span style="color:${i.atendido?'var(--forte)':'var(--destructive)'};font-weight:600">${i.atendido?'✓':'✗'}</span>
-        ${esc(i.exigido)}${i.documento?` <span class="muted">— ${esc(i.documento)}</span>`:''}
-        ${i.observacao?`<div class="muted" style="font-size:11px;margin-left:18px">${esc(i.observacao)}</div>`:''}
-      </li>`).join('')}
+      ${v.itens.map(i=>{
+        const icone = i.status==='atendido' ? `<span style="color:var(--forte);font-weight:600">✓</span>`
+          : i.status==='nao_atendido' ? `<span style="color:var(--destructive);font-weight:600">✗</span>`
+          : `<span class="muted" style="font-weight:600">–</span>`;
+        const nota = i.status==='nao_aplicavel' ? ' <span class="muted" style="font-size:11px">(não aplicável ao seu tipo de empresa)</span>'
+          : i.status==='declaracao' ? ' <span class="muted" style="font-size:11px">(declaração — não é documento a verificar)</span>'
+          : '';
+        return `<li style="margin:3px 0;font-size:13px">
+          ${icone}
+          ${esc(i.exigido)}${nota}${i.documento?` <span class="muted">— ${esc(i.documento)}</span>`:''}
+          ${i.observacao?`<div class="muted" style="font-size:11px;margin-left:18px">${esc(i.observacao)}</div>`:''}
+        </li>`;
+      }).join('')}
     </ul>
   </div>`;
 }
