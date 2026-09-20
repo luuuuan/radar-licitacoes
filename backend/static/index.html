@@ -547,6 +547,11 @@
   .notif-item:hover{background:var(--panel)}
   .notif-item .tit{font-weight:600}
   .notif-item .det{font-size:11px;color:var(--muted)}
+  .notif-head{display:flex;align-items:center;justify-content:flex-end;padding:2px 4px 6px;
+    border-bottom:1px solid var(--line);margin-bottom:4px}
+  .notif-ler-todos{background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;
+    cursor:pointer;padding:2px 4px}
+  .notif-ler-todos:hover{text-decoration:underline}
   /* Toast (avisos) */
   #toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
     z-index:9000;display:flex;flex-direction:column;gap:8px;align-items:center;width:auto;max-width:92vw}
@@ -1939,13 +1944,25 @@ function _renderNotificacoes(){
     painel.innerHTML = '<div class="muted" style="padding:16px 10px;font-size:13px;text-align:center">Nenhuma notificação por enquanto.</div>';
     return;
   }
-  painel.innerHTML = _notifCache.map((n,i)=>{
+  const cabecalho = `<div class="notif-head"><button class="notif-ler-todos" type="button" onclick="_lerTodasNotificacoes()">Ler Todos</button></div>`;
+  const itens = _notifCache.map((n,i)=>{
     const titulo = n.tipo==='documento' ? n.nome : (n.tipo==='abertura' ? 'Editais abrindo em breve' : n.orgao);
     return `<button class="notif-item" type="button" role="menuitem" onclick="_abrirNotificacao(${i})">
       <span class="tit">${_notifIconePorTipo(n.tipo)} ${esc(titulo||'')}</span>
       <span class="det">${esc(n.detalhe||'')}</span>
     </button>`;
   }).join('');
+  painel.innerHTML = cabecalho + itens;
+}
+// pedido do usuário: botão "Ler Todos". Sem estado de "lida" persistido
+// (ver comentário acima, sinais são computados ao vivo) -- só limpa a
+// tela/badge NESTA sessão; se a causa continuar valendo (prazo ainda
+// apertando, documento ainda vencendo), a notificação pode voltar a
+// aparecer na próxima recarga real da lista (reabrir o painel, F5).
+function _lerTodasNotificacoes(){
+  _notifCache = [];
+  $('#notif-badge').style.display = 'none';
+  _renderNotificacoes();
 }
 async function toggleNotificacoes(ev){
   ev.stopPropagation();
