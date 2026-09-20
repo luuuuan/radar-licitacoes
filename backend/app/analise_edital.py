@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import unicodedata
 from datetime import date
 
 import requests
@@ -1061,6 +1062,10 @@ def _parse_json(txt: str):
     return None
 
 
+def _sem_acento(texto: str) -> str:
+    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+
+
 def _prioridade_arquivo(a: dict) -> int:
     """Prioriza retificação/errata/aditamento -- achado real (edital 127082):
     quando existe uma retificação alterando data/condições, o edital
@@ -1069,13 +1074,19 @@ def _prioridade_arquivo(a: dict) -> int:
     só o texto desatualizado e devolvia a data errada. Colocando a
     retificação primeiro, ela sempre entra no texto combinado (ver
     `analisar()`: a lista final ainda é truncada em MAX_TOTAL, mas agora o
-    que sobra de fora é o final do edital original, não a correção)."""
-    t = (a.get("titulo") or "").lower()
-    if "retificaç" in t or "retificac" in t or "errata" in t or "aditamento" in t or "adendo" in t:
+    que sobra de fora é o final do edital original, não a correção).
+
+    _sem_acento: achado real (edital 141844): o título vinha exatamente
+    "TERMO DE REFERENCIA COM APROVACAO" (sem acento no "ê") -- a comparação
+    direta com "termo de referência" (acentuado) nunca batia, então esse
+    documento (onde fica a habilitação/itens) caía no mesmo grupo genérico
+    (prioridade 3) que um aviso administrativo qualquer, perdendo a vaga."""
+    t = _sem_acento((a.get("titulo") or "").lower())
+    if "retificac" in t or "errata" in t or "aditamento" in t or "adendo" in t:
         return 0
     if "edital" in t:
         return 1
-    if "termo de referência" in t or "termo referencia" in t or "anexo" in t:
+    if "termo de referencia" in t or "anexo" in t:
         return 2
     return 3
 
@@ -1161,6 +1172,19 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 falhou_download = True
                 continue
             if len(t) > 300:
+                # achado real (edital 141844, PNCP 46384111000140/2026/1036):
+                # um "Aviso de Contratação Direta" sozinho já batia (e
+                # estourava) MAX_TOTAL -- o loop parava aqui, sem sobrar
+                # ESPAÇO NENHUM pro Termo de Referência (2º candidato, onde
+                # ficam item/habilitação), mesmo esse sendo bem menor que o
+                # orçamento total. Se o 1º documento sozinho já consome
+                # (quase) tudo e existe outro candidato esperando a vez,
+                # reserva metade do orçamento pra ele -- só se aplica ao 1º
+                # documento (fontes ainda vazio), então um edital de
+                # arquivo único continua usando o orçamento inteiro, sem
+                # perder texto à toa.
+                if not fontes and len(t) >= MAX_TOTAL - 5000 and len(candidatos) > 1:
+                    t = t[:MAX_TOTAL // 2]
                 titulo = a.get("titulo") or "documento"
                 partes.append(f"=== DOCUMENTO: {titulo} ===\n{t}")
                 fontes.append(titulo)

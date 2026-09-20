@@ -42,6 +42,17 @@ def test_prioridade_arquivo_reconhece_errata_e_aditamento():
     assert _prioridade_arquivo({"titulo": "Modelo de Declaração"}) == 3
 
 
+def test_prioridade_arquivo_reconhece_termo_de_referencia_sem_acento(monkeypatch):
+    """Achado real (edital 141844, PNCP 46384111000140/2026/1036): título
+    veio exatamente "TERMO DE REFERENCIA COM APROVACAO - SEI.pdf" (sem
+    acento no "ê") -- a comparação direta com "termo de referência" nunca
+    batia, então esse documento (onde ficam item/habilitação) caía na
+    mesma prioridade genérica (3) que um aviso administrativo qualquer, e
+    podia perder a vaga pra ele."""
+    assert _prioridade_arquivo({"titulo": "TERMO DE REFERENCIA COM APROVACAO - SEI.pdf"}) == 2
+    assert _prioridade_arquivo({"titulo": "Retificacao do Edital"}) == 0   # sem cedilha também
+
+
 def _resposta_gemini(json_texto: str):
     r = MagicMock()
     r.status_code = 200
@@ -79,3 +90,65 @@ def test_analisar_inclui_texto_da_retificacao_mesmo_com_edital_grande():
     assert resultado["status"] == "ok"
     assert len(chamadas) == 1
     assert "MARCADOR-RETIFICACAO" in _texto_enviado_a_ia(chamadas[0])
+
+
+def test_analisar_nao_deixa_1o_documento_gigante_engolir_o_2o():
+    """Achado real (edital 141844): um documento sozinho (aviso
+    administrativo) batia o teto inteiro de MAX_TOTAL, e o loop parava aí --
+    o 2º candidato (Termo de Referência, bem menor, onde fica a
+    habilitação) nunca chegava a ser baixado nem entrava no texto mandado
+    pra IA, mesmo sobrando espaço de sobra pra ele. Os dois empatam em
+    prioridade (nenhum bate palavra-chave de retificação/edital/termo de
+    referência), então a ordem original é preservada -- o gigante processa
+    primeiro."""
+    arquivos = [
+        {"titulo": "Aviso de Contratação Direta", "url": "http://x/aviso.pdf"},
+        {"titulo": "Especificações Técnicas", "url": "http://x/especificacoes.pdf"},
+    ]
+    textos = {
+        "http://x/aviso.pdf": "A" * 90000,   # sozinho já passa de MAX_TOTAL (80000)
+        "http://x/especificacoes.pdf": "MARCADOR-ESPECIFICACOES habilitação exigida. " * 20,
+    }
+
+    def _fake_baixar(url, max_chars=80000, **kw):
+        return textos[url][:max_chars], False
+
+    chamadas = []
+
+    def _fake_post(url, **kw):
+        chamadas.append(kw)
+        return _resposta_gemini('{"objeto": "teste"}')
+
+    with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
+         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+        resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
+
+    assert resultado["status"] == "ok"
+    assert len(chamadas) == 1
+    assert "MARCADOR-ESPECIFICACOES" in _texto_enviado_a_ia(chamadas[0])
+
+
+def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
+    """Contraste com o teste acima: quando NÃO há um 2º candidato esperando
+    a vez, o documento único continua aproveitando o orçamento inteiro --
+    a reserva de metade só se aplica quando reservar faz sentido."""
+    arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
+    texto_grande = "MARCADOR-INICIO " + "A" * 90000
+
+    def _fake_baixar(url, max_chars=80000, **kw):
+        return texto_grande[:max_chars], False
+
+    chamadas = []
+
+    def _fake_post(url, **kw):
+        chamadas.append(kw)
+        return _resposta_gemini('{"objeto": "teste"}')
+
+    with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
+         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+        resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
+
+    assert resultado["status"] == "ok"
+    texto_enviado = _texto_enviado_a_ia(chamadas[0])
+    # não foi cortado pela metade (40000) -- usou perto do teto cheio (80000)
+    assert texto_enviado.count("A") > 70000
