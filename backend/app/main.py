@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, update
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
@@ -4747,6 +4747,23 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
 _LIMITE_ITENS_NOTIFICACAO = 30  # teto por categoria -- sem isso o payload cresce sem fim com a idade da conta
 
 
+def _query_analise_pendente(usuario_id: int):
+    """Match.id + Edital.id/orgao das análises por IA concluídas que o
+    usuário ainda não viu na aba Análise -- extraído pra reusar em
+    /api/notificacoes (usa edital_id/orgao) e /api/notificacoes/ler-todas
+    (usa match_id, pra marcar analise_vista_em) -- precisam dispensar
+    exatamente os mesmos itens que estão sendo mostrados, sem duplicar a
+    condição em dois lugares e arriscar os dois desalinharem com o tempo."""
+    return (select(Match.id, Edital.id, Edital.orgao)
+           .join(Edital, Match.edital_id == Edital.id)
+           .where(Match.usuario_id == usuario_id)
+           .where(Match.interagido_em.is_not(None))
+           .where(Edital.analise_em.is_not(None))
+           .where(or_(Match.analise_vista_em.is_(None),
+                     Edital.analise_em > Match.analise_vista_em))
+           .limit(_LIMITE_ITENS_NOTIFICACAO))
+
+
 @app.get("/api/notificacoes")
 def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                  db: Session = Depends(get_session)):
@@ -4789,6 +4806,15 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
        sozinha da próxima vez, sem precisar de estado de "lida" à parte --
        mas navegar pelas outras abas não some mais com ela.
 
+    Botão "Ler Todos" (pedido do usuário, POST .../ler-todas logo abaixo):
+    prazo/abertura/documento somem pelo RESTO DO DIA (Usuario.
+    notificacoes_lidas_em == hoje) e voltam sozinhos amanhã, mesmo que a
+    causa continue valendo -- são sinais que pioram dia a dia (prazo mais
+    perto, documento mais vencido), então faz sentido serem lembrados nesse
+    ritmo. Análise usa o MESMO mecanismo de sempre (analise_vista_em) --
+    pedido explícito do usuário pra nunca mais voltar sozinha (diferente
+    dos outros 3 tipos), então não é afetada por notificacoes_lidas_em.
+
     Achado real (auditoria do agente performance-engineer, medido): as
     consultas antigas traziam a entidade ORM INTEIRA (Match/Edital/
     Documento), incluindo colunas gigantes nunca usadas aqui --
@@ -4801,80 +4827,73 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
     hoje = date.today()
     itens = []
 
-    q_prazo = (select(Edital.id, Edital.orgao, Edital.data_encerramento)
-              .join(Match, Match.edital_id == Edital.id)
-              .where(Match.usuario_id == user.id)
-              .where(Edital.data_encerramento.is_not(None))
-              .where(Edital.data_encerramento >= hoje)
-              # data_encerramento agora guarda hora -- "<=" trataria o
-              # último dia da janela como meia-noite, excluindo qualquer
-              # encerramento desse mesmo dia com hora > 0. "<" do dia
-              # seguinte inclui o dia inteiro.
-              .where(Edital.data_encerramento < hoje + timedelta(days=settings.LEMBRETE_PRAZO_DIAS + 1))
-              .where(or_(Match.status == STATUS_PARTICIPACAO,
-                        Match.interessante.is_(True), Match.nivel == "forte"))
-              .limit(_LIMITE_ITENS_NOTIFICACAO))
-    for edital_id, orgao, data_encerramento in db.execute(q_prazo).all():
-        # .date(): esta contagem é em DIAS ("faltam X dias"), não precisa da
-        # hora exata -- data_encerramento (datetime) - hoje (date) quebraria
-        # com TypeError (não dá pra subtrair datetime de date direto).
-        dias = (data_encerramento.date() - hoje).days
-        itens.append({
-            "tipo": "prazo", "edital_id": edital_id, "orgao": orgao,
-            "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
-            "aba": "proposta",
-        })
-
-    if user.avisar_abertura:
-        janela = max(0, user.dias_antecedencia)
-        q_abertura = (select(func.count(Edital.id))
-                     .select_from(Match).join(Edital, Match.edital_id == Edital.id)
-                     .where(Match.usuario_id == user.id)
-                     .where(Match.nivel == "forte")
-                     .where(Edital.data_abertura.is_not(None))
-                     .where(Edital.data_abertura >= hoje)
-                     # ver mesmo achado no q_prazo acima
-                     .where(Edital.data_abertura < hoje + timedelta(days=janela + 1)))
-        total_abrindo = db.execute(q_abertura).scalar_one()
-        if total_abrindo:
+    if user.notificacoes_lidas_em != hoje:
+        q_prazo = (select(Edital.id, Edital.orgao, Edital.data_encerramento)
+                  .join(Match, Match.edital_id == Edital.id)
+                  .where(Match.usuario_id == user.id)
+                  .where(Edital.data_encerramento.is_not(None))
+                  .where(Edital.data_encerramento >= hoje)
+                  # data_encerramento agora guarda hora -- "<=" trataria o
+                  # último dia da janela como meia-noite, excluindo qualquer
+                  # encerramento desse mesmo dia com hora > 0. "<" do dia
+                  # seguinte inclui o dia inteiro.
+                  .where(Edital.data_encerramento < hoje + timedelta(days=settings.LEMBRETE_PRAZO_DIAS + 1))
+                  .where(or_(Match.status == STATUS_PARTICIPACAO,
+                            Match.interessante.is_(True), Match.nivel == "forte"))
+                  .limit(_LIMITE_ITENS_NOTIFICACAO))
+        for edital_id, orgao, data_encerramento in db.execute(q_prazo).all():
+            # .date(): esta contagem é em DIAS ("faltam X dias"), não precisa
+            # da hora exata -- data_encerramento (datetime) - hoje (date)
+            # quebraria com TypeError (não dá pra subtrair datetime de date).
+            dias = (data_encerramento.date() - hoje).days
             itens.append({
-                "tipo": "abertura",
-                "detalhe": (f"{total_abrindo} editais de alta compatibilidade vão abrir em breve"
-                           if total_abrindo > 1 else "Um edital de alta compatibilidade vai abrir em breve"),
-                "filtro": {"nivel": "forte"},
+                "tipo": "prazo", "edital_id": edital_id, "orgao": orgao,
+                "detalhe": "encerra hoje" if dias == 0 else f"faltam {dias} dia(s) pra encerrar",
+                "aba": "proposta",
             })
 
-    q_docs = (select(Documento.id, Documento.nome, Documento.data_validade)
-             .where(Documento.usuario_id == user.id)
-             .where(Documento.ativo.is_(True))
-             .where(Documento.data_validade.is_not(None))
-             # inclui já vencido (dias<0), não só "vence em breve" -- um
-             # documento vencido é mais urgente que um vencendo, não menos
-             # (sem piso aqui de propósito).
-             .where(Documento.data_validade <= hoje + timedelta(days=settings.LEMBRETE_DOC_DIAS))
-             .limit(_LIMITE_ITENS_NOTIFICACAO))
-    for doc_id, nome, data_validade in db.execute(q_docs).all():
-        dias = (data_validade - hoje).days
-        if dias < 0:
-            detalhe = f"vencido há {abs(dias)} dia(s)"
-        elif dias == 0:
-            detalhe = "vence hoje"
-        else:
-            detalhe = f"vence em {dias} dia(s)"
-        itens.append({
-            "tipo": "documento", "documento_id": doc_id, "nome": nome,
-            "detalhe": detalhe,
-        })
+        if user.avisar_abertura:
+            janela = max(0, user.dias_antecedencia)
+            q_abertura = (select(func.count(Edital.id))
+                         .select_from(Match).join(Edital, Match.edital_id == Edital.id)
+                         .where(Match.usuario_id == user.id)
+                         .where(Match.nivel == "forte")
+                         .where(Edital.data_abertura.is_not(None))
+                         .where(Edital.data_abertura >= hoje)
+                         # ver mesmo achado no q_prazo acima
+                         .where(Edital.data_abertura < hoje + timedelta(days=janela + 1)))
+            total_abrindo = db.execute(q_abertura).scalar_one()
+            if total_abrindo:
+                itens.append({
+                    "tipo": "abertura",
+                    "detalhe": (f"{total_abrindo} editais de alta compatibilidade vão abrir em breve"
+                               if total_abrindo > 1 else "Um edital de alta compatibilidade vai abrir em breve"),
+                    "filtro": {"nivel": "forte"},
+                })
 
-    q_analise = (select(Edital.id, Edital.orgao)
-                .join(Match, Match.edital_id == Edital.id)
-                .where(Match.usuario_id == user.id)
-                .where(Match.interagido_em.is_not(None))
-                .where(Edital.analise_em.is_not(None))
-                .where(or_(Match.analise_vista_em.is_(None),
-                          Edital.analise_em > Match.analise_vista_em))
-                .limit(_LIMITE_ITENS_NOTIFICACAO))
-    for edital_id, orgao in db.execute(q_analise).all():
+        q_docs = (select(Documento.id, Documento.nome, Documento.data_validade)
+                 .where(Documento.usuario_id == user.id)
+                 .where(Documento.ativo.is_(True))
+                 .where(Documento.data_validade.is_not(None))
+                 # inclui já vencido (dias<0), não só "vence em breve" -- um
+                 # documento vencido é mais urgente que um vencendo, não menos
+                 # (sem piso aqui de propósito).
+                 .where(Documento.data_validade <= hoje + timedelta(days=settings.LEMBRETE_DOC_DIAS))
+                 .limit(_LIMITE_ITENS_NOTIFICACAO))
+        for doc_id, nome, data_validade in db.execute(q_docs).all():
+            dias = (data_validade - hoje).days
+            if dias < 0:
+                detalhe = f"vencido há {abs(dias)} dia(s)"
+            elif dias == 0:
+                detalhe = "vence hoje"
+            else:
+                detalhe = f"vence em {dias} dia(s)"
+            itens.append({
+                "tipo": "documento", "documento_id": doc_id, "nome": nome,
+                "detalhe": detalhe,
+            })
+
+    for _match_id, edital_id, orgao in db.execute(_query_analise_pendente(user.id)).all():
         itens.append({
             "tipo": "analise", "edital_id": edital_id, "orgao": orgao,
             "detalhe": "análise por IA concluída",
@@ -4882,6 +4901,23 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
         })
 
     return {"total": len(itens), "itens": itens}
+
+
+@app.post("/api/notificacoes/ler-todas")
+def ler_todas_notificacoes(user: Usuario = Depends(_auth.get_current_user),
+                           db: Session = Depends(get_session)):
+    """Botão "Ler Todos" (pedido do usuário) -- ver docstring de
+    notificacoes() acima pra semântica completa: prazo/abertura/documento
+    somem pelo resto do dia (marca notificacoes_lidas_em = hoje); análise
+    usa o mecanismo já existente (analise_vista_em por edital, mesmo que
+    abrir a aba Análise faria) e não volta sozinha depois disso."""
+    user.notificacoes_lidas_em = date.today()
+    agora = _utcnow_main()
+    match_ids = [row[0] for row in db.execute(_query_analise_pendente(user.id)).all()]
+    if match_ids:
+        db.execute(update(Match).where(Match.id.in_(match_ids)).values(analise_vista_em=agora))
+    db.commit()
+    return {"ok": True}
 
 
 _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS = {"application/pdf", "image/jpeg", "image/png", "image/webp"}

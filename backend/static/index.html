@@ -543,10 +543,18 @@
     transition:opacity .16s ease,transform .16s ease}
   .notif-wrap.aberto .notif-painel{opacity:1;visibility:visible;pointer-events:auto;transform:scale(1) translateY(0)}
   .notif-item{display:flex;flex-direction:column;gap:2px;padding:9px 10px;border-radius:8px;
-    cursor:pointer;text-align:left;width:100%;background:none;border:none;color:var(--txt);font-size:13px}
+    cursor:pointer;text-align:left;width:100%;background:none;border:none;color:var(--txt);font-size:13px;
+    transition:transform .2s ease,opacity .2s ease}
   .notif-item:hover{background:var(--panel)}
   .notif-item .tit{font-weight:600}
   .notif-item .det{font-size:11px;color:var(--muted)}
+  /* pedido do usuário: "Ler Todos" anima cada item saindo pro lado antes
+     de limpar a lista, em vez de sumir tudo de uma vez -- ver
+     _lerTodasNotificacoes() no JS. */
+  .notif-item.saindo{transform:translateX(110%);opacity:0;pointer-events:none}
+  @media (prefers-reduced-motion:reduce){
+    .notif-item{transition:none}
+  }
   .notif-head{display:flex;align-items:center;justify-content:flex-end;padding:2px 4px 6px;
     border-bottom:1px solid var(--line);margin-bottom:4px}
   .notif-ler-todos{background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;
@@ -1954,15 +1962,24 @@ function _renderNotificacoes(){
   }).join('');
   painel.innerHTML = cabecalho + itens;
 }
-// pedido do usuário: botão "Ler Todos". Sem estado de "lida" persistido
-// (ver comentário acima, sinais são computados ao vivo) -- só limpa a
-// tela/badge NESTA sessão; se a causa continuar valendo (prazo ainda
-// apertando, documento ainda vencendo), a notificação pode voltar a
-// aparecer na próxima recarga real da lista (reabrir o painel, F5).
-function _lerTodasNotificacoes(){
-  _notifCache = [];
-  $('#notif-badge').style.display = 'none';
-  _renderNotificacoes();
+// pedido do usuário: botão "Ler Todos" -- POST .../ler-todas (ver docstring
+// de notificacoes() no backend pra semântica completa): prazo/abertura/
+// documento somem pelo resto do dia e voltam sozinhos amanhã (mesmo que a
+// causa continue valendo); análise usa o mecanismo de sempre
+// (analise_vista_em) e não volta sozinha. Anima cada item saindo pro lado
+// antes de limpar a lista, em vez de sumir tudo de uma vez.
+async function _lerTodasNotificacoes(){
+  api('/api/notificacoes/ler-todas', {method:'POST'}).catch(()=>{});
+  const semAnimacao = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const finalizar = () => {
+    _notifCache = [];
+    $('#notif-badge').style.display = 'none';
+    _renderNotificacoes();
+  };
+  if(semAnimacao){ finalizar(); return; }
+  const els = Array.from(document.querySelectorAll('#notif-painel .notif-item'));
+  els.forEach((el, i) => setTimeout(() => el.classList.add('saindo'), i * 40));
+  setTimeout(finalizar, els.length * 40 + 220);
 }
 async function toggleNotificacoes(ev){
   ev.stopPropagation();

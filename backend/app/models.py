@@ -68,6 +68,13 @@ class Usuario(Base):
     # aviso de editais fortes que vão ABRIR em breve (X dias antes da abertura)
     avisar_abertura: Mapped[bool] = mapped_column(Boolean, default=True)
     dias_antecedencia: Mapped[int] = mapped_column(Integer, default=2)
+    # pedido do usuário: botão "Ler Todos" na central de notificações. Só
+    # guarda a DATA (não hora) do último clique -- prazo/abertura/documento
+    # somem pelo resto do dia e voltam sozinhos no dia seguinte (comparação
+    # simples "!= hoje", sem precisar de job/cron pra "expirar" nada).
+    # Análise por IA usa outro mecanismo (Match.analise_vista_em, por
+    # edital) -- pedido explícito do usuário pra nunca mais voltar sozinha.
+    notificacoes_lidas_em: Mapped[date | None] = mapped_column(Date, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # checkpoint do recálculo completo (recalcular_todos=True) — permite

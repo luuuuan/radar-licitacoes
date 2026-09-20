@@ -379,3 +379,80 @@ def test_documentos_vencendo_respeita_teto_por_categoria():
 
     itens_doc = [i for i in r["itens"] if i["tipo"] == "documento"]
     assert len(itens_doc) == _LIMITE_ITENS_NOTIFICACAO
+
+
+# --------- botão "Ler Todos" (pedido do usuário) --------- #
+
+def test_ler_todas_esconde_prazo_abertura_documento_no_mesmo_dia():
+    from app.main import ler_todas_notificacoes
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.add(Documento(usuario_id=u.id, nome="CND Federal",
+                     data_validade=date.today() + timedelta(days=1), ativo=True))
+    db.commit()
+    assert notificacoes(user=u, db=db)["total"] == 2
+
+    ler_todas_notificacoes(user=u, db=db)
+
+    r = notificacoes(user=u, db=db)
+    assert r["total"] == 0
+
+
+def test_ler_todas_volta_no_dia_seguinte_se_a_causa_continuar_valendo():
+    """Pedido do usuário: prazo/documento voltam sozinhos no dia seguinte,
+    mesmo sem nada ter mudado -- são sinais que pioram dia a dia."""
+    from app.main import ler_todas_notificacoes
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.commit()
+    ler_todas_notificacoes(user=u, db=db)
+    assert notificacoes(user=u, db=db)["total"] == 0
+
+    u.notificacoes_lidas_em = date.today() - timedelta(days=1)   # simula "ontem"
+    db.commit()
+
+    assert notificacoes(user=u, db=db)["total"] == 1
+
+
+def test_ler_todas_marca_analise_vista_e_nao_volta_sozinha(monkeypatch):
+    """Pedido do usuário: análise por IA não deve reaparecer sozinha depois
+    de "Ler Todos" -- ao contrário de prazo/documento, usa o mesmo campo
+    persistente de sempre (analise_vista_em), não o "resto do dia"."""
+    from app.main import ler_todas_notificacoes
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, analise_em=datetime.utcnow())
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+    db.commit()
+    assert notificacoes(user=u, db=db)["total"] == 1
+
+    ler_todas_notificacoes(user=u, db=db)
+
+    assert notificacoes(user=u, db=db)["total"] == 0
+    # nem "no dia seguinte" (diferente de prazo/documento) -- ver docstring
+    u.notificacoes_lidas_em = date.today() - timedelta(days=1)
+    db.commit()
+    assert notificacoes(user=u, db=db)["total"] == 0
+
+
+def test_ler_todas_nao_mexe_no_match_de_outro_usuario():
+    from app.main import ler_todas_notificacoes
+    db = _sessao()
+    u1 = _usuario(db)
+    u2 = Usuario(nome="Outro", email="outro2@t.com", senha_hash="x")
+    db.add(u2)
+    db.commit()
+    ed = _edital(db, analise_em=datetime.utcnow())
+    db.add(Match(usuario_id=u1.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+    db.commit()
+
+    ler_todas_notificacoes(user=u2, db=db)
+
+    assert notificacoes(user=u1, db=db)["total"] == 1   # intocado
+    assert u2.notificacoes_lidas_em == date.today()      # só o próprio u2 foi marcado
