@@ -1782,9 +1782,28 @@ function _apiFim(){
     const b=$('#loadingbar'); if(b) b.classList.remove('ativa');
   }
 }
+// achado real (usuário reportou: ficar mais de 2h sem mexer no site --
+// TOKEN_IDLE_HORAS, ver auth.py -- e voltar mostrava "undefined" espalhado
+// pelos KPIs): api() nunca checava o status HTTP, então uma sessão
+// expirada (401 "Não autenticado") virava um JSON qualquer pros
+// chamadores, que liam campos inexistentes (r.editais, r.produtos...) e
+// renderizavam "undefined" na tela em vez de pedir login de novo -- já
+// tinha sido diagnosticado uma vez só pra UMA chamada (ver comentário em
+// abrirModalPlataformas), mas o problema é do api() inteiro, não de uma
+// chamada isolada. 403 fica de fora de propósito: é usado por regras de
+// negócio normais dentro de uma sessão válida (ex.: edição bloqueada em
+// edital "ganho"), não por sessão expirada -- ver auth.get_current_user
+// (só usa 401 pra isso).
+function _sessaoExpirada(){
+  _loginComNext();
+  return new Promise(()=>{});   // nunca resolve -- a navegação já começou, não deixa o chamador seguir com dado inválido
+}
 const api = (u,o)=>{
   _apiInicio();
-  return fetch(u,o).then(r=>r.json()).finally(_apiFim);
+  return fetch(u,o).then(r=>{
+    if(r.status===401) return _sessaoExpirada();
+    return r.json();
+  }).finally(_apiFim);
 };
 
 // ---- Máscaras e validações ----
