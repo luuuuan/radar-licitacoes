@@ -342,6 +342,7 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
     except Exception:
         return ""
     partes, total = [], 0
+    paginas_processadas = paginas_vazias = 0
     for i, pag in enumerate(leitor.pages):
         if i >= max_paginas:
             break
@@ -349,6 +350,9 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
             t = pag.extract_text() or ""
         except Exception:
             t = ""
+        paginas_processadas += 1
+        if not t.strip():
+            paginas_vazias += 1
         if marcar_paginas and t.strip():
             t = f"[pág. {i + 1}]\n{t}"
         partes.append(t)
@@ -358,16 +362,28 @@ def _texto_de_pdf_bytes(conteudo: bytes, max_paginas: int, max_chars: int,
     texto = "\n".join(partes)[:max_chars]
 
     # PDF escaneado (pypdf extraiu pouco ou nada): tenta OCR como último
-    # recurso. O limiar é alto de propósito — uma página com texto real de
-    # edital tem bem mais que isso; um PDF com só a capa "de texto" e o
-    # resto escaneado ficava abaixo do limiar final (300 chars combinados
-    # em analisar()) sem nunca acionar o OCR.
+    # recurso. O limiar por SOMA é alto de propósito — uma página com texto
+    # real de edital tem bem mais que isso; um PDF com só a capa "de texto"
+    # e o resto escaneado ficava abaixo do limiar final (300 chars
+    # combinados em analisar()) sem nunca acionar o OCR.
+    #
+    # achado real (edital 142070, PNCP 20765627000140/2026/45): PDF de 40
+    # páginas, 38 delas escaneadas (0 chars) -- só 2 no meio (um formulário
+    # digitado) tinham texto de verdade, e a SOMA delas já passava do
+    # limiar de 500 chars, então o OCR nunca era acionado. O texto de
+    # verdade do edital (provavelmente nas páginas escaneadas -- objeto,
+    # habilitação) ficava perdido, mesmo com a maior parte do documento
+    # nunca lida. Também aciona OCR quando a MAIORIA das páginas processadas
+    # veio vazia, não só quando a soma total é pequena -- pega o caso de um
+    # documento grande e misto (a maioria escaneada) que a soma sozinha não
+    # capturava.
     #
     # Camadas: 1º tenta o modelo de visão (lê tabela de verdade, sem
     # embaralhar colunas -- ver _ocr_pdf_vlm); se ele não estiver
     # disponível ou falhar por qualquer motivo (sem saldo, erro de rede),
     # cai pro Tesseract, exatamente como antes de o VLM existir.
-    if len(texto.strip()) < 500:
+    maioria_vazia = paginas_processadas > 0 and (paginas_vazias / paginas_processadas) > 0.5
+    if len(texto.strip()) < 500 or maioria_vazia:
         vlm = _ocr_pdf_vlm(conteudo)
         if vlm:
             return vlm[:max_chars]
