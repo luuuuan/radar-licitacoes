@@ -4667,14 +4667,9 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
     _marcarSelecaoCotacao(numero, true);
     _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
     if(btn){ btn.innerHTML = ICN.check+' na cotação'; btn.style.cssText = _estiloBotaoCotacao(true); }
-    // achado real: o botão em tela já ficava certo ("na cotação"), mas
-    // _analiseCache (o HTML pronto que abaEdital('analise') reusa sem ir ao
-    // servidor de novo) continuava com a versão de ANTES desse clique --
-    // sair da aba e voltar reescrevia o conteúdo inteiro com o cache velho,
-    // e o botão voltava pra "+ Adicionar na cotação" mesmo já confirmado.
-    // Re-sincroniza o cache com o DOM atual (mesmo risco existe em
-    // _excluirComparacaoIA, ver lá).
-    if(_analiseCache) _analiseCache = $('#edital-conteudo').innerHTML;
+    // _marcarSelecaoCotacao (chamada acima) já invalida _analiseCache --
+    // o botão em tela é atualizado na hora (2 linhas acima), sem precisar
+    // reconstruir o resto da tela; reabrir a aba depois busca fresco.
     toast('Item confirmado e adicionado à cotação.', 'ok');
   }catch(e){
     if(btn) btn.disabled = false;
@@ -5792,6 +5787,20 @@ function toggleTodosCotacao(chk){
 function _marcarSelecaoCotacao(numero, marcado){
   if(marcado) _cotacaoSelecionados.add(String(numero));
   else _cotacaoSelecionados.delete(String(numero));
+  // achado real (usuário reportou): remover um item da cotação pela aba
+  // Cotação (checkbox ou botão "excluir") deixava o botão "na cotação" da
+  // tabela da Análise por IA travado, mesmo já removido de verdade --
+  // _analiseCache (o HTML pronto que abaEdital('analise') reusa sem ir ao
+  // servidor de novo) continuava com a versão de ANTES. Só dava pra
+  // "remendar" o cache em cima (como adicionarItemIaNaCotacao faz) quando
+  // a mudança acontece DENTRO da própria aba Análise -- aqui a mudança
+  // pode vir de OUTRA aba (Cotação), onde #edital-conteudo é outro HTML
+  // inteiramente, então tentar reaproveitar o innerHTML atual corromperia
+  // o cache com a tela errada. Mais simples e à prova disso: invalida
+  // (não tenta remendar) sempre que a seleção muda -- a próxima vez que a
+  // aba Análise abrir, busca de novo (leitura já cacheada no servidor,
+  // sem gastar IA) e renderiza com o estado certo.
+  _analiseCache = null;
   const chkTodos = $('#chk-cotacao-todos');
   if(chkTodos) chkTodos.checked = Array.from(document.querySelectorAll('.chk-cotacao-item')).every(el=>el.checked);
   // ponto único: os 3 jeitos de adicionar um item à cotação (botão da aba
