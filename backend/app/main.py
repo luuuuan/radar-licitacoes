@@ -1357,10 +1357,19 @@ def _dias_restantes_edital(ed: Edital) -> int | None:
     minutos depois de ter aberto, só por faltar o dado real de fim (achado
     real ao testar: KPI "editais do dia" zerava horas depois da meia-noite
     porque um edital que abre hoje, sem data_encerramento, virava
-    "encerrado" quase na hora)."""
+    "encerrado" quase na hora).
+
+    A contagem ATÉ a abertura (ainda não abriu) também é por DIA DE
+    CALENDÁRIO, não por hora -- achado real (edital 141941, reportado pelo
+    usuário): com subtração de datetime completo, um edital que abre às 08h
+    de AMANHÃ, visto hoje à tarde (menos de 24h de diferença), dava 0 dias
+    e o front mostrava "abre hoje" -- uma data errada na cara do usuário,
+    não só uma contagem arredondada. "agora" (com hora) continua sendo
+    usado pra decidir SE já abriu (comparação acima), só a contagem em si
+    volta a ser por data."""
     agora = datetime.now(BR_TZ).replace(tzinfo=None)
     if ed.data_abertura and agora < ed.data_abertura:
-        return (ed.data_abertura - agora).days
+        return (ed.data_abertura.date() - agora.date()).days
     if ed.data_encerramento:
         return (ed.data_encerramento - agora).days
     if ed.data_abertura:

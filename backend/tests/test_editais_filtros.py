@@ -336,10 +336,12 @@ def test_dias_restantes_antes_da_abertura_conta_ate_abertura_nao_ate_encerrament
     r = _listar(db, u, vista="ativos")
 
     assert r["resultados"][0]["edital_id"] == ed.id
-    # 2, não 3: mesmo achado do teste de cima -- "agora" já passou da
-    # meia-noite de hoje, então até a meia-noite de daqui a 3 dias faltam
-    # 2 dias inteiros + uma fração.
-    assert r["resultados"][0]["dias_restantes"] == 2
+    # 3 (não 2): achado real (edital 141941, reportado pelo usuário) --
+    # contar por hora exata aqui fazia um edital que abre amanhã de manhã,
+    # visto hoje à tarde, aparecer como "0 dias" ("abre hoje", uma data
+    # errada). A contagem até a abertura é por dia de calendário -- ver
+    # _dias_restantes_edital em app/main.py.
+    assert r["resultados"][0]["dias_restantes"] == 3
 
 
 # --------- status_prazo: "Recebendo proposta" entre início e fim --------- #
