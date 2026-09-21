@@ -544,13 +544,15 @@
   .notif-wrap.aberto .notif-painel{opacity:1;visibility:visible;pointer-events:auto;transform:scale(1) translateY(0)}
   .notif-item{display:flex;flex-direction:column;gap:2px;padding:9px 10px;border-radius:8px;
     cursor:pointer;text-align:left;width:100%;background:none;border:none;color:var(--txt);font-size:13px;
-    transition:transform .2s ease,opacity .2s ease}
+    transition:transform .26s ease,opacity .22s ease}
   .notif-item:hover{background:var(--panel)}
   .notif-item .tit{font-weight:600}
   .notif-item .det{font-size:11px;color:var(--muted)}
   /* pedido do usuário: "Ler Todos" anima cada item saindo pro lado antes
      de limpar a lista, em vez de sumir tudo de uma vez -- ver
-     _lerTodasNotificacoes() no JS. */
+     _lerTodasNotificacoes() no JS. Mesma duração/curva do colapso dos
+     filtros (ver .filtros-lateral) -- as duas animações de "fechar"
+     devem parecer a mesma família de movimento. */
   .notif-item.saindo{transform:translateX(110%);opacity:0;pointer-events:none}
   @media (prefers-reduced-motion:reduce){
     .notif-item{transition:none}
@@ -858,6 +860,7 @@
   .filtros-lateral-head{display:flex;justify-content:space-between;align-items:center;
     font-weight:600;font-size:15px;margin-bottom:4px;color:var(--txt)}
   .filtros-lateral-head .nav-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;font-size:20px}
+  .filtros-fechar-desktop{display:none}
   .filtros-lateral{display:none;flex-direction:column;gap:14px;
     position:fixed;top:0;left:0;height:100%;width:85%;max-width:320px;margin:0;
     background:var(--panel);border-right:1px solid var(--line);padding:16px;
@@ -937,11 +940,24 @@
     .filtros-btn-mobile{display:none}
     .filtros-overlay{display:none !important}
     .filtros-lateral-head{display:none}
+    .filtros-fechar-desktop{display:flex;align-items:center;gap:6px;align-self:flex-end;
+      background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;
+      padding:4px 2px;margin-bottom:2px}
+    .filtros-fechar-desktop:hover{color:var(--txt)}
     .filtros-lateral{display:flex;flex:0 0 400px;position:sticky;top:16px;left:auto;
       height:auto;width:auto;max-width:none;margin:0;z-index:auto;
-      background:transparent;border:none;border-radius:0;max-height:calc(100vh - 32px)}
+      background:transparent;border:none;border-radius:0;max-height:calc(100vh - 32px);
+      transition:flex-basis .26s ease,opacity .22s ease,margin-right .26s ease}
     .filtros-lateral .uf-checks{grid-template-columns:1fr 1fr}
     .editais-principal{flex:1;min-width:0}
+    /* pedido do usuário: opção de esconder os filtros no desktop (antes
+       ficavam sempre abertos, sem alternativa nenhuma) -- #t-editais.
+       filtros-colapsados é alternado por _toggleFiltrosDesktop(). Anima
+       flex-basis+opacity (não display:none, que não pode animar) pra sair
+       suave, e some o gap do flex pai (margin-right negativo) pra não
+       sobrar um vão vazio do tamanho do "gap" quando colapsado. */
+    #t-editais.filtros-colapsados .filtros-lateral{flex-basis:0;opacity:0;pointer-events:none;margin-right:-20px}
+    #t-editais.filtros-colapsados .filtros-btn-mobile{display:inline-flex}
     /* achado real: sem "display:contents" aqui, esta div (que só existe como
        alvo pro JS mover o campo de busca entre celular/desktop, ver
        _reposicionarBuscaItem) vira o "containing block" do filho sticky —
@@ -962,6 +978,9 @@
        menor) e a caixa nunca encolhia de verdade ao rolar a página — ficava
        larga e transparente, só com o ícone visível preso numa ponta. */
     #slot-busca-desktop .busca-item-destaque.colapsada{max-width:44px}
+  }
+  @media (min-width:681px) and (prefers-reduced-motion:reduce){
+    .filtros-lateral{transition:none}
   }
   @media (min-width:1500px){
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
@@ -1145,12 +1164,20 @@
 
   <!-- EDITAIS -->
   <section id="t-editais">
-    <button class="btn ghost filtros-btn-mobile" onclick="toggleFiltrosMobile()">
+    <button class="btn ghost filtros-btn-mobile" id="btn-filtros-abrir" onclick="_abrirFiltros()">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4z"/></svg> Filtros
     </button>
     <div class="editais-layout">
       <div class="filtros-overlay" id="filtros-overlay" onclick="toggleFiltrosMobile()"></div>
       <aside class="filtros-lateral" id="filtros-lateral">
+        <!-- pedido do usuário: no desktop os filtros ficavam sempre abertos,
+             sem opção nenhuma de esconder -- este botão só aparece ≥681px
+             (ver .filtros-fechar-desktop no CSS); o botão "Filtros" acima
+             (#btn-filtros-abrir, já existia só pro celular) reabre, ver
+             _toggleFiltrosDesktop(). -->
+        <button type="button" class="filtros-fechar-desktop" onclick="_toggleFiltrosDesktop()" title="Ocultar filtros">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg> Ocultar filtros
+        </button>
         <div class="filtros-lateral-head">Filtros
           <button class="nav-close" onclick="toggleFiltrosMobile()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
         </div>
@@ -1998,7 +2025,7 @@ async function _lerTodasNotificacoes(){
   if(semAnimacao){ finalizar(); return; }
   const els = Array.from(document.querySelectorAll('#notif-painel .notif-item'));
   els.forEach((el, i) => setTimeout(() => el.classList.add('saindo'), i * 40));
-  setTimeout(finalizar, els.length * 40 + 220);
+  setTimeout(finalizar, els.length * 40 + 260);
 }
 async function toggleNotificacoes(ev){
   ev.stopPropagation();
@@ -2191,6 +2218,30 @@ function toggleFiltrosMobile(){
 function fecharFiltrosMobile(){
   $('#filtros-lateral').classList.remove('aberto');
   $('#filtros-overlay').classList.remove('aberto');
+}
+// pedido do usuário: opção de esconder os filtros no desktop (mobile já
+// tinha, ver toggleFiltrosMobile acima) -- classe própria em #t-editais
+// (não reaproveita ".aberto", que no mobile já significa "painel visível
+// por cima da lista"; no desktop é o oposto, os filtros ficam do lado e
+// "colapsados" os esconde). Lembrado entre sessões (mesmo padrão de
+// radar-tema/radar-ultima-aba).
+function _toggleFiltrosDesktop(){
+  const colapsado = $('#t-editais').classList.toggle('filtros-colapsados');
+  try{ localStorage.setItem('radar-filtros-colapsados', colapsado ? '1' : '0'); }catch(e){}
+}
+// #btn-filtros-abrir ("Filtros", acima da lista) serve os dois papéis: no
+// celular é quem ABRE o painel por cima (toggleFiltrosMobile); no desktop
+// só aparece quando os filtros estão ocultos (ver CSS), e aí precisa
+// chamar o toggle certo -- reusar toggleFiltrosMobile ali não fazia nada
+// visível no desktop (mexia numa classe que o CSS de desktop ignora).
+function _abrirFiltros(){
+  if(matchMedia('(min-width:681px)').matches) _toggleFiltrosDesktop();
+  else toggleFiltrosMobile();
+}
+function _restaurarFiltrosColapsados(){
+  let colapsado = false;
+  try{ colapsado = localStorage.getItem('radar-filtros-colapsados') === '1'; }catch(e){}
+  $('#t-editais').classList.toggle('filtros-colapsados', colapsado);
 }
 
 function tab(name){
@@ -6490,6 +6541,7 @@ async function sair(){
   const ok = await exigirLogin();
   if(!ok) return;   // já redirecionou para /login
   _initBuscaItemDestaque();
+  _restaurarFiltrosColapsados();
   _reposicionarHeaderExtra();
   window.addEventListener('resize', _reposicionarHeaderExtra);
   // carregado direto em /edital/{id} (link colado/compartilhado/recarregado,
