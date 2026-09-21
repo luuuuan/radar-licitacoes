@@ -1080,14 +1080,31 @@ def _prioridade_arquivo(a: dict) -> int:
     "TERMO DE REFERENCIA COM APROVACAO" (sem acento no "ê") -- a comparação
     direta com "termo de referência" (acentuado) nunca batia, então esse
     documento (onde fica a habilitação/itens) caía no mesmo grupo genérico
-    (prioridade 3) que um aviso administrativo qualquer, perdendo a vaga."""
+    (prioridade 3) que um aviso administrativo qualquer, perdendo a vaga.
+
+    Checa "tipo" (tipoDocumentoNome, classificação estruturada do próprio
+    PNCP -- mais confiável que adivinhar pelo nome do arquivo) além do
+    título -- achado real (edital 138442, processo de Contratação Direta
+    sem nenhum "Termo de Referência"/"Edital" entre os documentos): Mapa de
+    Riscos, DFD (Documento de Formalização da Demanda) e o despacho que
+    autoriza a contratação são puramente administrativos/processuais --
+    nunca trazem item ou exigência de habilitação, mas empatavam em
+    prioridade (3) com o próprio Aviso de Contratação Direta (que, nesse
+    tipo de processo sem edital separado, é onde a habilitação de fato
+    aparece) só por serem mais curtos e vierem antes na lista do PNCP.
+    Prioridade 4 -- pior que o genérico (3) -- pra sempre perder a vaga
+    pra qualquer coisa que não seja claramente descartável."""
     t = _sem_acento((a.get("titulo") or "").lower())
+    tipo = _sem_acento((a.get("tipo") or "").lower())
     if "retificac" in t or "errata" in t or "aditamento" in t or "adendo" in t:
         return 0
     if "edital" in t:
         return 1
     if "termo de referencia" in t or "anexo" in t:
         return 2
+    if ("mapa de risco" in tipo or "formalizacao da demanda" in tipo
+            or "autoriza a contratacao direta" in tipo or "despacho" in tipo):
+        return 4
     return 3
 
 
@@ -1163,7 +1180,16 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         partes, fontes = [], []
         falhou_download = False
         for a in candidatos[:5]:
-            if len(fontes) >= 2 or sum(len(p) for p in partes) >= MAX_TOTAL:
+            # achado real (edital 138442, Contratação Direta com 6
+            # documentos administrativos curtos empatados em prioridade --
+            # ver _prioridade_arquivo): o teto de "só 2 documentos" (não de
+            # orçamento) parava o loop cedo demais, depois de só juntar os 2
+            # primeiros por ORDEM da lista do PNCP (raramente por
+            # relevância) -- mesmo sobrando dezenas de milhares de
+            # caracteres de orçamento, o documento de verdade com a
+            # habilitação (4º ou 5º na lista) nunca chegava a ser baixado.
+            # Só para quando o ORÇAMENTO acaba, não por contar documentos.
+            if sum(len(p) for p in partes) >= MAX_TOTAL:
                 break
             if not a.get("url"):
                 continue

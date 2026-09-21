@@ -42,6 +42,23 @@ def test_prioridade_arquivo_reconhece_errata_e_aditamento():
     assert _prioridade_arquivo({"titulo": "Modelo de Declaração"}) == 3
 
 
+def test_prioridade_arquivo_deprioriza_documentos_administrativos_por_tipo():
+    """Achado real (edital 138442, Contratação Direta sem nenhum "Termo de
+    Referência"/"Edital" entre os documentos): Mapa de Riscos, DFD e o
+    despacho que autoriza a contratação são puramente processuais -- nunca
+    trazem habilitação, mas empatavam (prioridade 3, genérica) com o Aviso
+    de Contratação Direta, que costuma ser onde a habilitação de fato
+    aparece nesse tipo de processo. Usa "tipo" (tipoDocumentoNome, vindo do
+    próprio PNCP), não o nome do arquivo (que varia muito)."""
+    assert _prioridade_arquivo({"titulo": "6. MR_180380.pdf", "tipo": "Mapa de Riscos"}) == 4
+    assert _prioridade_arquivo({"titulo": "5. DFD180380.pdf",
+                                "tipo": "Documento de Formalização da Demanda - DFD"}) == 4
+    assert _prioridade_arquivo({"titulo": "1.1. SEI_Despacho.pdf",
+                                "tipo": "Ato que autoriza a Contratação Direta"}) == 4
+    # o Aviso continua na prioridade genérica (3) -- mais alta que os administrativos
+    assert _prioridade_arquivo({"titulo": "2. AC180380.pdf", "tipo": "Aviso de Contratação Direta"}) == 3
+
+
 def test_prioridade_arquivo_reconhece_termo_de_referencia_sem_acento(monkeypatch):
     """Achado real (edital 141844, PNCP 46384111000140/2026/1036): título
     veio exatamente "TERMO DE REFERENCIA COM APROVACAO - SEI.pdf" (sem
@@ -152,3 +169,38 @@ def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
     texto_enviado = _texto_enviado_a_ia(chamadas[0])
     # não foi cortado pela metade (40000) -- usou perto do teto cheio (80000)
     assert texto_enviado.count("A") > 70000
+
+
+def test_analisar_combina_mais_de_2_documentos_quando_sobra_orcamento():
+    """Achado real (edital 138442, Contratação Direta com 6 documentos
+    curtos empatados em prioridade -- 4 deles administrativos, deprioriza-
+    dos por tipo, ver test_prioridade_arquivo_deprioriza_...): o teto
+    antigo de "só 2 documentos" (independente de orçamento) parava o loop
+    bem antes de estourar os 80000 chars disponíveis, deixando de fora
+    documentos de verdade relevantes só porque vieram 3º/4º/5º na lista.
+    Com 5 documentos pequenos (bem abaixo do orçamento somados), todos
+    devem entrar -- só o 6º fica de fora por causa do teto candidatos[:5]."""
+    arquivos = [
+        {"titulo": f"Documento {i}", "url": f"http://x/doc{i}.pdf", "tipo": "Outros Documentos"}
+        for i in range(1, 7)
+    ]
+    textos = {f"http://x/doc{i}.pdf": f"MARCADOR-{i} " + ("texto " * 50) for i in range(1, 7)}
+
+    def _fake_baixar(url, max_chars=80000, **kw):
+        return textos[url][:max_chars], False
+
+    chamadas = []
+
+    def _fake_post(url, **kw):
+        chamadas.append(kw)
+        return _resposta_gemini('{"objeto": "teste"}')
+
+    with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
+         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+        resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
+
+    assert resultado["status"] == "ok"
+    texto_enviado = _texto_enviado_a_ia(chamadas[0])
+    for i in range(1, 6):   # os 5 primeiros (candidatos[:5]) devem estar presentes
+        assert f"MARCADOR-{i}" in texto_enviado
+    assert "MARCADOR-6" not in texto_enviado   # 6º fica de fora por causa do candidatos[:5]
