@@ -124,6 +124,44 @@ def test_analisar_lote_com_numero_duplicado_mantem_so_a_primeira_ocorrencia():
     assert resultado["lotes"] == [{"numero": "1", "itens": [1], "descricao": "primeira"}]
 
 
+def test_analisar_item_repetido_em_lotes_diferentes_descarta_todos_os_lotes():
+    """Achado real (edital 141995, PNCP 01641472000196/2026/17): a IA
+    reiniciou a contagem de item EM CADA lote (1, 2, 3...) em vez de usar
+    a numeração global do edital -- item 1 aparecia em 3 lotes ao mesmo
+    tempo (Lote 1: itens 1-20, Lote 2: item 1, Lote 3: itens 1-3), embora
+    lotes por definição particionem os itens (cada item pertence a um só
+    lote). "Papel Sulfite" (o item de verdade do Lote 2) acabava agrupado
+    visualmente no Lote 1 só porque a faixa 1-20 dele por coincidência
+    cobria o número errado. Mais confiável descartar TODA a lista de
+    lotes (mesma semântica de "não identificado com segurança" que o
+    campo já documenta) do que arriscar mostrar uma composição errada."""
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "lotes": [
+            {"numero": "1", "itens": list(range(1, 21)), "descricao": "MATERIAL DE EXPEDIENTE - DIVERSOS"},
+            {"numero": "2", "itens": [1], "descricao": "PAPEL SULFITE"},
+            {"numero": "3", "itens": [1, 2, 3], "descricao": "EQUIPAMENTOS"},
+        ],
+    })
+    assert resultado["lotes"] == []
+
+
+def test_analisar_lotes_com_itens_realmente_exclusivos_nao_e_descartado():
+    """Contraste com o teste acima: quando os itens de fato não se repetem
+    entre lotes (o caso normal, correto), a lista continua valendo."""
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "lotes": [
+            {"numero": "1", "itens": [1, 2, 3], "descricao": "Papelaria"},
+            {"numero": "2", "itens": [4, 5], "descricao": "Material de limpeza"},
+        ],
+    })
+    assert resultado["lotes"] == [
+        {"numero": "1", "itens": [1, 2, 3], "descricao": "Papelaria"},
+        {"numero": "2", "itens": [4, 5], "descricao": "Material de limpeza"},
+    ]
+
+
 def test_analisar_usa_max_output_tokens_maior_que_o_padrao(monkeypatch):
     """Achado real (agente backend-architect): a resposta de analisar()
     cresce com o Nº de itens do edital (por causa de "lotes"), e diferente

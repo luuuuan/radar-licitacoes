@@ -38,7 +38,10 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Versão do prompt/análise. Ao melhorar o prompt, incremente este número:
 # análises em cache com versão antiga serão refeitas automaticamente.
-VERSAO_PROMPT = 12
+# v13 = achado real (edital 141995): prompt de "lotes" reforçado contra
+# numeração reiniciada por lote + validação descarta a lista inteira
+# quando um item aparece em mais de um lote (ver função lotes() abaixo).
+VERSAO_PROMPT = 13
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -115,7 +118,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 - "julgamento": string. A UNIDADE de adjudicação (não confundir com criterio_julgamento, que é o critério de preço): "lote" se a disputa/adjudicação é por lote, grupo ou item agrupado/global (não dá pra disputar 1 item isolado), "item" se é por item individual, "" se não identificar.
 - "lotes": array de objetos. APENAS quando "julgamento" for "lote" — a composição de cada lote/grupo, pra saber quais itens precisam ser todos fornecidos juntos. Lista vazia [] se "julgamento" não for "lote", ou se não conseguir identificar a composição dos lotes com segurança (não invente agrupamento nenhum). Cada objeto:
   - "numero": string. O identificador do lote como aparece no edital (ex.: "1", "Lote 02", "Grupo A").
-  - "itens": array de inteiros. Os números dos itens (mesma numeração usada no restante do edital) que pertencem a este lote.
+  - "itens": array de inteiros. Os números dos itens (mesma numeração GLOBAL usada no restante do edital, ex.: em "requisitos_tecnicos"/na tabela de itens) que pertencem a este lote -- NUNCA reinicie a contagem em cada lote (é ERRADO numerar como "1, 2, 3" o 1º/2º/3º item de um lote se esses itens são, por exemplo, os itens 14, 15 e 16 na numeração do edital). Cada item pertence a UM SÓ lote -- o mesmo número nunca pode aparecer em dois lotes diferentes.
   - "descricao": string curta resumindo o conteúdo do lote (ex.: "Material de escritório — papelaria"). "" se não conseguir resumir.
 - "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
 - "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
@@ -1371,6 +1374,25 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 "itens": itens_norm,
                 "descricao": s(item.get("descricao")),
             })
+        # achado real (edital 141995, PNCP 01641472000196/2026/17): a IA às
+        # vezes reinicia a contagem de item EM CADA lote (1, 2, 3...) em vez
+        # de usar a numeração GLOBAL do edital que o prompt pede -- o mesmo
+        # número aparecia em lotes DIFERENTES ao mesmo tempo (ex.: item 1
+        # listado em 3 lotes), embora lotes por definição particionem os
+        # itens (cada item pertence a exatamente um lote, nunca a dois).
+        # Detecta essa inconsistência -- mais confiável que tentar adivinhar
+        # qual lote está certo -- e descarta TODOS os lotes, mesma semântica
+        # de "não conseguiu identificar com segurança" que o campo já
+        # documenta, em vez de mostrar uma composição sabidamente errada
+        # (o usuário via "Papel Sulfite" agrupado no lote errado, com um
+        # aviso falso de que o item 1 -- na real "Bloco Autoadesivo" --
+        # estava faltando nesse lote).
+        contagem_por_item: dict[int, int] = {}
+        for lote in out:
+            for n in lote["itens"]:
+                contagem_por_item[n] = contagem_por_item.get(n, 0) + 1
+        if any(c > 1 for c in contagem_por_item.values()):
+            return []
         return out
 
     def documentos_habilitacao(x):
