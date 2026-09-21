@@ -4795,10 +4795,22 @@ function confirmarCandidatoIA(numero, produtoId){
 // um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
 // pro usuário como se fosse limite diário do plano gratuito, o que confunde.
 function _msgErroIA(detalhe){
-  if(detalhe==='http_429') return 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
-  if(detalhe==='http_503'||detalhe==='http_502'||detalhe==='http_504') return 'O serviço de IA está sobrecarregado no momento. Tente novamente em alguns minutos.';
-  if(detalhe && detalhe.indexOf('rede:')===0) return 'Não foi possível conectar à IA agora (falha de rede ou tempo esgotado). Tente novamente.';
-  if(detalhe==='sem_resposta') return 'A IA não devolveu uma resposta válida agora. Tente refazer.';
+  // prefixo "groq_": o erro final veio da Groq (último recurso da cadeia
+  // Gemini->Gemini fallback->Groq, ver _gerar em analise_edital.py), não
+  // da chave/cota pessoal do Gemini do usuário -- achado real: usuário via
+  // um 503 do Gemini no log do Railway mas a tela dizia "plano gratuito"
+  // (dá a entender cota PESSOAL), quando quem de fato encerrou a cadeia
+  // foi um 429 da Groq (cota do operador, compartilhada entre usuários).
+  const daGroq = !!detalhe && detalhe.indexOf('groq_')===0;
+  const base = daGroq ? detalhe.slice(5) : detalhe;
+  if(base==='http_429'){
+    return daGroq
+      ? 'A IA está com alta demanda geral no momento (não é a sua cota pessoal). Tente novamente em alguns minutos.'
+      : 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
+  }
+  if(base==='http_503'||base==='http_502'||base==='http_504') return 'O serviço de IA está sobrecarregado no momento. Tente novamente em alguns minutos.';
+  if(base && base.indexOf('rede:')===0) return 'Não foi possível conectar à IA agora (falha de rede ou tempo esgotado). Tente novamente.';
+  if(base==='sem_resposta') return 'A IA não devolveu uma resposta válida agora. Tente refazer.';
   return 'A IA não respondeu agora. Tente mais tarde.';
 }
 

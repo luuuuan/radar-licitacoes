@@ -1077,7 +1077,15 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
         if txt is not None:
             return txt, erro
         if erro != "sem_chave_groq":
-            ultimo_erro = erro
+            # prefixo "groq_": o erro final veio do Groq (recurso
+            # compartilhado/de operador), não da chave Gemini do próprio
+            # usuário -- achado real: usuário via um 503 do Gemini no log
+            # do Railway mas a mensagem em tela dizia "plano gratuito"
+            # (linguagem de limite pessoal), porque quem realmente
+            # encerrou a cadeia foi um 429 do Groq. Sem esse prefixo o
+            # front não tem como saber de qual provedor veio o erro que
+            # efetivamente chegou até aqui -- ver _msgErroIA no index.html.
+            ultimo_erro = f"groq_{erro}"
     return None, ultimo_erro
 
 

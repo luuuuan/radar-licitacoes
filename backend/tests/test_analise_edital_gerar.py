@@ -216,7 +216,34 @@ def test_gerar_groq_tambem_falha_devolve_erro_da_groq(monkeypatch):
         txt, status = _gerar("prompt", api_key="fake-key")
 
     assert txt is None
-    assert status == "http_500"   # erro da Groq (última tentativa), não do Gemini
+    # prefixo "groq_": o erro final veio da Groq (última tentativa), não do
+    # Gemini -- achado real: sem essa marca, o front não tinha como saber
+    # que o 429/5xx que efetivamente chegou até o usuário era de um
+    # provedor à parte (cota compartilhada), e mostrava uma mensagem que
+    # dava a entender que era a cota GRATUITA PESSOAL do Gemini do usuário
+    # que tinha estourado -- ver _msgErroIA no index.html.
+    assert status == "groq_http_500"
+
+
+def test_gerar_groq_com_429_tambem_ganha_o_prefixo_groq(monkeypatch):
+    """Achado real (usuário relatou mensagem em tela incoerente com o log
+    do Railway): o caso mais comum de erro final vindo da Groq é 429 (cota
+    compartilhada do provedor), não 500 -- precisa do mesmo prefixo."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        return MagicMock(status_code=429, text="groq rate limit")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert txt is None
+    assert status == "groq_http_429"
 
 
 def test_gerar_tenta_groq_em_429_do_gemini(monkeypatch):
