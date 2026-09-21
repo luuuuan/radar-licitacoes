@@ -53,6 +53,36 @@ def test_item_sem_numero_vai_pro_fim_mantendo_ordem_relativa():
     assert [i.get("numero") for i in payload["itens"]] == [1, 2, None]
 
 
+def test_proposta_com_itens_esvaziada_de_proposito_nao_volta_pro_esqueleto():
+    """Achado real (usuário reportou item excluído da cotação reaparecendo):
+    Proposta.itens=[] (usuário removeu TODOS os itens da cotação/proposta)
+    é um estado válido e proposital -- "if prop and prop.itens" (lista
+    vazia é falsy) tratava isso igual a "nunca salvou proposta nenhuma" e
+    devolvia o esqueleto com TODOS os itens do edital de volta, inclusive
+    os que o usuário tinha acabado de tirar. "existe" continuava True (a
+    linha de Proposta existe, só sem itens), uma combinação inconsistente:
+    diz que existe mas mostra dado que não é o que foi salvo."""
+    ed = _edital([
+        ItemEdital(numero=1, descricao="Papel A4", quantidade=100, valor_unitario=25.0),
+        ItemEdital(numero=2, descricao="Caneta esferográfica", quantidade=50, valor_unitario=1.5),
+    ])
+    prop = Proposta(edital_id=1, itens=[])
+    payload = _proposta_payload(ed, prop)
+    assert payload["itens"] == []
+    assert payload["existe"] is True
+
+
+def test_proposta_nunca_salva_continua_usando_esqueleto():
+    """Contraste com o teste acima: prop=None (nunca salvou nada) é o único
+    caso que deve cair no esqueleto com todos os itens do edital."""
+    ed = _edital([
+        ItemEdital(numero=1, descricao="Papel A4", quantidade=100, valor_unitario=25.0),
+    ])
+    payload = _proposta_payload(ed, prop=None)
+    assert [i["numero"] for i in payload["itens"]] == [1]
+    assert payload["existe"] is False
+
+
 def test_itens_edital_traz_todos_os_itens_do_edital_independente_da_proposta():
     ed = _edital([
         ItemEdital(numero=1, descricao="Papel A4", quantidade=100, valor_unitario=25.0),

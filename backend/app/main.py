@@ -4504,7 +4504,19 @@ class PropostaIn(BaseModel):
 
 def _proposta_payload(ed: Edital, prop: Proposta | None,
                       user: Usuario | None = None, db: Session | None = None) -> dict:
-    if prop and prop.itens:
+    # achado real (usuário reportou item excluído da cotação reaparecendo):
+    # "prop.itens" vazio ([]) é um estado válido e proposital -- usuário
+    # removeu todos os itens da cotação/proposta -- mas "if prop and
+    # prop.itens" (lista vazia é falsy em Python) tratava isso IGUAL a
+    # "nunca salvou proposta nenhuma", caindo no esqueleto com TODOS os
+    # itens do edital. Isso não só mostrava a proposta errada como também
+    # fazia _cotacaoSelecionados (índex.html) ressuscitar TODOS os itens
+    # do edital na cotação a cada reload -- muito mais amplo que só o item
+    # que o usuário tinha excluído. "prop.itens is None" (nunca definido,
+    # inclusive proposta antiga salva antes dessa coluna existir) é o
+    # único caso que ainda cai no esqueleto -- lista vazia de verdade é
+    # respeitada.
+    if prop is not None and prop.itens is not None:
         itens = prop.itens
     else:
         # esqueleto a partir dos itens do edital

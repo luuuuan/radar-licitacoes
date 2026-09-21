@@ -5827,11 +5827,11 @@ function _marcarSelecaoCotacao(numero, marcado){
   if(chkTodos) chkTodos.checked = Array.from(document.querySelectorAll('.chk-cotacao-item')).every(el=>el.checked);
   // ponto único: os 3 jeitos de adicionar um item à cotação (botão da aba
   // Itens/margem, checkbox da própria aba Cotação, "Adicionar na cotação"
-  // da comparação por IA) passam todos por aqui — então sincronizar a
-  // Proposta aqui cobre os 3 de uma vez, em vez de replicar a chamada em
-  // cada botão. Só ao ADICIONAR (não ao remover): tirar um item da cotação
-  // não deve apagar ele de uma proposta que o usuário já vinha preenchendo.
+  // da comparação por IA) e o de remover (checkbox/"excluir" na Cotação)
+  // passam todos por aqui — sincronizar a Proposta aqui cobre todos de uma
+  // vez, em vez de replicar a chamada em cada botão.
   if(marcado) _sincronizarItemNaProposta(numero);
+  else _removerItemDaProposta(numero);
 }
 
 // Botão "excluir" explícito por linha (pedido do usuário) -- mesmo efeito
@@ -5902,6 +5902,43 @@ async function _sincronizarItemNaProposta(numero){
     itens = [...itens, {numero: item.numero, descricao: item.descricao || '',
       quantidade: item.quantidade || 0, custo_unit: 0, preco_unit: item.valor_orgao || 0}];
     _ordenarPropItensPorNumero(itens);
+    const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({itens, observacoes})});
+    if(!r.ok) return;
+    if(_propostaCarregadaPara === id){
+      window._propItens = itens;
+      if(_abaEditalAtual==='proposta') renderProposta();
+    }
+  }catch(e){}
+}
+
+// Achado real (usuário reportou): excluir um item na aba Cotação (checkbox
+// ou botão "excluir") só tirava ele de _cotacaoSelecionados (memória) -- ao
+// dar F5, trocar de edital e voltar, ou qualquer outra ação que recarregue
+// o edital, _renderPaginaEdital reconstrói _cotacaoSelecionados a partir da
+// Proposta SALVA (ver ali perto de "Recarrega a seleção a partir da
+// proposta salva"), e o item continuava lá porque _sincronizarItemNaProposta
+// só ADICIONA, nunca remove -- o item "excluído" ressuscitava sozinho.
+// Espelha _sincronizarItemNaProposta pro caminho de remoção: sem isso, não
+// existe nenhum jeito de uma remoção realmente "grudar" entre sessões.
+async function _removerItemDaProposta(numero){
+  const id = _paginaEditalId;
+  if(!id) return;
+  try{
+    let itens, observacoes;
+    if(_propostaCarregadaPara === id){
+      itens = window._propItens || [];
+      observacoes = _propObsAtual;
+    } else {
+      const p = await api(`/api/editais/${id}/proposta`);
+      if(!p.existe) return;   // nada salvo ainda -- nada a remover no servidor
+      itens = p.itens || [];
+      observacoes = p.observacoes || '';
+    }
+    const antes = itens.length;
+    itens = itens.filter(i => String(i.numero) !== String(numero));
+    if(itens.length === antes) return;   // item não estava salvo -- nada a fazer
     const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({itens, observacoes})});
