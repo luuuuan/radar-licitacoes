@@ -883,18 +883,16 @@
   .filtros-lateral .uf-checks label:has(input:checked){border-color:var(--accent);color:var(--accent)}
   .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
   .editais-principal{min-width:0}
-  /* Busca por item: no celular mora dentro do painel de Filtros, sempre
-     aberta, sem animação de rolagem (achado real: focar o campo abre o
-     teclado, o navegador ajusta a viewport pra manter o campo visível, isso
-     dispara um scroll, e a lógica de colapsar-com-scroll recolhia o campo
-     na hora que abria — ruim especificamente por causa do teclado, que só
-     existe no celular). A partir do tablet (mesmo ponto em que a lateral de
-     filtros vira sticky), o mesmo elemento é REALOCADO por JS pro topo da
-     lista (ver _reposicionarBuscaItem) e aí sim ganha a rolagem/colapso. */
+  /* Busca por item: no celular mora dentro do painel de Filtros. A partir
+     do tablet (mesmo ponto em que a lateral de filtros vira sticky), o
+     mesmo elemento é REALOCADO por JS pro topo da lista (ver
+     _reposicionarBuscaItem) e fica preso lá (position:sticky) — sempre
+     com o campo aberto/visível por inteiro nos dois casos, pedido do
+     usuário: nada de encolher pro ícone ao rolar ou sair do campo, o
+     comportamento anterior confundia mais do que ajudava. */
   .busca-item-destaque{display:flex;align-items:center;gap:10px;padding:10px;
     background:var(--panel);border:1px solid var(--line);border-radius:10px;
-    margin-bottom:14px;color:var(--muted);width:100%;
-    transition:max-width .25s ease,padding .25s ease}
+    margin-bottom:14px;color:var(--muted);width:100%}
   /* botão "Pesquisar" com contorno próprio — antes era só ícone+texto soltos
      dentro da mesma barra do campo, sem nenhuma separação visual do
      placeholder do input (ficava tudo parecendo um texto só, achado real
@@ -903,31 +901,8 @@
     background:var(--accent);border:none;border-radius:8px;padding:8px 12px;
     color:#fff;cursor:pointer;font:inherit;font-size:13px;font-weight:600}
   .busca-item-destaque input{flex:1;min-width:0;border:none;background:transparent;
-    outline:none;color:var(--txt);font-size:15px;padding:2px 6px;
-    transition:opacity .15s ease}
+    outline:none;color:var(--txt);font-size:15px;padding:2px 6px}
   .busca-item-destaque input::placeholder{color:var(--muted)}
-  /* colapsada (só existe na versão desktop/tablet, ver JS): só o ícone,
-     campo e rótulo "Pesquisar" escondidos — abre de novo ao clicar. Fundo
-     opaco (igual ao estado normal, não mais transparente): achado real —
-     com a caixa realmente colada no topo via position:sticky (ver correção
-     do "display:contents" em #slot-busca-desktop), ela passa a sobrepor os
-     cards da lista rolando por baixo; um fundo transparente deixava o texto
-     dos cards vazando por trás do ícone, um visual quebrado. */
-  .busca-item-destaque.colapsada{max-width:44px;padding:6px;cursor:pointer;
-    background:var(--panel)}
-  /* flex:none (achado real) — sem isso, o "width:0" abaixo não tem efeito
-     nenhum: o input tem flex:1 (flex-basis:0%,flex-grow:1) na regra normal,
-     e flex-basis vence "width" no eixo principal do flex. Com flex-grow:1
-     ainda ativo, o input INVISÍVEL continuava crescendo pra preencher o
-     espaço disponível, empurrando o ícone pro canto oposto da caixa — e
-     como #slot-busca-desktop .busca-item-destaque{max-width:520px} (ID)
-     tem mais especificidade que esta classe dupla, a caixa nem encolhia de
-     verdade (ver regra abaixo, que corrige isso também). O resultado
-     visível: o ícone "Pesquisar" ficava colado no lado ERRADO da barra
-     depois de rolar a página, em vez de virar um botão pequeno e sozinho. */
-  .busca-item-destaque.colapsada input{flex:none;width:0;opacity:0;pointer-events:none}
-  .busca-item-destaque.colapsada .busca-item-rotulo{display:none}
-  .busca-item-destaque.colapsada .busca-item-icone{padding:10px;border-radius:10px}
   /* no celular, campo numa linha e botão "Pesquisar" cheio embaixo (igual
      aos outros botões do painel de Filtros) — em uma linha só ficava
      espremido demais pro botão e o campo caberem lado a lado. */
@@ -970,11 +945,6 @@
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1500px, ver abaixo) + uma folga de 8px. */
     #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px}
-    /* achado real: sem essa regra, o max-width:520px acima (seletor por ID)
-       vence o max-width:44px de ".colapsada" (duas classes, especificidade
-       menor) e a caixa nunca encolhia de verdade ao rolar a página — ficava
-       larga e transparente, só com o ícone visível preso numa ponta. */
-    #slot-busca-desktop .busca-item-destaque.colapsada{max-width:44px}
   }
   @media (min-width:681px) and (prefers-reduced-motion:reduce){
     .filtros-lateral{transition:none}
@@ -2877,42 +2847,11 @@ function navPaginacao(r, fnPagina, paginaAtual, rotulo='edital(is)'){
 
 let paginaEditais = 1;
 
-// Campo de busca por item: a partir do tablet, colapsa/expande seguindo o
-// SCROLL da página — rolou pra baixo, encolhe pro ícone; voltou pro topo,
-// abre sozinho, mesmo sem clicar. No CELULAR não usa esse comportamento —
-// achado real: focar o campo abre o teclado, o navegador ajusta a viewport
-// pra manter o campo visível, isso dispara um evento de scroll, e a lógica
-// de colapsar-com-scroll recolhia o campo bem na hora que ele abria. No
-// celular o campo mora fixo dentro do painel de Filtros e fica sempre
-// aberto (ver _reposicionarBuscaItem).
-//
-// Lê o estado ATUAL da classList a cada checagem em vez de guardar numa
-// variável separada — evita dessincronia entre "abriu manualmente com um
-// clique" e "o scroll achava que já estava aberto/fechado". Como isso só
-// muda LARGURA (nunca altura), não tem o risco do loop de auto-alimentação
-// que o cabeçalho compacto tinha (ver correção em _atualizarNavCompacta) —
-// a troca de estado aqui não pode, por si só, mudar a posição de scroll
-// que a disparou.
-const _LIMIAR_BUSCA_COLAPSA = 10;
+// Campo de busca por item: pedido do usuário -- fica sempre normal/aberto
+// (nada de encolher pro ícone ao rolar a página ou clicar fora, como fazia
+// antes). A única coisa que muda com a largura da tela é ONDE o campo mora
+// (ver _reposicionarBuscaItem).
 function _buscaEhDesktop(){ return window.matchMedia('(min-width:681px)').matches; }
-function _atualizarBuscaPorScroll(){
-  if(!_buscaEhDesktop()) return;   // colapso-por-scroll só existe a partir do tablet
-  const wrap = document.querySelector('.busca-item-destaque');
-  if(!wrap) return;
-  // achado real: no desktop, clicar no ícone pra reabrir o campo colapsado
-  // foca o input — e o navegador ajusta o scroll pra garantir que o campo
-  // recém-focado fique visível, disparando um evento de scroll mesmo sem o
-  // usuário ter rolado nada. Sem esta guarda, esse scroll "fantasma" batia
-  // direto no limiar (ainda scrollado) e recolapsava o campo na mesma
-  // fração de segundo em que abria — mesma causa raiz do bug já conhecido
-  // no celular (ver comentário acima), só que essa variante só aparece
-  // quando o campo realmente gruda/colapsa de verdade (ver correção do
-  // "display:contents" em #slot-busca-desktop).
-  if(document.activeElement === $('#f-busca-item')) return;
-  const deveColapsar = window.scrollY > _LIMIAR_BUSCA_COLAPSA;
-  if(wrap.classList.contains('colapsada') === deveColapsar) return;
-  wrap.classList.toggle('colapsada', deveColapsar);
-}
 // Move o MESMO elemento (não duplica) entre o slot no painel de Filtros
 // (celular) e o slot no topo da lista (tablet+) conforme a largura da tela.
 // Roda no boot e a cada resize (ex.: girar o celular, redimensionar a
@@ -2922,8 +2861,6 @@ function _reposicionarBuscaItem(){
   if(!el) return;
   const alvo = document.getElementById(_buscaEhDesktop() ? 'slot-busca-desktop' : 'slot-busca-mobile');
   if(alvo && el.parentElement !== alvo) alvo.appendChild(el);
-  if(_buscaEhDesktop()) _atualizarBuscaPorScroll();
-  else el.classList.remove('colapsada');   // celular: sempre aberto
 }
 // Mesma técnica do campo de busca (acima): move o bloco de status da coleta
 // + Recalcular entre o cabeçalho (desktop/tablet) e a gaveta lateral
@@ -2942,55 +2879,23 @@ function _initBuscaItemDestaque(){
   const wrap = document.querySelector('.busca-item-destaque');
   const input = $('#f-busca-item');
   if(!wrap || !input) return;
-  wrap.addEventListener('click', ()=>{
-    if(wrap.classList.contains('colapsada')){
-      wrap.classList.remove('colapsada');
-      input.focus();
-    }
-  });
-  // clique fora do campo (só desktop/tablet — no celular o campo fica
-  // sempre aberto, ver _reposicionarBuscaItem) com o campo vazio: encolhe
-  // de volta pro ícone, mesma animação já usada no colapso por scroll.
-  // Checa o alvo do clique (não blur/focusout) pra não depender do campo
-  // realmente perder o foco — clicar num espaço vazio da página nem sempre
-  // move o foco de verdade.
-  document.addEventListener('click', (e)=>{
-    if(!_buscaEhDesktop()) return;
-    if(wrap.classList.contains('colapsada')) return;
-    if(input.value.trim() !== '') return;
-    if(wrap.contains(e.target)) return;
-    wrap.classList.add('colapsada');
-    input.blur();
-  });
-  window.addEventListener('scroll', _atualizarBuscaPorScroll, {passive:true});
   window.addEventListener('resize', _reposicionarBuscaItem);
   _reposicionarBuscaItem();
 }
-// Ícone funciona como botão "Pesquisar" quando o campo já está aberto —
-// enquanto colapsado, o primeiro clique só revela o campo (não pesquisa
-// ainda, o campo pode estar vazio).
+// Ícone funciona como botão "Pesquisar".
 function _cliqueIconeBusca(e){
   e.stopPropagation();
-  const wrap = document.querySelector('.busca-item-destaque');
-  if(wrap.classList.contains('colapsada')){
-    wrap.classList.remove('colapsada');
-    $('#f-busca-item').focus();
-  } else {
-    _pesquisarItem();
-  }
+  _pesquisarItem();
 }
 function _pesquisarItem(){
   // Achado real: limpar o campo aqui apagava o termo buscado do estado da
   // busca, não só da caixa — qualquer filtro aplicado DEPOIS (uf, valor,
   // nível...) disparava um loadEditais() novo que lia o campo já vazio,
   // perdendo "busca_item" da consulta (e junto o bloco "sem análise
-  // automática", que só existe quando busca_item está presente). Resultado:
-  // pesquisar e em seguida aplicar um filtro fazia os editais da busca
-  // sumirem. O campo colapsa (escondido via CSS, ver .colapsada) sem
-  // precisar zerar o valor — o termo continua ativo, igual aos outros
-  // filtros, até o usuário apagá-lo ou limpar os filtros.
+  // automática", que só existe quando busca_item está presente). O termo
+  // continua ativo no campo, igual aos outros filtros, até o usuário
+  // apagá-lo ou limpar os filtros.
   loadEditais();
-  _atualizarBuscaPorScroll();   // recolapsa só se realmente não estiver no topo
 }
 
 // Filtro salvo (pedido do usuário): guarda a combinação de filtros da aba
@@ -3237,7 +3142,6 @@ function limparFiltros(){
   $('#f-valor-max').value = '';
   $('#f-data-de').value = '';
   $('#f-data-ate').value = '';
-  _atualizarBuscaPorScroll();
   loadEditais();
   fecharFiltrosMobile();
 }

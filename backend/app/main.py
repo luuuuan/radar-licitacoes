@@ -1302,32 +1302,44 @@ def remover_produtos_varios(dados: ProdutosIdsIn,
 #      outra);
 #   2) buscar "caneta" trazia um item chamado "MACANETA PARA FECHADURA DE
 #      PORTA" (o PNCP grava sem cedilha) — "caneta" é um substring literal
-#      de "macaneta", sem fronteira de palavra nenhuma.
-# _condicoes_busca_item tokeniza em palavras (cada uma precisa aparecer,
-# em qualquer ordem — resolve o achado 1) e, no Postgres, usa regex com
-# fronteira de palavra (\y) pra cada uma (resolve o achado 2). SQLite (só
-# dev/teste local) não tem esse operador de regex nativo sem registrar uma
-# função customizada por conexão — cai pro substring de sempre, mais largo;
-# aceitável porque é só ambiente de desenvolvimento, produção roda Postgres.
+#      de "macaneta", sem fronteira de palavra nenhuma;
+#   3) buscar "caneta" (singular) não achava "CANETAS ESFEROGRÁFICAS"
+#      (plural) — a fronteira de palavra exigia bater com a palavra INTEIRA
+#      dos dois lados, então uma variação (plural, diminutivo etc.) que só
+#      acrescenta um sufixo à palavra buscada já não contava como match.
+# _condicoes_busca_item tokeniza em palavras (cada uma precisa aparecer, em
+# qualquer ordem — resolve o achado 1) e, no Postgres, usa regex com
+# fronteira de palavra só no INÍCIO de cada uma (\m, não \y) — exige que a
+# palavra buscada comece uma palavra de verdade no texto (resolve o achado
+# 2: não casa no meio de "macaneta") mas aceita qualquer sufixo depois dela
+# (resolve o achado 3: "caneta" casa com "canetas", "caneteira" etc.). Só
+# funciona nessa direção (termo buscado = a forma mais "base"/curta) — não
+# tenta resolver o inverso (buscar "canetas" e achar um item que só diz
+# "caneta"). SQLite (só dev/teste local) não tem esse operador de regex
+# nativo sem registrar uma função customizada por conexão — cai pro
+# substring de sempre, mais largo ainda; aceitável porque é só ambiente de
+# desenvolvimento, produção roda Postgres.
 def _condicoes_busca_item(termo: str, eh_postgres: bool) -> list:
     palavras = [p for p in termo.strip().lower().split() if p]
     condicoes = []
     for p in palavras:
         col = func.lower(ItemEdital.descricao)
         if eh_postgres:
-            condicoes.append(col.op("~")(r"\y" + re.escape(p) + r"\y"))
+            condicoes.append(col.op("~")(r"\m" + re.escape(p)))
         else:
             condicoes.append(col.like(f"%{p}%"))
     return condicoes
 
 
 def _item_bate_busca(descricao: str | None, palavras: list[str]) -> bool:
-    """Mesma regra de _condicoes_busca_item, mas em Python (usada pra
-    escolher QUAIS trechos de item mostrar como motivo no card "sem análise
-    automática" — precisa bater com o mesmo critério que decidiu incluir
-    aquele edital, senão o card aparece sem nenhum item destacado)."""
+    """Mesma regra de _condicoes_busca_item (caminho Postgres: fronteira só
+    no INÍCIO da palavra, aceita sufixo/variação depois -- ver comentário
+    lá em cima), mas em Python (usada pra escolher QUAIS trechos de item
+    mostrar como motivo no card "sem análise automática" — precisa bater
+    com o mesmo critério que decidiu incluir aquele edital, senão o card
+    aparece sem nenhum item destacado)."""
     texto = (descricao or "").lower()
-    return all(re.search(r"\b" + re.escape(p) + r"\b", texto) for p in palavras)
+    return all(re.search(r"\b" + re.escape(p), texto) for p in palavras)
 
 
 def _dias_restantes_edital(ed: Edital) -> int | None:

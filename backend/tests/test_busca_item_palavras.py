@@ -7,14 +7,19 @@ busca_item). Achados reais reportados pelo usuário:
 2) buscar "caneta" trazia um item chamado "MACANETA PARA FECHADURA DE
    PORTA" (PNCP grava sem cedilha) -- "caneta" é um substring literal de
    "macaneta", sem fronteira de palavra nenhuma.
+3) buscar "caneta" (singular) não achava "CANETAS ESFEROGRÁFICAS" (plural)
+   -- fronteira de palavra nos dois lados exigia bater a palavra INTEIRA,
+   então uma variação (plural, diminutivo etc.) que só acrescenta um
+   sufixo já não contava como match.
 _condicoes_busca_item/_item_bate_busca (app/main.py) tokenizam em palavras
 (cada uma precisa aparecer, em qualquer ordem) e, no Postgres, usam regex
-com fronteira de palavra por token. SQLite (usado aqui, nos testes) não
-tem esse operador nativamente -- cai pro substring de sempre, então o
-teste end-to-end do achado 2 teria que rodar contra Postgres de verdade;
-aqui valida-se a função pura (_item_bate_busca, usa o módulo `re` do
-Python, não depende de banco nenhum) e o FORMATO da condição SQL gerada
-pro Postgres. Rode com: cd backend && pytest
+com fronteira de palavra só no INÍCIO de cada token (aceita qualquer
+sufixo depois -- resolve o achado 3 sem reabrir o achado 2). SQLite (usado
+aqui, nos testes) não tem esse operador nativamente -- cai pro substring
+de sempre, então o teste end-to-end do achado 2 teria que rodar contra
+Postgres de verdade; aqui valida-se a função pura (_item_bate_busca, usa o
+módulo `re` do Python, não depende de banco nenhum) e o FORMATO da
+condição SQL gerada pro Postgres. Rode com: cd backend && pytest
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -75,6 +80,17 @@ def test_item_bate_busca_respeita_fronteira_de_palavra():
     assert _item_bate_busca("CANETA ESFEROGRÁFICA AZUL", ["caneta"]) is True   # continua batendo no caso normal
 
 
+def test_item_bate_busca_aceita_variacao_por_sufixo():
+    """Achado real: buscar "caneta" (singular) não achava um item chamado
+    "CANETAS ESFEROGRÁFICAS" (plural) -- só a palavra INTEIRA contava. Só
+    cobre variação que ACRESCENTA sufixo à palavra buscada (plural regular
+    com -s, por ex.) -- não tenta resolver troca de vogal (diminutivo tipo
+    "canetinha") nem a direção inversa (buscar "canetas" e achar "caneta")."""
+    assert _item_bate_busca("CANETAS ESFEROGRÁFICAS AZUIS", ["caneta"]) is True
+    # continua sem bater dentro de "macaneta" mesmo com a fronteira mais frouxa
+    assert _item_bate_busca("MACANETA PARA FECHADURA DE PORTA", ["caneta"]) is False
+
+
 # ---------- _condicoes_busca_item (formato da condição SQL) ----------
 
 def test_condicoes_busca_item_tokeniza_uma_condicao_por_palavra():
@@ -82,11 +98,12 @@ def test_condicoes_busca_item_tokeniza_uma_condicao_por_palavra():
     assert len(condicoes) == 2
 
 
-def test_condicoes_busca_item_postgres_usa_regex_com_fronteira_de_palavra():
+def test_condicoes_busca_item_postgres_usa_regex_com_fronteira_so_no_inicio():
     condicoes = _condicoes_busca_item("caneta", eh_postgres=True)
     sql = str(condicoes[0].compile(compile_kwargs={"literal_binds": True}))
     assert "~" in sql
-    assert r"\ycaneta\y" in sql
+    assert r"\mcaneta" in sql
+    assert r"\y" not in sql   # não exige mais fronteira também no FIM da palavra
 
 
 def test_condicoes_busca_item_sqlite_usa_substring_de_sempre():
