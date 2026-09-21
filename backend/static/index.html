@@ -4723,7 +4723,7 @@ function _msgErroIA(detalhe){
   const base = daGroq ? detalhe.slice(5) : detalhe;
   if(base==='http_429'){
     return daGroq
-      ? 'A IA está com alta demanda geral no momento (não é a sua cota pessoal). Tente novamente em alguns minutos.'
+      ? 'A IA está com alta demanda geral no momento. Tente novamente em alguns minutos.'
       : 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
   }
   if(base==='http_503'||base==='http_502'||base==='http_504') return 'O serviço de IA está sobrecarregado no momento. Tente novamente em alguns minutos.';
