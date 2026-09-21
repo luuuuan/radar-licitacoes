@@ -940,10 +940,7 @@
     .filtros-btn-mobile{display:none}
     .filtros-overlay{display:none !important}
     .filtros-lateral-head{display:none}
-    .filtros-fechar-desktop{display:flex;align-items:center;gap:6px;align-self:flex-end;
-      background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;
-      padding:4px 2px;margin-bottom:2px}
-    .filtros-fechar-desktop:hover{color:var(--txt)}
+    .filtros-fechar-desktop{display:inline-flex;align-items:center;align-self:flex-end;margin-bottom:4px}
     .filtros-lateral{display:flex;flex:0 0 400px;position:sticky;top:16px;left:auto;
       height:auto;width:auto;max-width:none;margin:0;z-index:auto;
       background:transparent;border:none;border-radius:0;max-height:calc(100vh - 32px);
@@ -1175,8 +1172,8 @@
              (ver .filtros-fechar-desktop no CSS); o botão "Filtros" acima
              (#btn-filtros-abrir, já existia só pro celular) reabre, ver
              _toggleFiltrosDesktop(). -->
-        <button type="button" class="filtros-fechar-desktop" onclick="_toggleFiltrosDesktop()" title="Ocultar filtros">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg> Ocultar filtros
+        <button type="button" class="btn ghost filtros-fechar-desktop" onclick="_toggleFiltrosDesktop()" title="Ocultar filtros">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4z"/></svg> Ocultar filtros
         </button>
         <div class="filtros-lateral-head">Filtros
           <button class="nav-close" onclick="toggleFiltrosMobile()" aria-label="Fechar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
@@ -4453,7 +4450,7 @@ let _comparacaoCatalogoItensAtual = {};
 // (mesmo endpoint da sugestão de confiança média) e só depois marca a
 // seleção da cotação — sem confirmar, o item não entraria na cotação.xlsx/
 // margem (mesma regra de confianca/confirmado_manualmente de sempre).
-function _comparacaoCatalogoIAHTML(c, desatualizada){
+function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
   const _motivoBloq = _motivoBloqueioEdicao();
   const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
@@ -4499,7 +4496,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
   c.itens.forEach(it => _comparacaoCatalogoItensAtual[it.numero] = it);   // detalhes/troca precisam achar item excluído também
-  const linhas = itensVisiveis.map(it=>{
+  const linhaHTML = (it)=>{
     const principal = it.candidatos[0];
     // Achado real: item confirmado numa análise antiga (produto A), esse
     // produto depois excluído do catálogo, e uma NOVA análise sugerindo um
@@ -4574,16 +4571,45 @@ function _comparacaoCatalogoIAHTML(c, desatualizada){
         </div>
       </td>
     </tr>`;
-  }).join('');
+  };
+  const tabelaHTML = (itens)=>`<div style="overflow-x:auto"><table>
+      <thead><tr><th>Item</th><th>Descrição</th><th>Unidade</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
+      <tbody>${itens.map(linhaHTML).join('')}</tbody>
+    </table></div>`;
+  // pedido do usuário: quando o edital é julgado por lote (r.lotes só vem
+  // preenchido nesse caso, ver backend), separa a tabela em uma por lote —
+  // mesmo agrupamento já usado em "Cobertura por lote" (_lotesCoberturaHTML),
+  // só que aqui mostrando o produto sugerido de cada item, não só se o
+  // catálogo cobre o lote inteiro.
+  let corpo;
+  if(lotes && lotes.length){
+    const loteDoItem = {};
+    lotes.forEach(l => (l.itens||[]).forEach(n => { loteDoItem[String(n)] = l; }));
+    const grupos = [];
+    const gruposPorNumero = new Map();
+    const semLote = [];
+    itensVisiveis.forEach(it=>{
+      const l = loteDoItem[String(it.numero)];
+      if(!l){ semLote.push(it); return; }
+      let g = gruposPorNumero.get(l.numero);
+      if(!g){ g = {lote:l, itens:[]}; gruposPorNumero.set(l.numero, g); grupos.push(g); }
+      g.itens.push(it);
+    });
+    corpo = grupos.map(g=>`
+      <div style="margin-top:12px;font-weight:600;font-size:13px">Lote ${esc(String(g.lote.numero))}${g.lote.descricao?` — <span class="muted" style="font-weight:400">${esc(g.lote.descricao)}</span>`:''}</div>
+      ${tabelaHTML(g.itens)}`).join('');
+    if(semLote.length){
+      corpo += `<div style="margin-top:12px;font-weight:600;font-size:13px">Sem lote identificado</div>${tabelaHTML(semLote)}`;
+    }
+  } else {
+    corpo = tabelaHTML(itensVisiveis);
+  }
   return `<div style="margin-top:16px">
     ${aviso}
     ${avisoLotes}
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
     <p class="muted" style="font-size:11px;margin:2px 0 6px">Manda o catálogo inteiro pra IA comparar com cada item do edital — uma segunda opinião, independente da compatibilidade já calculada na aba Itens/margem. A validação de medidas/características abaixo do produto é automática (não é a IA) — confira sempre antes de confirmar.</p>
-    <div style="overflow-x:auto"><table>
-      <thead><tr><th>Item</th><th>Descrição</th><th>Unidade</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table></div>
+    ${corpo}
   </div>`;
 }
 
@@ -5619,7 +5645,7 @@ function _renderResultadoAnalise(r){
         ${_checklistDocsHTML(r.checklist_documentos)}
       </div>`:''}
       ${_verificacaoDocumentosIAHTML(r.verificacao_documentos_ia, r.verificacao_documentos_desatualizada)}
-      ${_comparacaoCatalogoIAHTML(r.comparacao_catalogo_ia, r.comparacao_catalogo_desatualizada)}
+      ${_comparacaoCatalogoIAHTML(r.comparacao_catalogo_ia, r.comparacao_catalogo_desatualizada, r.lotes)}
       ${_listaHTML('Requisitos técnicos/especificações', r.requisitos_tecnicos)}
       ${_listaHTML('Prazos', r.prazos)}
       ${_listaHTML('Pontos de atenção', r.pontos_atencao)}
