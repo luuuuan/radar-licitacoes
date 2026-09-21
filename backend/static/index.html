@@ -6188,6 +6188,7 @@ function _renderizarPropostaEdital(){
     <div class="toolbar" style="margin-top:10px">
       <button class="btn" onclick="salvarProposta(this)" ${_motivoBloqProp?`disabled title="${esc(_motivoBloqProp)}"`:''}>Salvar proposta</button>
       <button class="btn ghost" id="btn-baixar-proposta" onclick="baixarPropostaPdf(this)">${ICN.baixar} Baixar proposta (PDF)</button>
+      <button class="btn ghost" id="btn-baixar-proposta-docx" onclick="baixarPropostaDocx(this)">${ICN.baixar} Baixar proposta (DOCX)</button>
       <span style="flex:1"></span>
       <span id="prop-msg" class="muted" style="font-size:12px"></span>
     </div>`;
@@ -6352,6 +6353,31 @@ async function baixarPropostaPdf(btn){
     setTimeout(()=>URL.revokeObjectURL(url), 4000);
   }catch(e){
     toast('Não foi possível gerar o PDF agora. Tente de novo.', 'erro');
+  }finally{
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
+}
+
+// mesma lógica de baixarPropostaPdf (salva antes de gerar, pra não baixar
+// dado desatualizado) -- só troca a URL/extensão pro formato editável.
+async function baixarPropostaDocx(btn){
+  const original = btn ? btn.innerHTML : null;
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-inline" style="border-color:rgba(255,255,255,.35);border-top-color:#fff;vertical-align:-3px"></span> Gerando DOCX...`;
+  }
+  try{
+    await salvarProposta();
+    const r = await fetch(`/api/editais/${_propEditalId}/proposta.docx`);
+    if(!r.ok) throw new Error('falha ao gerar');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `proposta_edital_${_propEditalId}.docx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  }catch(e){
+    toast('Não foi possível gerar o DOCX agora. Tente de novo.', 'erro');
   }finally{
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }

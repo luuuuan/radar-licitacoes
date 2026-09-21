@@ -4691,6 +4691,33 @@ def exportar_proposta_pdf(edital_id: int, user: Usuario = Depends(_auth.get_curr
                                      "Cache-Control": "no-store"})
 
 
+@app.get("/api/editais/{edital_id}/proposta.docx")
+def exportar_proposta_docx(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                           db: Session = Depends(get_session)):
+    """Mesmo conteúdo do PDF (exportar_proposta_pdf), formato editável --
+    pedido do usuário: algumas licitações preferem a proposta em .docx
+    (papel timbrado próprio, ajuste de última hora)."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    prop = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
+                      .where(Proposta.usuario_id == user.id)).scalars().first()
+    p = _proposta_payload(ed, prop, user, db)
+    edital_info = {
+        "orgao": ed.orgao, "objeto": ed.objeto, "modalidade": ed.modalidade,
+        "municipio": ed.municipio, "uf": ed.uf, "id_externo": ed.id_externo,
+        "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
+        "link": ed.link,
+    }
+    from .proposta_docx import gerar_docx_proposta
+    docx_bytes = gerar_docx_proposta(_dados_remetente(user), edital_info, p)
+    nome = f"proposta_edital_{edital_id}.docx"
+    return StreamingResponse(iter([docx_bytes]),
+                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                             headers={"Content-Disposition": f"attachment; filename={nome}",
+                                     "Cache-Control": "no-store"})
+
+
 @app.get("/api/perfil/papel-timbrado.docx")
 def exportar_papel_timbrado(user: Usuario = Depends(_auth.get_current_user)):
     """Papel timbrado em .docx (logo + dados da empresa no cabeçalho, contato
