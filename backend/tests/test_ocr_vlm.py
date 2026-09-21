@@ -117,7 +117,30 @@ def test_ocr_pdf_vlm_402_devolve_vazio_pro_chamador_cair_no_tesseract(monkeypatc
          patch("app.analise_edital._chamar_vlm_pagina", return_value=None) as mock_chamar:
         resultado = ia._ocr_pdf_vlm(b"fake")
     assert resultado == ""
-    assert mock_chamar.call_count == 1   # 1ª página já falhou (402) -- não insiste nas demais
+    # achado real (edital 141791): uma página falhando (ex.: 429 passageiro
+    # de rate limit) não pode mais descartar as páginas seguintes -- tenta
+    # TODAS, mesmo se a 1ª já falhou (ver test_ocr_pdf_vlm_pula_pagina_que_
+    # falha_e_continua_com_as_seguintes, o caso que motivou essa mudança).
+    assert mock_chamar.call_count == 2
+
+
+def test_ocr_pdf_vlm_pula_pagina_que_falha_e_continua_com_as_seguintes(monkeypatch):
+    """Achado real (edital 141791, PNCP 01208243000182/2026/27): a IA
+    sinalizou "pula do item 11.4 pro 12.4.1" -- a cara de uma página no
+    meio do documento sumindo sozinha. Antes desta correção, a 1ª página
+    que falhasse (ex.: um 429 passageiro de rate limit, comum numa API
+    paga sob carga) descartava TODAS as páginas seguintes, mesmo sem
+    motivo pra achar que elas também falhariam."""
+    monkeypatch.setattr(ia.settings, "OCR_VLM_ATIVO", True)
+    monkeypatch.setattr(ia.settings, "DEEPINFRA_API_KEY", "fake-key")
+    with patch("pdf2image.convert_from_bytes",
+              return_value=[_ImagemFake(), _ImagemFake(), _ImagemFake()]), \
+         patch("app.analise_edital._chamar_vlm_pagina",
+              side_effect=["pagina 1", None, "pagina 3"]) as mock_chamar:
+        resultado = ia._ocr_pdf_vlm(b"fake")
+    assert mock_chamar.call_count == 3   # tentou as 3, não parou na 2ª que falhou
+    assert "pagina 1" in resultado
+    assert "pagina 3" in resultado
 
 
 def test_ocr_pdf_vlm_usa_seu_proprio_limite_de_paginas_nao_o_do_tesseract(monkeypatch):

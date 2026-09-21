@@ -92,6 +92,26 @@ def test_ocr_pdf_para_de_processar_paginas_quando_estoura_o_orcamento(monkeypatc
     assert texto == "texto da pagina 1"
 
 
+def test_ocr_pdf_pula_pagina_com_erro_e_continua_com_as_seguintes(monkeypatch):
+    """Achado real (edital 141791, mesmo raciocínio do VLM em test_ocr_vlm.py
+    ::test_ocr_pdf_vlm_pula_pagina_que_falha_e_continua_com_as_seguintes):
+    uma página que dá erro no Tesseract (imagem corrompida, timeout só
+    daquela página) não pode descartar as páginas seguintes -- diferente do
+    estouro de orçamento de tempo (teste acima), que É cumulativo e
+    corretamente para tudo, um erro numa página É específico dela."""
+    monkeypatch.setattr(ia.settings, "OCR_ATIVO", True)
+    monkeypatch.setattr(ia.settings, "OCR_ORCAMENTO_SEGUNDOS", 999)
+
+    with patch("pdf2image.convert_from_bytes", return_value=["pagina1", "pagina2", "pagina3"]), \
+         patch("pytesseract.image_to_string",
+              side_effect=["texto da pagina 1", Exception("imagem corrompida"), "texto da pagina 3"]) as mock_ocr:
+        texto = ia._ocr_pdf(b"fake")
+
+    assert mock_ocr.call_count == 3   # tentou as 3, não parou na 2ª que falhou
+    assert "texto da pagina 1" in texto
+    assert "texto da pagina 3" in texto
+
+
 def test_texto_de_pdf_bytes_passa_max_paginas_ocr_pro_fallback(monkeypatch):
     """PDF "escaneado" (páginas em branco -> extract_text() vazio) força o
     fallback de OCR -- confirma que o max_paginas_ocr pedido por quem

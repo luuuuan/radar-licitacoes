@@ -683,8 +683,18 @@ def _ocr_pdf_vlm(conteudo: bytes) -> str:
         imagem_b64 = base64.b64encode(buf.getvalue()).decode()
         texto = _chamar_vlm_pagina(imagem_b64, api_key)
         if texto is None:
-            log.warning("VLM de OCR interrompido -- uma página falhou, aproveitando o que já foi lido.")
-            break
+            # achado real (edital 141791): abortar o documento inteiro na
+            # 1ª página que falhar (ex.: um 429 passageiro de rate limit,
+            # bem comum numa API paga sob carga) descartava TODAS as
+            # páginas seguintes -- mesmo sem nenhum motivo pra achar que
+            # elas também falhariam. A IA sinalizou "pula do item 11.4 pro
+            # 12.4.1" -- exatamente a cara de uma página no meio do
+            # documento sumindo sozinha. Pula só a página que falhou (best-
+            # effort por página, não por documento) e continua com as
+            # seguintes -- perder 1 página é bem menos grave que perder
+            # o resto do documento por causa dela.
+            log.warning("VLM de OCR: uma página falhou -- pula ela e continua com as seguintes.")
+            continue
         partes.append(texto)
 
     texto_final = "\n\n".join(partes).strip()
@@ -735,8 +745,12 @@ def _ocr_pdf(conteudo: bytes, max_paginas: int | None = None) -> str:
         try:
             partes.append(pytesseract.image_to_string(img, lang=settings.OCR_IDIOMA, timeout=restante))
         except Exception as e:
-            log.warning("Falha no OCR de uma página: %s", e)
-            break
+            # achado real (edital 141791, mesmo raciocínio do VLM acima):
+            # uma falha do Tesseract numa página específica (imagem
+            # corrompida, timeout daquela página) não é motivo pra
+            # descartar as páginas seguintes -- pula só esta e continua.
+            log.warning("Falha no OCR de uma página (pulando, continuando com as seguintes): %s", e)
+            continue
     texto = "\n".join(partes).strip()
     if texto:
         log.info("OCR extraiu %d caracteres de PDF escaneado.", len(texto))
