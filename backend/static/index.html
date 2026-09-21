@@ -919,7 +919,7 @@
     .filtros-lateral{display:flex;flex:0 0 400px;position:sticky;top:16px;left:auto;
       height:auto;width:auto;max-width:none;margin:0;z-index:auto;
       background:transparent;border:none;border-radius:0;max-height:calc(100vh - 32px);
-      transition:flex-basis .26s ease,opacity .22s ease,margin-right .26s ease}
+      transition:flex-basis .26s ease,opacity .22s ease,margin-right .26s ease,padding .26s ease}
     .filtros-lateral .uf-checks{grid-template-columns:1fr 1fr}
     .editais-principal{flex:1;min-width:0}
     /* pedido do usuário: opção de esconder os filtros no desktop (antes
@@ -927,8 +927,15 @@
        filtros-colapsados é alternado por _toggleFiltrosDesktop(). Anima
        flex-basis+opacity (não display:none, que não pode animar) pra sair
        suave, e some o gap do flex pai (margin-right negativo) pra não
-       sobrar um vão vazio do tamanho do "gap" quando colapsado. */
-    #t-editais.filtros-colapsados .filtros-lateral{flex-basis:0;opacity:0;pointer-events:none;margin-right:-20px}
+       sobrar um vão vazio do tamanho do "gap" quando colapsado.
+       padding:0 (achado real, reportado pelo usuário com print) -- sem
+       isso, o padding:16px herdado da regra base (pensada pro painel
+       cheio do celular) continuava contando pra largura do item flex
+       mesmo com flex-basis:0, sobrando ~32px de espaço fantasma à
+       esquerda de tudo dentro de .editais-principal -- inclusive o campo
+       de busca, que ficava visivelmente desalinhado (mais pra dentro) em
+       relação ao botão "Filtros" bem acima dele. */
+    #t-editais.filtros-colapsados .filtros-lateral{flex-basis:0;opacity:0;pointer-events:none;margin-right:-20px;padding:0}
     #t-editais.filtros-colapsados .filtros-btn-mobile{display:inline-flex}
     /* achado real: sem "display:contents" aqui, esta div (que só existe como
        alvo pro JS mover o campo de busca entre celular/desktop, ver
@@ -944,10 +951,17 @@
     /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1500px, ver abaixo) + uma folga de 8px. */
-    #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px}
+    #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px;
+      transition:max-width .26s ease}
+    /* com os filtros escondidos sobra bem mais espaço ao lado do campo --
+       sem isso ele continuava limitado aos mesmos 520px de quando a
+       lateral de filtros (400px) tá ocupando a outra metade da tela,
+       ficando pequeno e meio perdido no meio de todo aquele vazio. */
+    #t-editais.filtros-colapsados #slot-busca-desktop .busca-item-destaque{max-width:760px}
   }
   @media (min-width:681px) and (prefers-reduced-motion:reduce){
     .filtros-lateral{transition:none}
+    #slot-busca-desktop .busca-item-destaque{transition:none}
   }
   @media (min-width:1500px){
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
