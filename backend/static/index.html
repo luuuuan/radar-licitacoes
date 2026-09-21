@@ -4450,6 +4450,16 @@ let _comparacaoCatalogoItensAtual = {};
 // (mesmo endpoint da sugestão de confiança média) e só depois marca a
 // seleção da cotação — sem confirmar, o item não entraria na cotação.xlsx/
 // margem (mesma regra de confianca/confirmado_manualmente de sempre).
+// achado real (edital 141995): "numero" do lote vem do jeito que aparece
+// NO EDITAL (ver prompt em analise_edital.py -- pode ser "1", "Lote 02",
+// "Grupo A"...) -- prefixar "Lote " incondicionalmente virava "Lote Lote 1"
+// quando a IA já mandava o rótulo completo. Só prefixa quando for um
+// número puro (o caso mais comum, ex.: "1", "2"); qualquer coisa com
+// letra (já é um rótulo por si só) entra sem mexer.
+function _rotuloLote(numero){
+  const n = String(numero||'').trim();
+  return /^\d+$/.test(n) ? `Lote ${n}` : n;
+}
 function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
   const _motivoBloq = _motivoBloqueioEdicao();
@@ -4596,7 +4606,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
       g.itens.push(it);
     });
     corpo = grupos.map(g=>`
-      <div style="margin-top:12px;font-weight:600;font-size:13px">Lote ${esc(String(g.lote.numero))}${g.lote.descricao?` — <span class="muted" style="font-weight:400">${esc(g.lote.descricao)}</span>`:''}</div>
+      <div style="margin-top:12px;font-weight:600;font-size:13px">${esc(_rotuloLote(g.lote.numero))}${g.lote.descricao?` — <span class="muted" style="font-weight:400">${esc(g.lote.descricao)}</span>`:''}</div>
       ${tabelaHTML(g.itens)}`).join('');
     if(semLote.length){
       corpo += `<div style="margin-top:12px;font-weight:600;font-size:13px">Sem lote identificado</div>${tabelaHTML(semLote)}`;
@@ -5577,7 +5587,7 @@ function _lotesCoberturaHTML(lotes){
             : 'nenhum item deste lote está confirmado no seu catálogo ainda');
     return `<li style="margin:5px 0;font-size:13px">
       <span style="color:${cor};font-weight:600">${marca}</span>
-      <strong>Lote ${esc(String(l.numero))}</strong>${l.descricao?` — ${esc(l.descricao)}`:''}
+      <strong>${esc(_rotuloLote(l.numero))}</strong>${l.descricao?` — ${esc(l.descricao)}`:''}
       <div class="muted" style="font-size:11px;margin-left:18px">${esc(status)} (itens do lote: ${esc((l.itens||[]).join(', '))})</div>
     </li>`;
   }).join('');
