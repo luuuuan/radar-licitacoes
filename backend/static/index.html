@@ -4816,6 +4816,15 @@ function voltarDoEdital(){
 function _fecharPaginaEdital(){
   $('#t-edital').classList.add('hidden');
   tab('editais');
+  // achado real (usuário reportou): mudar status (ou lido/interessante) na
+  // página do edital não refletia na lista ao voltar -- ela só é
+  // renderizada com o HTML de quando foi carregada da última vez, e tab()
+  // só troca qual aba fica visível, não busca dados de novo. Sem isso, o
+  // card continuava mostrando o status ANTERIOR à mudança até o usuário
+  // dar um F5 ou mudar algum filtro (o que dispara loadEditais() de novo).
+  // resetPagina=false: mantém a página em que o usuário já estava, só
+  // atualiza o conteúdo dela.
+  loadEditais(false);
 }
 // Sub-aba lembrada (ver abaEdital()) só reaproveitada quando é do MESMO
 // edital -- o valor salvo é {id, aba}, não só o nome, porque tanto o F5
