@@ -147,16 +147,19 @@ class Settings(BaseSettings):
     # antes deste) funcionava, mas só tem 8000 tokens/min no plano
     # gratuito -- um edital grande sozinho já esgotava isso, e feria a
     # comparação de catálogo em lotes rodando em sequência. groq/compound-
-    # mini tem 70000 tokens/min (confirmado ao vivo via header
-    # x-ratelimit-limit-tokens, ~8.75x mais) -- é um sistema "agentic" (pode
-    # chamar busca na web/execução de código sozinho), mas em teste real
-    # (prompt de ~15000 chars, response_format json_object) devolveu JSON
-    # limpo sem acionar nenhuma ferramenta, mesmo contexto (131072 tokens)
-    # do gpt-oss-120b. Se um dia parar de funcionar (model_not_found ou
-    # comportamento estranho, tipo tool call inesperada), conferir direto
-    # no console.groq.com (Playground) -- a doc pública nem sempre reflete
-    # o acesso da conta.
-    GROQ_MODELO_TEXTO: str = "groq/compound-mini"
+    # mini tinha 70000 tokens/min (confirmado ao vivo via header
+    # x-ratelimit-limit-tokens, ~8.75x mais) -- só que a Groq DESCONTINUOU
+    # o compound-mini em 21/09/2026 (anunciado em 24/08/2026, ver
+    # console.groq.com/docs/deprecations) -- achado real, usuário reportou
+    # HTTP 404 "model_not_found" no dia seguinte ao desligamento (edital
+    # 135627). Voltou pro openai/gpt-oss-120b (o teto de 8000 tokens/min
+    # continua valendo -- ver _GROQ_LIMITE_PROMPT_BYTES/_GROQ_MAX_TOKENS_
+    # RESPOSTA em analise_edital.py, reduzidos junto desta troca). Se um
+    # dia parar de funcionar (model_not_found ou comportamento estranho),
+    # conferir direto no console.groq.com (Playground/Docs > Deprecations)
+    # -- a doc pública nem sempre reflete o acesso da conta, e a Groq às
+    # vezes desliga modelo com pouco aviso.
+    GROQ_MODELO_TEXTO: str = "openai/gpt-oss-120b"
 
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador

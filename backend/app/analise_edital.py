@@ -941,8 +941,29 @@ def _chamar_modelo(modelo: str, body: dict, chave: str, timeout: int, tentativas
 # tokens/minuto (entrada + saída contam juntas) -- achado real: o valor
 # antigo (3000) podia cortar a resposta em editais com muita exigência de
 # habilitação, bem menor que o maxOutputTokens usado pro Gemini (16384).
-_GROQ_LIMITE_PROMPT_BYTES = 90_000
-_GROQ_MAX_TOKENS_RESPOSTA = 6000
+#
+# 3º achado real (usuário reportou, edital 135627, 2026-09-22): groq/
+# compound-mini parou de existir -- a Groq anunciou a descontinuação em
+# 24/08/2026 e desligou de vez em 21/09/2026 (console.groq.com/docs/
+# deprecations); toda chamada passou a devolver HTTP 404 "model_not_found".
+# Voltou pro openai/gpt-oss-120b (settings.GROQ_MODELO_TEXTO em config.py)
+# -- e com ele volta também o teto de 8000 tokens/minuto POR REQUISIÇÃO que
+# motivou a troca pro compound-mini em primeiro lugar (1º achado acima).
+# Sem reduzir o orçamento junto, o mesmo 413 "TPM: Limit 8000" do 1º achado
+# ia se repetir na hora, com o cap de bytes antigo (dimensionado pros 70000
+# tokens/min do compound-mini, não pros 8000 do gpt-oss-120b). Preferido
+# reduzir o orçamento AGORA (mesmo sem um jeito preciso de converter bytes
+# UTF-8 em tokens -- só uma estimativa conservadora, ~4-5 bytes/token em
+# português) a esperar o próximo 413/429 pra descobrir nesse tamanho -- o
+# 1º achado já provou, com número real, que esse modelo especificamente
+# não aguenta o teto antigo. Groq continua sendo só o ÚLTIMO recurso da
+# cadeia (depois dos 2 modelos Gemini falharem) -- um fallback mais restrito
+# ainda é melhor que um que sempre falha com 404.
+_GROQ_LIMITE_PROMPT_BYTES = 20_000
+# reduzido de 6000 (era dimensionado pro orçamento do compound-mini) --
+# ver comentário grande acima sobre a volta pro gpt-oss-120b e o teto de
+# 8000 tokens/min por requisição (prompt + resposta somados).
+_GROQ_MAX_TOKENS_RESPOSTA = 2500
 
 
 def _truncar_utf8(texto: str, max_bytes: int) -> str:
