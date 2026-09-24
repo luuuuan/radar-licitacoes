@@ -189,7 +189,7 @@ def test_rota_reusa_texto_cacheado_sem_buscar_lista_de_arquivos(monkeypatch):
 
     recebido = {}
 
-    def _analisar_fake(objeto, arquivos, api_key=None, texto_pronto=None):
+    def _analisar_fake(objeto, arquivos, api_key=None, texto_pronto=None, **kw):
         recebido["arquivos"] = arquivos
         recebido["texto_pronto"] = texto_pronto
         return {"status": "ok", "versao": ia_module.VERSAO_PROMPT, "objeto": objeto,
@@ -215,7 +215,7 @@ def test_rota_forcar_ignora_texto_cacheado_e_busca_de_novo(monkeypatch):
 
     recebido = {}
 
-    def _analisar_fake(objeto, arquivos, api_key=None, texto_pronto=None):
+    def _analisar_fake(objeto, arquivos, api_key=None, texto_pronto=None, **kw):
         recebido["arquivos"] = arquivos
         recebido["texto_pronto"] = texto_pronto
         return {"status": "ok", "versao": ia_module.VERSAO_PROMPT, "objeto": objeto,

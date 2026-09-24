@@ -62,7 +62,7 @@ def test_duas_requisicoes_concorrentes_pro_mesmo_edital_chamam_a_ia_uma_vez_so(m
 
     chamadas = []
 
-    def _analisar_fake(objeto, arquivos, api_key=None):
+    def _analisar_fake(objeto, arquivos, api_key=None, **kw):
         chamadas.append(1)
         time.sleep(0.3)   # dá tempo da 2ª requisição bater na trava enquanto a 1ª "processa"
         return {"status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",

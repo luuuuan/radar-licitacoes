@@ -19,7 +19,7 @@ def _resposta_gemini(dados: dict):
     return r
 
 
-def _analisar_com_resposta(dados: dict):
+def _analisar_com_resposta(dados: dict, total_itens=None):
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
 
     def _fake_baixar(url, max_chars=24000, **kw):
@@ -27,7 +27,7 @@ def _analisar_com_resposta(dados: dict):
 
     with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
          patch("app.analise_edital.requests.post", return_value=_resposta_gemini(dados)):
-        return ia.analisar("Objeto de teste", arquivos, api_key="fake-key")
+        return ia.analisar("Objeto de teste", arquivos, api_key="fake-key", total_itens=total_itens)
 
 
 def test_analisar_normaliza_lotes_com_itens_inteiros():
@@ -160,6 +160,70 @@ def test_analisar_lotes_com_itens_realmente_exclusivos_nao_e_descartado():
         {"numero": "1", "itens": [1, 2, 3], "descricao": "Papelaria"},
         {"numero": "2", "itens": [4, 5], "descricao": "Material de limpeza"},
     ]
+
+
+# --------- cobertura dos lotes x Nº real de itens do edital --------- #
+# Achado real (edital 143879, PNCP 83891283000136/2026/1054, 223 itens):
+# o Termo de Referência sozinho já tinha ~98000 caracteres, estourando
+# MAX_TOTAL (80000) -- o texto que chegou até a IA já vinha cortado ANTES
+# dela ver, então "analise_incompleta" saiu false (pra ela, o texto só
+# "acabava" num ponto que parecia normal) mesmo os lotes só cobrindo os
+# itens 1-141 de 223. Comparar a cobertura real contra o total de itens
+# (dado estruturado do PNCP, não depende de IA) pega esse caso que o
+# autorrelato do modelo não pega.
+
+def test_analisar_cobertura_de_lotes_menor_que_total_marca_incompleta():
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "analise_incompleta": False,   # a própria IA não percebeu o corte
+        "lotes": [
+            {"numero": "1", "itens": list(range(1, 51)), "descricao": "Lote grande 1"},
+            {"numero": "2", "itens": list(range(51, 100)), "descricao": "Lote grande 2"},
+        ],
+    }, total_itens=223)
+    assert resultado["analise_incompleta"] is True
+    assert any("incompleta" in p.lower() for p in resultado["pontos_atencao"])
+
+
+def test_analisar_cobertura_completa_dos_lotes_nao_marca_incompleta():
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "lotes": [
+            {"numero": "1", "itens": [1, 2, 3], "descricao": "Papelaria"},
+            {"numero": "2", "itens": [4, 5], "descricao": "Material de limpeza"},
+        ],
+    }, total_itens=5)
+    assert resultado["analise_incompleta"] is False
+
+
+def test_analisar_pequena_folga_de_cobertura_nao_marca_incompleta():
+    """2 itens de folga (ex.: um item fora da numeração normal) não conta
+    como truncamento de verdade -- só uma lacuna GRANDE conta."""
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "lotes": [
+            {"numero": "1", "itens": [1, 2, 3], "descricao": "Papelaria"},
+        ],
+    }, total_itens=5)   # cobre 3 de 5 -- 2 de folga, dentro da tolerância
+    assert resultado["analise_incompleta"] is False
+
+
+def test_analisar_sem_total_itens_nao_faz_a_checagem():
+    """total_itens=None (chamador não passou, ou dado indisponível) --
+    comportamento de antes, sem essa checagem nova."""
+    resultado = _analisar_com_resposta({
+        "julgamento": "lote",
+        "lotes": [{"numero": "1", "itens": [1, 2], "descricao": "Papelaria"}],
+    }, total_itens=None)
+    assert resultado["analise_incompleta"] is False
+
+
+def test_analisar_sem_lotes_nao_faz_a_checagem_de_cobertura():
+    """julgamento "item" (sem lotes) não tem esse sinal disponível -- não
+    pode marcar incompleta por um motivo que não dá pra medir aqui."""
+    resultado = _analisar_com_resposta({"julgamento": "item"}, total_itens=223)
+    assert resultado["lotes"] == []
+    assert resultado["analise_incompleta"] is False
 
 
 def test_analisar_usa_max_output_tokens_maior_que_o_padrao(monkeypatch):

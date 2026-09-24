@@ -104,7 +104,7 @@ def test_arquivo_encontrado_chama_a_ia_normalmente(monkeypatch):
         "portal": None})
     chamadas = []
 
-    def _analisar_fake(objeto, arquivos, api_key=None):
+    def _analisar_fake(objeto, arquivos, api_key=None, **kw):
         chamadas.append(arquivos)
         return {"status": "ok", "versao": ia_module.VERSAO_PROMPT, "objeto": objeto,
                 "requisitos_tecnicos": [], "documentos_habilitacao": []}

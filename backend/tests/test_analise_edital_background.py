@@ -64,7 +64,7 @@ def test_iniciar_dispara_e_status_reflete_conclusao(monkeypatch, tmp_path):
     u, ed = _usuario_e_edital(db)
 
     monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
-    monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None: {
+    monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None, **kw: {
         "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
         "objeto": objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})
     # id_externo "sem-ref-valida" não parseia em (cnpj, ano, seq) -> sem
@@ -153,7 +153,7 @@ def test_status_e_isolado_por_usuario_nao_vaza_catalogo_entre_contas(monkeypatch
     monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
     monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
                         lambda ed_: {"status": "vazio", "arquivos": [], "portal": None})
-    monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None: {
+    monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None, **kw: {
         "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
         "objeto": objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})
 

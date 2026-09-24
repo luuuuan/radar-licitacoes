@@ -3495,9 +3495,11 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             # texto já extraído numa análise anterior (_texto_pronto_cache)
             # -- pula a busca de arquivos no PNCP inteiramente, ela só serve
             # pra achar o PDF de onde extrair o texto.
+            total_itens_edital = len(ed.itens)
             texto_pronto = _texto_pronto_cache(ed, forcar)
             if texto_pronto is not None:
-                resultado = ia.analisar(ed.objeto or "", [], api_key=chave, texto_pronto=texto_pronto)
+                resultado = ia.analisar(ed.objeto or "", [], api_key=chave, texto_pronto=texto_pronto,
+                                        total_itens=total_itens_edital)
             else:
                 # cacheado em Edital.arquivos_pncp (_arquivos_pncp_cache) --
                 # só busca de novo no PNCP quando forcar=True (usuário
@@ -3518,7 +3520,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
                 if docs["status"] not in ("ok", "vazio"):
                     resultado = {"status": "erro_arquivos_pncp", "detalhe": docs["status"]}
                 else:
-                    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave)
+                    resultado = ia.analisar(ed.objeto or "", docs.get("arquivos") or [], api_key=chave,
+                                            total_itens=total_itens_edital)
             texto_extraido = resultado.pop("_texto_extraido", None)
             fonte_extraida = resultado.pop("_fonte_extraida", None)
             if texto_extraido is not None:

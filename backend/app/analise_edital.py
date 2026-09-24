@@ -41,7 +41,14 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # v13 = achado real (edital 141995): prompt de "lotes" reforçado contra
 # numeração reiniciada por lote + validação descarta a lista inteira
 # quando um item aparece em mais de um lote (ver função lotes() abaixo).
-VERSAO_PROMPT = 13
+# v14 = achado real (edital 143879): "analise_incompleta" agora também é
+# calculado comparando a cobertura real dos lotes contra o Nº de itens
+# verdadeiro do edital (total_itens, dado do PNCP), não só o autorrelato
+# da IA -- sem o bump, quem já tinha uma análise em cache com essa mesma
+# falha (texto truncado sem a IA perceber) continuaria vendo
+# "analise_incompleta: false" pra sempre, até clicar "Realizar nova
+# análise" manualmente.
+VERSAO_PROMPT = 14
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1246,7 +1253,7 @@ _MAX_TOTAL_SEGURO_413 = 40000
 
 
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
-            texto_pronto: dict | None = None) -> dict:
+            texto_pronto: dict | None = None, total_itens: int | None = None) -> dict:
     """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
     api_key: chave Gemini do próprio usuário (obrigatória, cai para a global).
 
@@ -1257,7 +1264,20 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
     não na busca) baixava o PDF de novo à toa. Quando None (padrão), extrai
     normalmente e devolve o texto usado em resultado["_texto_extraido"]/
     ["_fonte_extraida"] -- só quando a EXTRAÇÃO deu certo, mesmo que a
-    chamada de IA em si falhe depois -- pra quem chama poder cachear."""
+    chamada de IA em si falhe depois -- pra quem chama poder cachear.
+
+    total_itens: opcional, Nº real de itens do edital (ItemEdital, dado
+    estruturado do PNCP -- independe de quanto texto a IA conseguiu ler).
+    Achado real (edital 143879, 223 itens, Termo de Referência de ~98000
+    caracteres sozinho já estourando MAX_TOTAL=80000): a análise voltou
+    "analise_incompleta": false, mas os "lotes" só cobriam os itens 1-141
+    -- a IA não sinalizou o corte porque o texto que ELA recebeu já tinha
+    sido truncado ANTES de chegar até ela (ver MAX_TOTAL logo abaixo); pra
+    ela, o texto simplesmente "acabava" num ponto que parecia normal, sem
+    nada de óbvio indicando que faltava mais. Autorrelato de truncamento
+    não é confiável pra esse caso -- comparar a cobertura real dos lotes
+    contra o Nº de itens que a gente JÁ SABE que o edital tem (não depende
+    de IA nenhuma) é."""
     if not ia_texto_disponivel(api_key):
         return {"status": "sem_ia"}
 
@@ -1527,6 +1547,28 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
             "garantia_produto": s(x.get("garantia_produto")),
         }
 
+    lotes_normalizados = lotes(data.get("lotes"))
+    incompleta = b(data.get("analise_incompleta"))
+    # cobertura real dos lotes x Nº de itens que o edital de fato tem (ver
+    # docstring de `total_itens` acima) -- só aplica quando há lotes pra
+    # medir (julgamento "item" não tem esse sinal disponível) e o dado
+    # estruturado do PNCP está disponível.
+    if lotes_normalizados and total_itens:
+        itens_cobertos = {n for l in lotes_normalizados for n in l["itens"]}
+        # folga pequena (2 itens): alguns editais têm item(ns) fora da
+        # numeração normal (ex.: um "item 0"/anexo administrativo) sem que
+        # isso signifique truncamento de verdade.
+        if len(itens_cobertos) < total_itens - 2:
+            incompleta = True
+    pontos_atencao = lista(data.get("pontos_atencao"))
+    if incompleta and not b(data.get("analise_incompleta")):
+        # achado real (edital 143879): quando é ESTA checagem (não a IA)
+        # que detecta o corte, a IA nunca escreveu o aviso que o prompt
+        # pede pra esse caso (ver linha 125 do _PROMPT) -- sem isso,
+        # "pontos_atencao" ficava sem nenhum sinal do problema, mesmo com
+        # "analise_incompleta" virando true.
+        pontos_atencao = pontos_atencao + [
+            "Esta análise pode estar incompleta: nem todos os itens do edital foram cobertos pelos lotes identificados."]
     return {
         "status": "ok",
         "versao": VERSAO_PROMPT,
@@ -1542,10 +1584,10 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         "exige_visita": b(data.get("exige_visita")),
         "exclusivo_me_epp": b(data.get("exclusivo_me_epp")),
         "julgamento": s(data.get("julgamento")),
-        "lotes": lotes(data.get("lotes")),
+        "lotes": lotes_normalizados,
         "garantia_contratual": s(data.get("garantia_contratual")),
-        "analise_incompleta": b(data.get("analise_incompleta")),
-        "pontos_atencao": lista(data.get("pontos_atencao")),
+        "analise_incompleta": incompleta,
+        "pontos_atencao": pontos_atencao,
         "_texto_extraido": texto,
         "_fonte_extraida": fonte,
     }
