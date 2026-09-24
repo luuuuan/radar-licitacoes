@@ -4713,16 +4713,17 @@ function confirmarCandidatoIA(numero, produtoId){
 // um erro passageiro do lado do Google (ex.: 503 "sobrecarregado") aparecia
 // pro usuário como se fosse limite diário do plano gratuito, o que confunde.
 function _msgErroIA(detalhe){
-  // prefixo "groq_": o erro final veio da Groq (último recurso da cadeia
-  // Gemini->Gemini fallback->Groq, ver _gerar em analise_edital.py), não
-  // da chave/cota pessoal do Gemini do usuário -- achado real: usuário via
-  // um 503 do Gemini no log do Railway mas a tela dizia "plano gratuito"
-  // (dá a entender cota PESSOAL), quando quem de fato encerrou a cadeia
-  // foi um 429 da Groq (cota do operador, compartilhada entre usuários).
-  const daGroq = !!detalhe && detalhe.indexOf('groq_')===0;
-  const base = daGroq ? detalhe.slice(5) : detalhe;
+  // prefixo "groq_"/"mistral_": o erro final veio de um provedor de
+  // FALLBACK (cadeia Gemini->Gemini fallback->Mistral->Groq, ver _gerar
+  // em analise_edital.py), não da chave/cota pessoal do Gemini do usuário
+  // -- achado real: usuário via um 503 do Gemini no log do Railway mas a
+  // tela dizia "plano gratuito" (dá a entender cota PESSOAL), quando quem
+  // de fato encerrou a cadeia foi um 429 da Groq (cota do operador,
+  // compartilhada entre usuários) -- mesmo raciocínio vale pra Mistral.
+  const daFallback = !!detalhe && (detalhe.indexOf('groq_')===0 || detalhe.indexOf('mistral_')===0);
+  const base = daFallback ? detalhe.slice(detalhe.indexOf('_')+1) : detalhe;
   if(base==='http_429'){
-    return daGroq
+    return daFallback
       ? 'A IA está com alta demanda geral no momento. Tente novamente em alguns minutos.'
       : 'Limite de uso da IA atingido por agora (plano gratuito). Tente novamente mais tarde.';
   }

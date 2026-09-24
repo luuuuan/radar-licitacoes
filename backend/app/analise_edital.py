@@ -1014,6 +1014,41 @@ def _chamar_groq(prompt: str, timeout: int, tentativas: int):
         rotulo="Groq texto", ensure_ascii=False)
 
 
+_MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
+# folga bem maior que a do Groq (_GROQ_MAX_TOKENS_RESPOSTA) -- o orçamento
+# de tokens/min da Mistral pra este modelo é ~78x o do Groq (ver achado
+# real em settings.MISTRAL_MODELO_TEXTO), sobra espaço de sobra sem
+# precisar cortar o texto do edital como precisa fazer pro Groq.
+_MISTRAL_MAX_TOKENS_RESPOSTA = 8000
+
+
+def _chamar_mistral(prompt: str, timeout: int, tentativas: int):
+    """2º provedor diferente do Gemini na cadeia (settings.MISTRAL_API_KEY,
+    chave global do operador), tentado ANTES do Groq -- ver achado real em
+    settings.MISTRAL_MODELO_TEXTO sobre por que esse modelo específico e
+    por que o orçamento de tokens é tão mais folgado que o do Groq. API
+    compatível com formato OpenAI, mesmo padrão de _chamar_groq -- sem
+    response_schema aqui também: "response_format: json_object" garante
+    JSON válido, a estrutura em si continua vindo da prosa do _PROMPT
+    (Mistral tem um mecanismo de JSON Schema próprio, mas exigiria
+    converter o dialeto do Gemini -- "OBJECT"/"STRING" maiúsculo -- pro
+    JSON Schema padrão; não vale o risco pra um fallback de fallback)."""
+    if not settings.MISTRAL_API_KEY:
+        return None, "sem_chave_mistral"
+    body = {
+        "model": settings.MISTRAL_MODELO_TEXTO,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": _MISTRAL_MAX_TOKENS_RESPOSTA,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {settings.MISTRAL_API_KEY}", "Content-Type": "application/json"}
+    return _post_com_retry(
+        _MISTRAL_URL, headers, body, timeout, tentativas,
+        extrair_texto=lambda d: d["choices"][0]["message"]["content"],
+        rotulo="Mistral texto", ensure_ascii=False)
+
+
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
           response_schema: dict | None = None, max_output_tokens: int = 16384):
     """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
@@ -1021,27 +1056,36 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     retentativas -- ao falhar por completo num modelo com um erro que
     parece sobrecarga/limite/modelo indisponível (5xx, 429, 404 ou rede),
     tenta o próximo antes de desistir de vez: 1º IA_MODELO_TEXTO_FALLBACK
-    (mesma chave do usuário, ainda Gemini), depois, se ainda assim falhar,
-    Groq (settings.GROQ_API_KEY, provedor diferente -- protege contra uma
-    instabilidade do Google inteiro, não só de 1 modelo). 429 troca de
-    modelo/provedor (pedido do usuário: mesmo cota costumando ser por
-    projeto — não necessariamente por modelo dentro do mesmo projeto —, e
-    Groq é um provedor à parte com cota totalmente independente da do
-    Gemini) mas NÃO retenta 429 dentro do MESMO modelo (isso continua sem
-    efeito — ver _post_com_retry). 404 também troca -- achado real: o
-    Gemini desativa modelo antigo pra contas novas sem cumprir a data de
-    desligamento anunciada (gemini-2.5-flash sumiu antes do previsto); sem
-    tratar 404 como "tenta o próximo", um modelo desatualizado em
-    IA_MODELO_TEXTO_FALLBACK travava a cadeia ali mesmo, sem nunca chegar
-    no Groq. Outros 4xx (400 etc.) não trocam de modelo/provedor: não é
+    (mesma chave do usuário, ainda Gemini), depois Mistral
+    (settings.MISTRAL_API_KEY), depois, se ainda assim falhar, Groq
+    (settings.GROQ_API_KEY) -- Mistral e Groq são provedores DIFERENTES do
+    Gemini (protege contra uma instabilidade do Google inteiro, não só de
+    1 modelo), tentados nessa ordem porque a Mistral tem muito mais
+    orçamento de tokens/minuto no tier gratuito desta conta (ver achado
+    real em settings.MISTRAL_MODELO_TEXTO) -- Groq fica como o ÚLTIMO
+    recurso de todos. 429 troca de modelo/provedor (pedido do usuário:
+    mesmo cota costumando ser por projeto — não necessariamente por
+    modelo dentro do mesmo projeto —, e cada provedor de fallback tem cota
+    totalmente independente da do Gemini) mas NÃO retenta 429 dentro do
+    MESMO modelo (isso continua sem efeito — ver _post_com_retry). 404
+    também troca -- achado real: o Gemini desativa modelo antigo pra
+    contas novas sem cumprir a data de desligamento anunciada
+    (gemini-2.5-flash sumiu antes do previsto); sem tratar 404 como "tenta
+    o próximo", um modelo desatualizado em IA_MODELO_TEXTO_FALLBACK
+    travava a cadeia ali mesmo, sem nunca chegar nos outros provedores.
+    Outros 4xx (400 etc.) do Gemini não trocam de modelo/provedor: não é
     erro de limite/disponibilidade, retentar (mesmo modelo diferente) não
-    costuma ajudar.
+    costuma ajudar -- mas uma vez que a cadeia SAI do Gemini, qualquer
+    falha da Mistral (mesmo não-transiente) ainda tenta o Groq depois:
+    são provedores sem relação nenhuma entre si, um erro específico de um
+    não prediz nada sobre o outro.
 
     response_schema: opcional, Schema (formato Gemini) pra forçar tipos/
     chaves obrigatórias/enums no decoder — em vez de só pedir por prosa
     ("nunca troque lista por false"). Usado hoje só por analisar(); os
     demais chamadores continuam sem schema (JSON livre). Só vale pros
-    modelos Gemini -- o Groq não usa esse mecanismo (ver _chamar_groq)."""
+    modelos Gemini -- nem Mistral nem Groq usam esse mecanismo aqui (ver
+    _chamar_mistral/_chamar_groq)."""
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
@@ -1090,9 +1134,27 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
             return None, ultimo_erro
 
     # os 2 modelos Gemini esgotaram com erro de sobrecarga/limite/modelo
-    # indisponível/rede -- última tentativa, provedor diferente (sem custo
-    # se GROQ_API_KEY não estiver configurada: _chamar_groq devolve
-    # "sem_chave_groq" sem chamar rede).
+    # indisponível/rede -- tenta Mistral antes do Groq (mais orçamento de
+    # tokens/minuto, ver docstring desta função). Sem custo se
+    # MISTRAL_API_KEY não estiver configurada: _chamar_mistral devolve
+    # "sem_chave_mistral" sem chamar rede.
+    if eh_transiente:
+        txt, erro = _chamar_mistral(prompt, timeout, tentativas)
+        if txt is not None:
+            return txt, erro
+        if erro != "sem_chave_mistral":
+            # prefixo "mistral_": mesmo raciocínio do "groq_" logo abaixo
+            # -- sem isso o front não tem como saber que esse erro veio de
+            # um provedor de fallback (cota do operador), não da chave
+            # Gemini pessoal do usuário.
+            ultimo_erro = f"mistral_{erro}"
+
+    # Mistral falhou (ou nem estava configurada) -- última tentativa,
+    # outro provedor diferente ainda (sem custo se GROQ_API_KEY não
+    # estiver configurada: _chamar_groq devolve "sem_chave_groq" sem
+    # chamar rede). Tenta mesmo se o erro da Mistral não parecia
+    # transiente -- são provedores sem relação nenhuma entre si, uma
+    # falha específica de um não prediz nada sobre o outro.
     if eh_transiente:
         txt, erro = _chamar_groq(prompt, timeout, tentativas)
         if txt is not None:

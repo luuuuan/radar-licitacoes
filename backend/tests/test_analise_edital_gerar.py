@@ -323,6 +323,176 @@ def test_gerar_tenta_groq_quando_os_2_modelos_gemini_dao_404(monkeypatch):
     assert mock_post.call_count == 2   # 1 no Gemini (404, sem retentar) + 1 na Groq
 
 
+# --------- Mistral: 2º provedor de fallback, tentado ANTES do Groq --------- #
+# (ver achado real em settings.MISTRAL_MODELO_TEXTO sobre por que essa
+# ordem e por que esse modelo específico).
+
+def test_gerar_cai_pra_mistral_quando_os_2_modelos_gemini_esgotam(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "modelo-fallback")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    urls_chamadas = []
+
+    def _post(url, headers=None, **kw):
+        urls_chamadas.append(url)
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        assert headers["Authorization"] == "Bearer mistral-fake-key"
+        return _resposta_groq_ok('{"veio_da_mistral": true}')
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_da_mistral": true}'
+    assert sum("generativelanguage" in u for u in urls_chamadas) == 4
+    assert sum(u == "https://api.mistral.ai/v1/chat/completions" for u in urls_chamadas) == 1
+
+
+def test_gerar_sem_mistral_key_pula_direto_pro_groq(monkeypatch):
+    """Sem MISTRAL_API_KEY configurada, _chamar_mistral devolve
+    "sem_chave_mistral" sem chamar rede -- a cadeia pula direto pro Groq,
+    mesmo comportamento que já existia pra "sem_chave_groq"."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    urls_chamadas = []
+
+    def _post(url, **kw):
+        urls_chamadas.append(url)
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_groq": true}'
+    assert "https://api.mistral.ai/v1/chat/completions" not in urls_chamadas
+    assert urls_chamadas.count("https://api.groq.com/openai/v1/chat/completions") == 1
+
+
+def test_gerar_mistral_dando_certo_nunca_chama_groq(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+    urls_chamadas = []
+
+    def _post(url, **kw):
+        urls_chamadas.append(url)
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        if "mistral" in url:
+            return _resposta_groq_ok('{"veio_da_mistral": true}')
+        raise AssertionError("não devia ter batido na Groq -- Mistral já resolveu")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert txt == '{"veio_da_mistral": true}'
+    assert "https://api.groq.com/openai/v1/chat/completions" not in urls_chamadas
+
+
+def test_gerar_mistral_falha_ainda_tenta_groq_mesmo_com_erro_nao_transiente(monkeypatch):
+    """Achado do desenho da cadeia: Mistral e Groq são provedores SEM
+    relação nenhuma entre si -- mesmo uma falha da Mistral que não parece
+    "transiente" (aqui, um 400 qualquer) não deve impedir de tentar o
+    Groq depois. Diferente da regra entre os 2 modelos GEMINI (onde um 4xx
+    que não é 429/404 interrompe a cadeia ali mesmo, ver
+    test_gerar_nao_tenta_groq_em_outro_4xx_que_nao_429)."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        if "mistral" in url:
+            return MagicMock(status_code=400, text="bad request da mistral")
+        return _resposta_groq_ok()
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert status == "ok"
+    assert txt == '{"veio_do_groq": true}'
+
+
+def test_gerar_mistral_e_groq_falham_prefixo_groq_vence_por_ser_o_ultimo(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        if "mistral" in url:
+            return MagicMock(status_code=503, text="mistral fora do ar")
+        return MagicMock(status_code=429, text="groq rate limit")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert txt is None
+    assert status == "groq_http_429"   # Groq é sempre o último a falar, mesmo com Mistral no meio
+
+
+def test_gerar_mistral_falha_e_groq_sem_chave_mantem_prefixo_mistral(monkeypatch):
+    """Espelha test_gerar_sem_groq_key_nao_chama_a_api_da_groq -- "sem
+    chave" nunca deve SOBRESCREVER o erro real do estágio anterior."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        return MagicMock(status_code=500, text="mistral fora do ar")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post) as mock_post:
+        txt, status = _gerar("prompt", api_key="fake-key")
+
+    assert txt is None
+    assert status == "mistral_http_500"
+    assert "https://api.groq.com/openai/v1/chat/completions" not in [
+        c.args[0] if c.args else c.kwargs.get("url") for c in mock_post.call_args_list]
+
+
+def test_chamar_mistral_sem_chave_nao_chama_rede(monkeypatch):
+    from app.analise_edital import _chamar_mistral
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "")
+    with patch("app.analise_edital.requests.post") as mock_post:
+        txt, status = _chamar_mistral("prompt", timeout=10, tentativas=2)
+    assert txt is None
+    assert status == "sem_chave_mistral"
+    mock_post.assert_not_called()
+
+
+def test_chamar_mistral_manda_max_tokens_e_response_format_json():
+    from app.analise_edital import _chamar_mistral, _MISTRAL_MAX_TOKENS_RESPOSTA
+    with patch("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key"), \
+         patch("app.analise_edital.requests.post", return_value=_resposta_groq_ok()) as mock_post:
+        _chamar_mistral("prompt de teste", timeout=10, tentativas=1)
+    corpo = mock_post.call_args.kwargs.get("data") or mock_post.call_args.kwargs.get("json")
+    if isinstance(corpo, (bytes, bytearray)):
+        corpo = json.loads(corpo.decode("utf-8"))
+    assert corpo["max_tokens"] == _MISTRAL_MAX_TOKENS_RESPOSTA
+    assert corpo["response_format"] == {"type": "json_object"}
+    assert corpo["model"] == "ministral-8b-latest"
+
+
 # --------- prompt grande demais estoura o corpo da requisição na Groq -- #
 # achado real #1: HTTP 413 num edital de 350 itens, "Limit 8000, Requested
 # 11382" -- tier gratuito da Groq, 8000 tokens/minuto POR REQUISIÇÃO,

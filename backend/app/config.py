@@ -161,6 +161,39 @@ class Settings(BaseSettings):
     # vezes desliga modelo com pouco aviso.
     GROQ_MODELO_TEXTO: str = "openai/gpt-oss-120b"
 
+    # Mistral (settings.MISTRAL_API_KEY) — 2º provedor diferente do Gemini
+    # na cadeia de fallback de analisar() (ver _gerar em analise_edital.py),
+    # tentado ANTES do Groq: mesmo espírito (chave GLOBAL do operador,
+    # tier gratuito, API compatível com OpenAI), mas com MUITO mais
+    # orçamento por minuto. Achado real, testado ao vivo em 24/09/2026
+    # direto contra a conta (não só a doc pública, que às vezes nem bate
+    # com o que a conta realmente tem acesso -- ver painel em
+    # admin.mistral.ai/plateforme/limits):
+    # - mistral-small-latest/mistral-medium-latest: HTTP 429 "Rate limit
+    #   exceeded" mesmo numa chamada isolada -- cota efetiva zero nesta
+    #   conta, apesar de aparecerem na doc geral da Mistral.
+    # - zai-glm-5-2/zai-glm-5-3/glm-5-2 (aparecem no painel de limites,
+    #   20000 tokens/min): HTTP 403 "not available in your subscription
+    #   tier" -- o painel de limites lista o teto do MODELO, não confirma
+    #   que a conta Experiment (grátis) tem acesso a ele.
+    # - codestral-2508: funciona (200), 625000 tokens/min -- mas é modelo
+    #   de CÓDIGO, risco real de não seguir bem instrução longa em
+    #   português sobre habilitação/prazo/lote (nunca foi feito pra isso).
+    # - ministral-8b-latest: funciona (200), MESMO orçamento gigante do
+    #   codestral (625000 tokens/min, 188 req/min, confirmado via header
+    #   x-ratelimit-limit-tokens-minute) mas é modelo de PROPÓSITO GERAL
+    #   (instruct), não de código -- escolhido por isso, mesmo não
+    #   aparecendo no painel de limites (o painel não é uma lista
+    #   exaustiva do que a conta pode chamar). response_format tanto
+    #   json_object quanto json_schema testados e funcionando (JSON limpo,
+    #   sem cercas de markdown) -- mas _chamar_mistral usa só json_object,
+    #   mesmo raciocínio de _chamar_groq (json_schema exigiria converter o
+    #   dialeto de schema do Gemini, formato "OBJECT"/"STRING" maiúsculo,
+    #   pro JSON Schema padrão -- não vale o risco pra um caminho que já é
+    #   fallback de fallback).
+    MISTRAL_API_KEY: str = ""
+    MISTRAL_MODELO_TEXTO: str = "ministral-8b-latest"
+
     # IA extra (DeepInfra) — opcional. Ao contrário da chave Gemini (chave
     # do PRÓPRIO usuário, BYOK), esta é uma chave GLOBAL paga pelo operador
     # do app — vale pra todos os usuários, mesmo quem não configurou uma
