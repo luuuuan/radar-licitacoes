@@ -9,7 +9,7 @@ cd backend && pytest
 """
 import asyncio
 import io
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -309,6 +309,31 @@ def test_listar_documentos_sem_validade_nao_quebra_e_retorna_none():
     docs = listar_documentos(user=u, db=db)
     assert docs[0]["data_validade"] is None
     assert docs[0]["dias_para_vencer"] is None
+
+
+def test_dias_para_vencer_usa_fuso_de_brasilia_nao_date_today(monkeypatch):
+    """Achado real (agentes error-detective/code-reviewer, auditoria de
+    notificações pedida pelo usuário): produção roda em UTC sem TZ
+    configurado -- date.today() adiantava "hoje" em 3h todo dia entre 21h e
+    meia-noite de Brasília, fazendo um documento ainda válido até o fim do
+    dia (BRT) aparecer com dias_para_vencer negativo ("vencido há 1
+    dia(s)") mais cedo do que deveria."""
+    from app import main as app_main
+
+    class _DateTimeFalsaNoite(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2027, 1, 15, 23, 30)   # 23h30 em Brasília
+
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFalsaNoite)
+
+    db = _sessao()
+    u = _usuario(db)
+    _criar(db, u, data_validade=date(2027, 1, 15))   # válido até o fim de hoje (BRT)
+
+    docs = listar_documentos(user=u, db=db)
+
+    assert docs[0]["dias_para_vencer"] == 0   # "vence hoje", não -1 ("vencido")
 
 
 def test_criar_com_validade_digitada_nao_chama_ia(monkeypatch):

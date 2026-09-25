@@ -14,7 +14,8 @@ com suas próprias flags de "já visto", pra o usuário escolher o que quer
 ver em vez de receber tudo de uma vez. Ver _rodar_coleta_bg em main.py.
 """
 import logging
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
@@ -26,11 +27,26 @@ from .notifications.formato import item_edital as _item_edital
 
 log = logging.getLogger("lembretes")
 
+# achado real (agente error-detective, auditoria de notificações pedida pelo
+# usuário, mesma classe já corrigida em main.py/_query_editais_filtrada e
+# notificacoes()): produção roda em UTC sem TZ configurado no Dockerfile, e
+# Edital.data_abertura/data_encerramento/Documento.data_validade são
+# comparados contra "hoje" em hora de Brasília em todo o resto do app --
+# date.today() aqui adiantava "hoje" em 3h todo dia entre 21h e meia-noite
+# de Brasília, deslocando por 1 dia a janela de aviso das 3 funções deste
+# arquivo (abertura/prazo/documento), igual ao bug já corrigido no sino de
+# notificações in-app.
+_BR_TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def _hoje_brasilia():
+    return datetime.now(_BR_TZ).replace(tzinfo=None).date()
+
 
 def verificar_aberturas(db: Session) -> int:
     """Agrupa, por usuário, os editais de alta compatibilidade que vão abrir dentro
     da janela de dias escolhida por ele. Envia UM aviso agrupado por usuário."""
-    hoje = date.today()
+    hoje = _hoje_brasilia()
     q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
          .where(Match.abertura_avisada == False)           # noqa: E712
          .where(Match.nivel == "forte")
@@ -71,7 +87,7 @@ def verificar_aberturas(db: Session) -> int:
 def verificar_prazos(db: Session) -> int:
     """Agrupa, por usuário, os editais interessantes/compatíveis com a proposta
     encerrando em <= N dias. Envia UM aviso agrupado por usuário."""
-    hoje = date.today()
+    hoje = _hoje_brasilia()
     q = (select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
          .where(Match.prazo_avisado == False)              # noqa: E712
          .where(Edital.data_encerramento.is_not(None))
@@ -109,7 +125,7 @@ def verificar_prazos(db: Session) -> int:
 def verificar_documentos(db: Session) -> int:
     """Agrupa, por usuário, os documentos vencendo em <= N dias.
     Envia UM aviso agrupado por usuário."""
-    hoje = date.today()
+    hoje = _hoje_brasilia()
     docs = db.execute(
         select(Documento).where(Documento.ativo == True)  # noqa: E712
     ).scalars().all()

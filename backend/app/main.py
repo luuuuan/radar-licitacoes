@@ -4825,7 +4825,13 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
                       db: Session = Depends(get_session)):
     docs = db.execute(select(Documento).where(Documento.usuario_id == user.id)
                       .order_by(Documento.data_validade.asc())).scalars().all()
-    hoje = date.today()
+    # agora.date() (não date.today()): mesmo achado da auditoria de
+    # notificações (agentes error-detective/code-reviewer) -- produção roda
+    # em UTC sem TZ configurado, então date.today() adiantava "hoje" em 3h
+    # todo dia entre 21h e meia-noite de Brasília, fazendo um documento
+    # ainda válido até o fim do dia aparecer como "vencido há 1 dia(s)"
+    # (dias_para_vencer negativo um dia antes da hora).
+    hoje = datetime.now(BR_TZ).replace(tzinfo=None).date()
     return [{
         "id": d.id, "nome": d.nome, "orgao_emissor": d.orgao_emissor,
         "data_validade": d.data_validade.isoformat() if d.data_validade else None,
