@@ -77,14 +77,14 @@ def test_iniciar_dispara_e_status_reflete_conclusao(monkeypatch, tmp_path):
     r = app_main.analise_edital_iniciar(ed.id, BackgroundTasks(), forcar=False, user=u, db=db)
     assert r == {"ok": True, "em_andamento": True}
 
-    st = app_main.analise_edital_status(ed.id, user=u)
+    st = app_main.analise_edital_status(ed.id, user=u, db=db)
     assert st["rodando"] is True
 
     # simula o que bg.add_task teria disparado (sessão isolada de teste, sem
     # depender do event loop do FastAPI rodando de verdade)
     app_main._rodar_analise_bg(ed.id, u.id, False)
 
-    st = app_main.analise_edital_status(ed.id, user=u)
+    st = app_main.analise_edital_status(ed.id, user=u, db=db)
     assert st["rodando"] is False
     assert st["erro"] is None
     assert st["resultado"]["status"] == "ok"
@@ -115,7 +115,7 @@ def test_iniciar_edital_inexistente_da_404(tmp_path):
 def test_status_sem_nada_iniciado_retorna_parado(tmp_path):
     db, _ = _sessao_e_fabrica(tmp_path, "d.db")
     u, ed = _usuario_e_edital(db)
-    st = app_main.analise_edital_status(ed.id, user=u)
+    st = app_main.analise_edital_status(ed.id, user=u, db=db)
     assert st == {"rodando": False, "erro": None}
 
 
@@ -134,7 +134,7 @@ def test_bg_com_erro_fica_registrado_no_status_sem_derrubar(monkeypatch, tmp_pat
     app_main._analise_status[(u.id, ed.id)] = {"rodando": True, "erro": None}
     app_main._rodar_analise_bg(ed.id, u.id, False)   # não deve levantar
 
-    st = app_main.analise_edital_status(ed.id, user=u)
+    st = app_main.analise_edital_status(ed.id, user=u, db=db)
     assert st["rodando"] is False
     assert "falha simulada" in st["erro"]
 
@@ -160,7 +160,64 @@ def test_status_e_isolado_por_usuario_nao_vaza_catalogo_entre_contas(monkeypatch
     app_main.analise_edital_iniciar(ed.id, BackgroundTasks(), forcar=False, user=u1, db=db)
     app_main._rodar_analise_bg(ed.id, u1.id, False)
 
-    st_u1 = app_main.analise_edital_status(ed.id, user=u1)
-    st_u2 = app_main.analise_edital_status(ed.id, user=u2)
+    st_u1 = app_main.analise_edital_status(ed.id, user=u1, db=db)
+    st_u2 = app_main.analise_edital_status(ed.id, user=u2, db=db)
     assert st_u1["rodando"] is False and st_u1.get("resultado")
     assert st_u2 == {"rodando": False, "erro": None}   # u2 nunca pediu nada pra este edital
+
+
+# ---------------------------------------------------------------------------
+# Achado real (usuário reportou, edital 139008): _analise_status é um dict em
+# memória, POR PROCESSO -- se o servidor reinicia (deploy) enquanto uma
+# análise roda em segundo plano, a entrada some mesmo que a análise já tenha
+# sido salva no banco ANTES do processo cair. A central de notificações não
+# tem esse problema (lê Edital.analise_em direto do banco); esta rota, sem
+# fallback, devolvia {"rodando": False, "erro": None} sem resultado nenhum --
+# a página ficava presa no loader pra sempre (o polling do front só sai do
+# loop quando recebe um "resultado").
+# ---------------------------------------------------------------------------
+
+def test_status_sem_entrada_em_memoria_usa_cache_do_banco_se_ja_completou(monkeypatch, tmp_path):
+    db, fabrica = _sessao_e_fabrica(tmp_path, "g.db")
+    monkeypatch.setattr(app_main, "SessionLocal", fabrica)
+    u, ed = _usuario_e_edital(db)
+
+    monkeypatch.setattr(ia_module, "ia_texto_disponivel", lambda chave: True)
+    monkeypatch.setattr(app_main, "_listar_arquivos_pncp",
+                        lambda ed_: {"status": "vazio", "arquivos": [], "portal": None})
+    monkeypatch.setattr(ia_module, "analisar", lambda objeto, arquivos, api_key=None, **kw: {
+        "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
+        "objeto": objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})
+
+    app_main.analise_edital_iniciar(ed.id, BackgroundTasks(), forcar=False, user=u, db=db)
+    app_main._rodar_analise_bg(ed.id, u.id, False)   # análise termina e salva no banco
+
+    # simula o servidor reiniciando (deploy): a entrada em memória some, mas
+    # o banco continua com a análise salva
+    app_main._analise_status.clear()
+
+    # sessão NOVA (mesmo padrão de uma request HTTP de verdade, que nunca
+    # reaproveita a sessão de outra request) -- com a sessão `db` original,
+    # db.get() devolveria o objeto Edital já carregado no identity map dela
+    # (analise_ia ainda None ali), sem refletir o commit feito por
+    # _rodar_analise_bg numa sessão separada -- o teste passaria "por
+    # acidente" sem realmente exercitar o fallback.
+    db_nova = fabrica()
+
+    st = app_main.analise_edital_status(ed.id, user=u, db=db_nova)
+
+    assert st["rodando"] is False
+    assert st["erro"] is None
+    assert st["resultado"]["status"] == "ok"
+
+
+def test_status_sem_entrada_em_memoria_e_sem_analise_no_banco_continua_parado(tmp_path):
+    """O fallback só se aplica quando o banco realmente tem uma análise
+    válida -- edital nunca analisado continua devolvendo o "parado" de
+    sempre, não inventa um resultado."""
+    db, _ = _sessao_e_fabrica(tmp_path, "h.db")
+    u, ed = _usuario_e_edital(db)
+
+    st = app_main.analise_edital_status(ed.id, user=u, db=db)
+
+    assert st == {"rodando": False, "erro": None}

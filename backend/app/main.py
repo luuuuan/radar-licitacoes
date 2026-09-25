@@ -3630,8 +3630,38 @@ def analise_edital_iniciar(edital_id: int, bg: BackgroundTasks, forcar: bool = Q
 
 
 @app.get("/api/editais/{edital_id}/analise/status")
-def analise_edital_status(edital_id: int, user: Usuario = Depends(_auth.get_current_user)):
-    return _analise_status.get((user.id, edital_id), {"rodando": False, "erro": None})
+def analise_edital_status(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    chave = (user.id, edital_id)
+    st = _analise_status.get(chave)
+    if st is not None:
+        return st
+    # achado real (usuário reportou, edital 139008): _analise_status é um
+    # dict em memória, POR PROCESSO -- se o servidor reinicia (deploy)
+    # enquanto uma análise está rodando em segundo plano, a entrada some
+    # sem nunca virar "rodando: false", mesmo que a análise em si já tenha
+    # terminado e sido salva no banco ANTES do processo cair. A central de
+    # notificações não tem esse problema (lê Edital.analise_em direto do
+    # banco, não desta memória) -- por isso o sino já mostrava "análise
+    # concluída" enquanto esta rota, sem entrada nenhuma pra essa chave,
+    # devolvia o "rodando: false" genérico de sempre, SEM resultado, e a
+    # página ficava presa no loader pra sempre (o polling do front só sai
+    # do loop quando recebe um "resultado", nunca só com "rodando: false").
+    # Antes de aceitar "nunca rodou nada", confere o cache do banco -- se já
+    # tem uma análise válida pra versão atual do prompt, devolve ela como
+    # se a memória soubesse (mesmo caminho que reabrir a aba já usaria).
+    import json as _json
+    from . import analise_edital as ia
+    ed = db.get(Edital, edital_id)
+    if ed and ed.analise_ia:
+        try:
+            cache = _json.loads(ed.analise_ia)
+        except ValueError:
+            cache = None
+        if cache and cache.get("versao") == ia.VERSAO_PROMPT:
+            resultado = analise_edital(edital_id, forcar=False, user=user, db=db)
+            return {"rodando": False, "erro": None, "resultado": resultado}
+    return {"rodando": False, "erro": None}
 
 
 # Achado real: essa leitura (baixar o documento + calcular embeddings +
