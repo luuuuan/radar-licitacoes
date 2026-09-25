@@ -1067,7 +1067,8 @@ def _chamar_mistral(prompt: str, timeout: int, tentativas: int):
 
 
 def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativas: int = 2,
-          response_schema: dict | None = None, max_output_tokens: int = 16384):
+          response_schema: dict | None = None, max_output_tokens: int = 16384,
+          permitir_groq: bool = True):
     """Chama o Gemini (settings.IA_MODELO_TEXTO). Achado real: 503 ("modelo
     sobrecarregado") acontecendo com frequência mesmo depois de esgotar as
     retentativas -- ao falhar por completo num modelo com um erro que
@@ -1102,7 +1103,25 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     ("nunca troque lista por false"). Usado hoje só por analisar(); os
     demais chamadores continuam sem schema (JSON livre). Só vale pros
     modelos Gemini -- nem Mistral nem Groq usam esse mecanismo aqui (ver
-    _chamar_mistral/_chamar_groq)."""
+    _chamar_mistral/_chamar_groq).
+
+    permitir_groq: achado real (usuário reportou, edital 139008, catálogo
+    de 3690 produtos): _chamar_groq trunca QUALQUER prompt em
+    _GROQ_LIMITE_PROMPT_BYTES (20000 bytes) sem saber o que está cortando.
+    Pra analisar() isso é seguro (corta só o FIM do texto do edital, e o
+    próprio prompt já pede pra IA sinalizar "analise_incompleta" quando
+    percebe o corte). Mas comparar_catalogo_usuario() manda o CATÁLOGO
+    inteiro dentro do prompt -- com um catálogo grande (na casa de milhares
+    de produtos, ~100000+ chars só de catálogo), truncar em 20000 bytes
+    sobra menos de 20% dos produtos, cortados no meio de qualquer jeito.
+    A IA continuava respondendo "com sucesso" pra todos os itens pedidos,
+    mesmo sem ver a maioria do catálogo -- não é o mesmo tipo de corte
+    "seguro" de analisar(): aqui o corte tira candidatos de vista, não só
+    encurta contexto de apoio, e o resultado (candidatos genuinamente
+    errados/desalinhados, mas parecendo um "sucesso" normal) é pior que
+    simplesmente reportar esse lote como falha (comparar_catalogo_usuario
+    já lida bem com lote com falha -- ver lotes_com_falha). Só o chamador
+    de comparação passa False aqui; analisar() continua com Groq normal."""
     chave = api_key   # só a chave do próprio usuário (sem fallback global)
     if not chave:
         return None, "sem_chave"
@@ -1172,6 +1191,10 @@ def _gerar(prompt: str, api_key: str | None = None, timeout: int = 70, tentativa
     # chamar rede). Tenta mesmo se o erro da Mistral não parecia
     # transiente -- são provedores sem relação nenhuma entre si, uma
     # falha específica de um não prediz nada sobre o outro.
+    if eh_transiente and not permitir_groq:
+        # ver docstring de `permitir_groq` -- pra este chamador, um "sucesso"
+        # do Groq com o prompt truncado é pior que reportar falha aqui.
+        return None, ultimo_erro
     if eh_transiente:
         txt, erro = _chamar_groq(prompt, timeout, tentativas)
         if txt is not None:
@@ -1866,7 +1889,12 @@ def _comparar_lote_catalogo(objeto: str, itens_lote: list[dict], catalogo: list[
     itens_txt = _formatar_itens_edital(itens_lote)[:30000]
     prompt = _PROMPT_COMPARAR_CATALOGO.format(
         objeto=(objeto or "")[:1000], itens=itens_txt, catalogo=catalogo_txt)
-    txt, st = _gerar(prompt, api_key=api_key, timeout=90)
+    # permitir_groq=False: ver docstring de _gerar() -- o catálogo inteiro vai
+    # dentro deste prompt, então o corte cego de 20000 bytes do Groq tira
+    # candidatos de vista (não só contexto de apoio) e ainda assim volta
+    # "sucesso" pra todos os itens, com pares errados -- pior que reportar
+    # este lote como falha (já tratado normalmente por quem chama).
+    txt, st = _gerar(prompt, api_key=api_key, timeout=90, permitir_groq=False)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)

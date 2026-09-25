@@ -86,7 +86,7 @@ def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
          "documento": "ficha_tecnica.pdf", "observacao": ""},
         {"exigido": "CND Receita Federal", "atendido": False, "aplicavel": True, "documento": "", "observacao": ""},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.verificar_documentos_usuario(
         "Aquisição de equipamento",
@@ -115,7 +115,7 @@ def test_verificar_documentos_feliz_normaliza_resposta(monkeypatch):
 def test_verificar_documentos_inclui_mais_de_8_quando_textos_sao_curtos(monkeypatch):
     prompts_recebidos = []
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         prompts_recebidos.append(prompt)
         return json.dumps({"itens": [
             {"exigido": "CNDT", "atendido": True, "aplicavel": True,
@@ -146,7 +146,7 @@ def test_verificar_documentos_ainda_respeita_orcamento_quando_textos_sao_grandes
     teto original de 24000 chars no prompt)."""
     prompts_recebidos = []
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         prompts_recebidos.append(prompt)
         return json.dumps({"itens": []}), "ok"
     monkeypatch.setattr(ia, "_gerar", _gerar_fake)
@@ -168,7 +168,7 @@ def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
         {"exigido": "", "atendido": True, "aplicavel": True, "documento": "x", "observacao": ""},
         {"exigido": "CND", "atendido": True, "aplicavel": True, "documento": "x.pdf", "observacao": ""},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
     r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]},
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert len(r["itens"]) == 1
@@ -191,7 +191,7 @@ def test_verificar_documentos_item_nao_aplicavel_fica_marcado_mas_nao_some(monke
         {"exigido": "CND Receita Federal", "atendido": True, "aplicavel": True,
          "documento": "cnd.pdf", "observacao": ""},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.verificar_documentos_usuario(
         "Objeto", {"juridica": ["Sociedade empresária ou EIRELI: ato constitutivo"],
@@ -214,7 +214,7 @@ def test_verificar_documentos_item_sem_campo_aplicavel_conta_como_aplicavel(monk
     resposta_ia = json.dumps({"itens": [
         {"exigido": "CND Receita Federal", "atendido": False, "documento": "", "observacao": ""},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
     r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND Receita Federal"]},
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert len(r["itens"]) == 1
@@ -231,7 +231,7 @@ def test_verificar_documentos_declaracoes_entram_como_itens_informativos(monkeyp
         {"exigido": "CND Receita Federal", "atendido": True, "aplicavel": True,
          "documento": "cnd.pdf", "observacao": ""},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.verificar_documentos_usuario(
         "Objeto",
@@ -273,7 +273,7 @@ def test_verificar_documentos_so_declaracoes_sem_requisito_verificavel_retorna_o
 
 
 def test_verificar_documentos_erro_ia_propaga_status(monkeypatch):
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (None, "http_500"))
     r = ia.verificar_documentos_usuario("Objeto", {"fiscal_trabalhista": ["CND"]},
                                         [{"nome": "x.pdf", "texto": "texto extraído " * 5}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
@@ -358,7 +358,7 @@ def test_comparar_catalogo_feliz_normaliza_resposta(monkeypatch):
             {"produto_id": 7, "justificativa": "mesmo tipo de produto"},
         ]},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Aquisição de material de escritório",
@@ -382,7 +382,7 @@ def test_comparar_catalogo_aceita_ate_2_candidatos_por_item(monkeypatch):
             {"produto_id": 8, "justificativa": "também compatível"},
         ]},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 1, "descricao": "x"}],
@@ -404,7 +404,7 @@ def test_comparar_catalogo_corta_em_2_e_ignora_produto_id_inventado(monkeypatch)
             {"produto_id": 8, "justificativa": "também válido, mas já tem 2"},
         ]},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 1, "descricao": "x"}],
@@ -419,7 +419,7 @@ def test_comparar_catalogo_item_sem_candidato_valido_nenhum_fica_de_fora(monkeyp
     resposta_ia = json.dumps({"itens": [
         {"numero_item": 1, "candidatos": [{"produto_id": 999, "justificativa": "x"}]},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
@@ -431,7 +431,7 @@ def test_comparar_catalogo_ignora_item_com_numero_nao_numerico(monkeypatch):
         {"numero_item": "abc", "candidatos": [{"produto_id": 1, "justificativa": "x"}]},
         {"numero_item": 2, "candidatos": [{"produto_id": 1, "justificativa": "ok"}]},
     ]})
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_ia, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
 
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 2, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
@@ -439,7 +439,7 @@ def test_comparar_catalogo_ignora_item_com_numero_nao_numerico(monkeypatch):
 
 
 def test_comparar_catalogo_erro_ia_propaga_status(monkeypatch):
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (None, "http_500"))
     r = ia.comparar_catalogo_usuario(
         "Objeto", [{"numero": 1, "descricao": "x"}], [{"id": 1, "descricao": "y"}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
@@ -451,7 +451,7 @@ def test_comparar_catalogo_resposta_truncada_vira_resposta_invalida_e_loga(monke
     o teto de tokens de saída) e não dava pra parsear. Antes disso não
     ficava nenhum rastro nos logs pra diagnosticar depois."""
     resposta_cortada = '{"itens": [{"numero_item": 1, "candidatos": [{"produto_id": 7, "just'
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (resposta_cortada, "ok"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_cortada, "ok"))
 
     import logging
     with caplog.at_level(logging.WARNING, logger="ia.edital"):
@@ -497,7 +497,7 @@ def test_comparar_catalogo_poucos_itens_continua_1_chamada_so(monkeypatch):
     """Edital pequeno (≤ tamanho de 1 lote) não muda de comportamento."""
     chamadas = []
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         chamadas.append(prompt)
         return json.dumps({"itens": [{"numero_item": 1, "candidatos": [
             {"produto_id": 1, "justificativa": "ok"}]}]}), "ok"
@@ -535,7 +535,7 @@ def test_comparar_catalogo_manda_produto_alem_do_antigo_teto_de_400_pra_ia(monke
     manda pra IA, não só no helper de formatação isolado."""
     capturado = {}
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         capturado["prompt"] = prompt
         return json.dumps({"itens": []}), "ok"
 
@@ -554,7 +554,7 @@ def test_comparar_catalogo_divide_em_lotes_e_junta_o_resultado(monkeypatch):
     conteúdo de cada lote chega separado (não tudo numa prompt só)."""
     chamadas = []
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         chamadas.append(prompt)
         # extrai o número do primeiro item citado no prompt (tosco, mas
         # suficiente pra provar que cada chamada recebeu um pedaço diferente)
@@ -577,7 +577,7 @@ def test_comparar_catalogo_um_lote_falha_outros_continuam_valendo(monkeypatch):
     tudo-ou-nada como antes."""
     chamadas = {"n": 0}
 
-    def _gerar_fake(prompt, api_key=None, timeout=70):
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
         chamadas["n"] += 1
         if chamadas["n"] == 2:
             return "isso não é um JSON", "ok"   # 2º lote falha
@@ -595,7 +595,7 @@ def test_comparar_catalogo_um_lote_falha_outros_continuam_valendo(monkeypatch):
 
 
 def test_comparar_catalogo_todos_os_lotes_falham_propaga_erro(monkeypatch):
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (None, "http_500"))
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (None, "http_500"))
     r = ia.comparar_catalogo_usuario("Objeto", _itens_edital(60), [{"id": 1, "descricao": "y"}], api_key="fake-key")
     assert r == {"status": "erro_ia", "detalhe": "http_500"}
 
@@ -604,7 +604,7 @@ def test_comparar_catalogo_para_de_processar_lotes_se_cancelar(monkeypatch):
     """Cancelamento cooperativo entre lotes — mesmo espírito do cancelamento
     já usado entre as etapas da análise (nunca no meio de uma chamada em voo)."""
     chamadas = []
-    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70: (
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (
         chamadas.append(1),
         (json.dumps({"itens": []}), "ok"))[1])
 

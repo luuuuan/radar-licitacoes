@@ -618,3 +618,82 @@ def test_chamar_groq_manda_max_tokens_pra_reservar_espaco_na_resposta():
         _chamar_groq("prompt qualquer", timeout=60, tentativas=1)
 
     assert corpos_recebidos[0]["max_tokens"] == _GROQ_MAX_TOKENS_RESPOSTA
+
+
+# ---------------------------------------------------------------------------
+# permitir_groq=False -- achado real (usuário reportou, edital 139008,
+# comparação de catálogo com 3690 produtos no catálogo): _chamar_groq trunca
+# QUALQUER prompt em 20000 bytes sem saber o que está cortando. Pra
+# comparar_catalogo_usuario() (manda o catálogo INTEIRO dentro do prompt),
+# truncar corta candidatos de vista, não só contexto de apoio -- e a IA
+# ainda respondia "sucesso" pra todos os itens, com pares errados/
+# desalinhados. Pior que reportar o lote como falha.
+# ---------------------------------------------------------------------------
+
+def test_gerar_com_permitir_groq_false_nao_chama_groq_quando_mistral_falha(monkeypatch):
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    urls_chamadas = []
+
+    def _post(url, **kw):
+        urls_chamadas.append(url)
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        if "mistral" in url:
+            return MagicMock(status_code=503, text="mistral fora do ar")
+        return _resposta_groq_ok()   # nunca deveria ser chamado
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt com catalogo gigante", api_key="fake-key", permitir_groq=False)
+
+    assert txt is None
+    assert status == "mistral_http_503"   # erro fica no último provedor que rodou de verdade (Mistral)
+    assert not any("groq" in u for u in urls_chamadas)   # Groq nunca foi chamado
+
+
+def test_gerar_com_permitir_groq_false_ainda_funciona_se_mistral_der_certo(monkeypatch):
+    """permitir_groq=False só afeta a ÚLTIMA etapa da cadeia -- Gemini e
+    Mistral continuam disponíveis normalmente."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    def _post(url, **kw):
+        if "generativelanguage" in url:
+            return MagicMock(status_code=503, text="sobrecarregado")
+        if "mistral" in url:
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = {"choices": [{"message": {"content": '{"veio_da_mistral": true}'}}]}
+            return r
+        raise AssertionError("Groq não deveria ser chamado quando a Mistral já deu certo")
+
+    with patch("app.analise_edital.requests.post", side_effect=_post):
+        txt, status = _gerar("prompt com catalogo gigante", api_key="fake-key", permitir_groq=False)
+
+    assert status == "ok"
+    assert txt == '{"veio_da_mistral": true}'
+
+
+def test_gerar_com_permitir_groq_false_e_erro_nao_transiente_do_gemini_nao_chega_a_checar_groq(monkeypatch):
+    """Erro não-transiente do Gemini (ex.: 400) já interrompe a cadeia antes
+    de chegar na checagem de permitir_groq -- mesmo comportamento de sempre,
+    sem surpresa quando o chamador passa permitir_groq=False."""
+    monkeypatch.setattr("app.analise_edital.time.sleep", lambda s: None)
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO", "modelo-principal")
+    monkeypatch.setattr("app.analise_edital.settings.IA_MODELO_TEXTO_FALLBACK", "")
+    monkeypatch.setattr("app.analise_edital.settings.MISTRAL_API_KEY", "mistral-fake-key")
+    monkeypatch.setattr("app.analise_edital.settings.GROQ_API_KEY", "groq-fake-key")
+
+    r400 = MagicMock(status_code=400, text="pedido invalido")
+    with patch("app.analise_edital.requests.post", return_value=r400):
+        txt, status = _gerar("prompt", api_key="fake-key", permitir_groq=False)
+
+    assert txt is None
+    assert status == "http_400:pedido invalido"
