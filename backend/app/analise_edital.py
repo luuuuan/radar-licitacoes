@@ -1870,7 +1870,20 @@ def _formatar_itens_edital(itens: list[dict]) -> str:
     return "\n".join(linhas) if linhas else "(nenhum item)"
 
 
-def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 2000) -> str:
+def _formatar_catalogo(catalogo: list[dict], max_produtos: int = 20000) -> str:
+    """max_produtos=20000: achado real (edital 139008, catálogo do usuário
+    crescendo de 139 pra 3690 produtos nesta mesma sessão) -- o teto já
+    tinha subido uma vez, de 400 pra 2000 (ver comparar_catalogo_usuario),
+    exatamente pelo mesmo motivo: produto certo além da posição do teto
+    NUNCA chega no prompt da IA, sem sinal nenhum disso pro usuário -- a
+    comparação "funciona" (devolve JSON válido, status ok) mas casa item
+    com o candidato errado mais parecido dentre os visíveis, silenciosamente.
+    Corrigindo pra causa geral (catálogo vai continuar crescendo) em vez do
+    caso pontual: 20000 é, na prática, "sem teto por contagem" pra qualquer
+    catálogo real -- quem realmente limita o tamanho do prompt agora é o
+    corte por CARACTERES em comparar_catalogo_usuario, dimensionado pro
+    contexto do provedor mais curto da cadeia (Mistral, fallback), não este
+    número aqui."""
     linhas = [f"- ID {p.get('id')}: {p.get('descricao') or ''}" for p in catalogo[:max_produtos]]
     return "\n".join(linhas) if linhas else "(catálogo vazio)"
 
@@ -1957,14 +1970,23 @@ def comparar_catalogo_usuario(objeto: str, itens_edital: list[dict], catalogo: l
     if not catalogo:
         return {"status": "sem_catalogo"}
 
-    # Teto generoso de propósito: o contexto de entrada do Gemini aguenta
-    # muito mais que isso (na casa do milhão de tokens) — calculado 1x fora
-    # do loop, o catálogo é o mesmo pra todos os lotes. 300000 chars cobre
-    # os 2000 produtos de _formatar_catalogo mesmo com descrições bem acima
-    # da média (~47 chars/produto num catálogo real de 852 itens) — sem
-    # esse teto acompanhar o de lá, um catálogo grande cortava no meio da
-    # lista de produtos de qualquer forma, só que em texto em vez de contagem.
-    catalogo_txt = _formatar_catalogo(catalogo)[:300000]
+    # Achado real (edital 139008, catálogo crescendo de 139 pra 3690
+    # produtos nesta mesma sessão): o teto por CONTAGEM em _formatar_catalogo
+    # já tinha sido a causa de um bug idêntico uma vez (400 -> 2000), e o
+    # catálogo bateu de novo nesse teto -- pra causa não voltar a cada
+    # marco de crescimento do catálogo, quem limita o tamanho agora é só
+    # este corte por CARACTERES (_formatar_catalogo, acima, efetivamente
+    # sem teto por contagem). 450000 chars é dimensionado pro provedor MAIS
+    # CURTO da cadeia de _gerar() que ainda entra em jogo aqui (Mistral,
+    # settings.MISTRAL_MODELO_TEXTO = ministral-8b-latest, ~128k tokens de
+    # contexto -- Groq nem entra, ver permitir_groq=False abaixo; Gemini
+    # aguenta muito mais, na casa do milhão de tokens): ~4 chars/token,
+    # reservando espaço pra _MISTRAL_MAX_TOKENS_RESPOSTA (8000) + itens do
+    # lote (até 30000 chars) + resto do prompt, sobra ~450000 chars de
+    # catálogo sem estourar o contexto do Mistral. Um catálogo REALMENTE
+    # gigante (além disso) ainda corta -- mas é corte por tamanho de
+    # verdade, não um teto arbitrário de contagem de produtos.
+    catalogo_txt = _formatar_catalogo(catalogo)[:450000]
     lotes = [itens_edital[i:i + _TAMANHO_LOTE_COMPARACAO]
              for i in range(0, len(itens_edital), _TAMANHO_LOTE_COMPARACAO)]
 

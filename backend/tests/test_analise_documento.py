@@ -521,12 +521,30 @@ def test_formatar_catalogo_inclui_produto_alem_do_antigo_teto_de_400():
     assert "Papel Chamex A4 75G 210x297 5x500f" in texto
 
 
-def test_formatar_catalogo_ainda_corta_alem_de_2000_produtos():
-    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 2100)]
-    catalogo.append({"id": 9999, "descricao": "produto so alcancavel se o teto nao existisse"})
+def test_formatar_catalogo_inclui_produto_alem_do_antigo_teto_de_2000():
+    """Achado real (edital 139008, mesma sessão): catálogo cresceu de 139
+    pra 3690 produtos -- o teto de 2000 (que já tinha resolvido o caso dos
+    852 produtos acima) virou o MESMO bug de novo: comparação de catálogo
+    devolvendo "sucesso" mas casando item com o candidato errado mais
+    parecido dentre os 2000 primeiros, porque o produto certo (posição
+    3000+) nunca chegava no prompt. Corrigido pra causa geral: sem teto por
+    contagem de produto, só por tamanho de texto (teste abaixo)."""
+    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 3000)]
+    catalogo.append({"id": 3000, "descricao": "Produto na posicao 3000, alem do antigo teto de 2000"})
     texto = ia._formatar_catalogo(catalogo)
-    assert "produto so alcancavel se o teto nao existisse" not in texto
-    assert texto.count("- ID ") == 2000
+    assert "Produto na posicao 3000, alem do antigo teto de 2000" in texto
+    assert texto.count("- ID ") == 3000
+
+
+def test_formatar_catalogo_ainda_corta_catalogo_absurdamente_grande_por_tamanho():
+    """Sem teto por contagem, o corte que sobra é por tamanho de texto
+    (comparar_catalogo_usuario, [:450000]) -- confere que ele de fato existe
+    e funciona, não que _formatar_catalogo virou ilimitado de verdade."""
+    catalogo = [{"id": i, "descricao": "x" * 200} for i in range(1, 5000)]
+    catalogo.append({"id": 9999, "descricao": "produto so alcancavel se nao houvesse nenhum teto"})
+    texto = ia._formatar_catalogo(catalogo)[:450000]
+    assert "produto so alcancavel se nao houvesse nenhum teto" not in texto
+    assert len(texto) == 450000
 
 
 def test_comparar_catalogo_manda_produto_alem_do_antigo_teto_de_400_pra_ia(monkeypatch):
@@ -546,6 +564,25 @@ def test_comparar_catalogo_manda_produto_alem_do_antigo_teto_de_400_pra_ia(monke
                                  catalogo, api_key="fake-key")
 
     assert "Papel Chamex A4 75G 210x297 5x500f" in capturado["prompt"]
+
+
+def test_comparar_catalogo_manda_produto_alem_do_antigo_teto_de_2000_pra_ia(monkeypatch):
+    """Mesmo achado do teste acima, fim-a-fim: produto na posição 3000
+    precisa aparecer de fato no prompt que comparar_catalogo_usuario manda
+    pra IA, não só no helper de formatação isolado."""
+    capturado = {}
+
+    def _gerar_fake(prompt, api_key=None, timeout=70, **_):
+        capturado["prompt"] = prompt
+        return json.dumps({"itens": []}), "ok"
+
+    monkeypatch.setattr(ia, "_gerar", _gerar_fake)
+    catalogo = [{"id": i, "descricao": f"produto generico {i}"} for i in range(1, 3000)]
+    catalogo.append({"id": 3000, "descricao": "Produto na posicao 3000, alem do antigo teto de 2000"})
+    ia.comparar_catalogo_usuario("Objeto", [{"numero": 1, "descricao": "Papel A4"}],
+                                 catalogo, api_key="fake-key")
+
+    assert "Produto na posicao 3000, alem do antigo teto de 2000" in capturado["prompt"]
 
 
 def test_comparar_catalogo_divide_em_lotes_e_junta_o_resultado(monkeypatch):
