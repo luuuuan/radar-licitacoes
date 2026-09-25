@@ -1052,3 +1052,44 @@ def test_todos_editais_com_busca_item_e_nao_lido_acha_edital_sem_match():
 
     ids = {x["edital_id"] for x in r["resultados"]}
     assert ids == {ed_sem.id}
+
+
+# ---------------------------------------------------------------------------
+# Filtro "hoje" x fuso horário -- achado real (agentes error-detective/
+# code-reviewer, pedido do usuário "verificar todos os filtros"): o container
+# de produção roda em UTC (sem TZ configurado), então date.today() adianta o
+# dia em 3h todo dia, entre 21h e meia-noite de Brasília -- um edital que
+# abriu HOJE de manhã sumia do filtro "editais do dia" nessa janela, porque
+# date.today() já achava que era amanhã. Corrigido pra reusar agora.date()
+# (datetime.now(BR_TZ)), mesmo padrão que _status_prazo_edital já usa pro
+# badge por edital.
+# ---------------------------------------------------------------------------
+
+def test_filtro_hoje_ignora_date_today_e_usa_fuso_de_brasilia(monkeypatch):
+    from app import main as app_main
+
+    class _DateFalsaAmanha(date):
+        """Simula date.today() do servidor já em UTC-amanhã (21h-meia-noite
+        de Brasília) -- se o código ainda usasse date.today() em vez de
+        agora.date(), o filtro cairia nesse valor errado."""
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 26)
+
+    class _DateTimeFalsaAgora(datetime):
+        """agora.date() correto: ainda é 25/09 às 23h30 em Brasília."""
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 25, 23, 30)
+
+    monkeypatch.setattr(app_main, "date", _DateFalsaAmanha)
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFalsaAgora)
+
+    db = _sessao()
+    u = _usuario(db)
+    ed_hoje = _edital_com_match(db, u, "ed-hoje", data_abertura=datetime(2026, 9, 25, 10, 0))
+
+    r = _listar(db, u, hoje=True)
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_hoje.id}

@@ -1496,13 +1496,25 @@ def _query_editais_filtrada(
     faltando na OUTRA rota. Filtro novo entra AQUI, nunca só num dos dois
     endpoints (ver test_listar_plataformas_concorda_com_listar_editais_no_
     mesmo_filtro em test_editais_filtros.py, que fixa esse contrato)."""
-    hoje_data = date.today()
     # agora (não hoje_data): pedido do usuário -- "ativos" x "encerrados"
     # também precisa respeitar a hora, não só o dia (ver _status_prazo_edital
     # sobre o mesmo achado no badge por edital). Comparar prazo_efetivo só
     # contra a MEIA-NOITE de hoje deixava um edital que já fechou hoje de
     # manhã aparecendo em "ativos" a tarde inteira.
     agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    # agora.date() (não date.today()): achado real (agentes error-detective/
+    # code-reviewer, pedido do usuário "verificar todos os filtros"; edital
+    # 145959 nem tem relação com isso, achado numa auditoria à parte) -- o
+    # container de produção roda em UTC (sem TZ configurado no Dockerfile),
+    # então date.today() adianta o dia em 3h todo dia, entre 21h e meia-noite
+    # de Brasília -- exatamente a mesma classe de bug que _status_prazo_edital
+    # já evita usando agora.date() em vez de date.today() pro badge por
+    # edital. Nessa janela, hoje_data (usado pra decidir "ativos" x
+    # "encerrados" quando o edital não tem data_encerramento, ver
+    # _condicoes_prazo_editais) discordava do badge individual do card, que
+    # já usa agora.date() corretamente -- o edital sumia da listagem
+    # enquanto o próprio card continuava dizendo "recebendo proposta".
+    hoje_data = agora.date()
     if todos_editais:
         # Pedido do usuário: o filtro de plataforma (e a listagem em geral)
         # sempre foi restrito a Match.usuario_id == user.id -- oferecer uma
@@ -1548,9 +1560,11 @@ def _query_editais_filtrada(
         # data_abertura agora guarda hora (ver _parse_data_hora) -- "==
         # date.today()" só bateria com meia-noite exata. Faixa do dia
         # inteiro (meia-noite de hoje até meia-noite de amanhã).
-        _hoje = date.today()
-        filtro.append(Edital.data_abertura >= _hoje)
-        filtro.append(Edital.data_abertura < _hoje + timedelta(days=1))
+        # hoje_data (não date.today()): mesmo achado do comentário acima de
+        # agora.date() -- reaproveita o valor já corrigido pro fuso de
+        # Brasília em vez de chamar date.today() de novo aqui.
+        filtro.append(Edital.data_abertura >= hoje_data)
+        filtro.append(Edital.data_abertura < hoje_data + timedelta(days=1))
     # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
     if tipo != "todos":
         prefixo = "m" if tipo == "produtos" else "s"
@@ -1713,8 +1727,8 @@ def listar_editais(
     user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
 ):
-    hoje_data = date.today()   # reusado mais abaixo no bloco de sem_match
     agora = datetime.now(BR_TZ).replace(tzinfo=None)   # idem -- ver _query_editais_filtrada
+    hoje_data = agora.date()   # não date.today() -- mesmo achado, ver comentário em _query_editais_filtrada. Reusado mais abaixo no bloco de sem_match
     eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
     base, prazo_efetivo = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,

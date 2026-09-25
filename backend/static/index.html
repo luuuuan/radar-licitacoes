@@ -2315,13 +2315,10 @@ async function loadResumo(){
 // Aplica o filtro correspondente ao card clicado e leva para a aba Editais
 function filtrarKpi(tipo){
   tab('editais');
-  // zera filtros
-  $('#f-hoje').checked = false;
-  $('#f-naolidos').checked = false;
-  const fn=$('#f-nivel'); if(fn) fn.value='';
+  _zerarCamposFiltro();   // ver comentário na definição -- zera TUDO, não só hoje/naolidos/nivel
   if(tipo==='hoje') $('#f-hoje').checked = true;
   else if(tipo==='naolidos') $('#f-naolidos').checked = true;
-  else if(tipo==='forte' || tipo==='medio'){ if(fn) fn.value=tipo; }
+  else if(tipo==='forte' || tipo==='medio'){ const fn=$('#f-nivel'); if(fn) fn.value=tipo; }
   // 'ativos' = sem filtro (mostra todos os ativos)
   paginaEditais = 1;
   loadEditais();
@@ -3140,7 +3137,15 @@ function _aplicarFiltroModalidadesModal(){
 }
 
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)
-function limparFiltros(){
+// Zera TODOS os campos de filtro da aba Editais, sem disparar loadEditais
+// nem mexer no painel mobile -- extraído de limparFiltros() pra ser
+// reaproveitado por filtrarKpi() (achado real, agente code-reviewer:
+// filtrarKpi só zerava hoje/naolidos/nivel, deixando UF/plataforma/
+// modalidade/status/tipo/valor/data/busca_item/todos_editais "presos" de
+// uma navegação anterior -- o clique num KPI do painel Início, calculado
+// SEM esses filtros em /api/resumo, mostrava uma lista sem relação com o
+// número do card, sem nenhum filtro "novo" visível pra explicar a diferença).
+function _zerarCamposFiltro(){
   $('#f-nivel').value = '';
   document.querySelectorAll('#f-uf-checks input:checked').forEach(c=>c.checked=false);
   _plataformasSelecionadas = [];
@@ -3149,7 +3154,6 @@ function limparFiltros(){
   _atualizarBotaoModalidades();
   $('#f-tipo').value = 'todos';
   $('#f-status').value = '';
-  $('#f-porpag').value = '20';
   $('#f-naolidos').checked = false;
   $('#f-hoje').checked = false;
   if($('#f-todos-editais')) $('#f-todos-editais').checked = false;
@@ -3158,6 +3162,11 @@ function limparFiltros(){
   $('#f-valor-max').value = '';
   $('#f-data-de').value = '';
   $('#f-data-ate').value = '';
+}
+
+function limparFiltros(){
+  _zerarCamposFiltro();
+  $('#f-porpag').value = '20';
   loadEditais();
   fecharFiltrosMobile();
 }
