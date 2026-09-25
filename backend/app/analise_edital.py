@@ -48,7 +48,17 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # falha (texto truncado sem a IA perceber) continuaria vendo
 # "analise_incompleta: false" pra sempre, até clicar "Realizar nova
 # análise" manualmente.
-VERSAO_PROMPT = 14
+# v15 = achado real (edital 145959, 209 itens, PDF de 212000 caracteres, SEM
+# agrupamento em lotes): a checagem v14 só roda quando existem "lotes" --
+# um edital só-por-item (sem lotes) passava pela checagem sem cobertura
+# nenhuma sendo medida, mesmo com o texto claramente cortado em MAX_TOTAL
+# antes de chegar à IA (confirmado baixando o PDF: o corte caía no meio da
+# tabela, entre o item 194 e o 209 real). Novo ramo: sem lotes pra medir
+# cobertura item a item, usa "o texto foi truncado" como sinal (mesmo
+# raciocínio de _MAX_TOTAL_SEGURO_413) -- sem ele, nunca dava pra provar
+# cobertura completa em edital sem lote, e "analise_incompleta" ficava
+# sempre false por autorrelato mesmo com texto cortado.
+VERSAO_PROMPT = 15
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1250,6 +1260,11 @@ def _prioridade_arquivo(a: dict) -> int:
 # analisar()) porque o 413 pode acontecer também no caminho de
 # texto_pronto (cache), que pula o bloco onde MAX_TOTAL é calculado.
 _MAX_TOTAL_SEGURO_413 = 40000
+# Módulo-level (mesmo motivo do comentário acima): a checagem de cobertura
+# perto do fim de analisar() precisa comparar len(texto) contra este valor
+# pra detectar truncamento mesmo quando texto veio de texto_pronto (cache),
+# que nunca passa pelo bloco onde essa constante era definida localmente.
+MAX_TOTAL = 80000
 
 
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
@@ -1283,6 +1298,12 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
 
     if texto_pronto is not None:
         texto, fonte = texto_pronto["texto"], texto_pronto.get("fonte")
+        # texto_pronto vem de uma extração anterior já cortada em MAX_TOTAL
+        # (ver `_texto_extraido` no retorno desta função) -- não temos aqui o
+        # tamanho ANTES do corte, então usamos len(texto)>=MAX_TOTAL como
+        # aproximação de "foi cortado" (mesmo raciocínio já usado na
+        # retentativa de 413 logo abaixo).
+        texto_truncado = len(texto) >= MAX_TOTAL
     else:
         if not arquivos:
             return {"status": "sem_arquivo"}
@@ -1320,7 +1341,6 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # este. Fica como está até haver um jeito confiável de confirmar
         # um teto maior (ex.: erro mais específico do Gemini, ou suporte
         # oficial confirmando o limite real).
-        MAX_TOTAL = 80000
         partes, fontes = [], []
         falhou_download = False
         for a in candidatos[:5]:
@@ -1358,7 +1378,9 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
                 titulo = a.get("titulo") or "documento"
                 partes.append(f"=== DOCUMENTO: {titulo} ===\n{t}")
                 fontes.append(titulo)
-        texto = "\n\n---\n\n".join(partes)[:MAX_TOTAL]
+        texto_bruto = "\n\n---\n\n".join(partes)
+        texto_truncado = len(texto_bruto) > MAX_TOTAL
+        texto = texto_bruto[:MAX_TOTAL]
         fonte = ", ".join(fontes) if fontes else None
         if len(texto) < 300:
             # não confunde "não consegui baixar o arquivo" (rede/PNCP
@@ -1549,6 +1571,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
 
     lotes_normalizados = lotes(data.get("lotes"))
     incompleta = b(data.get("analise_incompleta"))
+    aviso_cobertura = None
     # cobertura real dos lotes x Nº de itens que o edital de fato tem (ver
     # docstring de `total_itens` acima) -- só aplica quando há lotes pra
     # medir (julgamento "item" não tem esse sinal disponível) e o dado
@@ -1560,6 +1583,24 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # isso signifique truncamento de verdade.
         if len(itens_cobertos) < total_itens - 2:
             incompleta = True
+            aviso_cobertura = ("Esta análise pode estar incompleta: nem todos os itens do "
+                              "edital foram cobertos pelos lotes identificados.")
+    elif texto_truncado and total_itens:
+        # achado real (edital 145959, 209 itens, PDF de 212000 caracteres):
+        # editais só-por-item (sem agrupamento em lotes) não têm "lotes" pra
+        # medir cobertura -- o ramo acima simplesmente não roda, e o corte
+        # em MAX_TOTAL passava batido (a IA nunca escreveu
+        # "analise_incompleta": o texto que ELA recebeu já tinha sido
+        # cortado ANTES, então pra ela parecia terminar num ponto normal --
+        # mesmo raciocínio da docstring de `total_itens`). Sem "lotes" pra
+        # confirmar cobertura item a item, a única informação que temos é
+        # "o texto foi cortado" -- não dá pra provar que os itens depois do
+        # corte foram vistos, então assume incompleto em vez de confiar no
+        # autorrelato da IA.
+        incompleta = True
+        aviso_cobertura = ("Esta análise pode estar incompleta: o texto do edital foi cortado "
+                          "antes do fim (documento grande) e este edital não usa agrupamento "
+                          "em lotes pra confirmar se todos os itens foram cobertos.")
     pontos_atencao = lista(data.get("pontos_atencao"))
     if incompleta and not b(data.get("analise_incompleta")):
         # achado real (edital 143879): quando é ESTA checagem (não a IA)
@@ -1567,8 +1608,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # pede pra esse caso (ver linha 125 do _PROMPT) -- sem isso,
         # "pontos_atencao" ficava sem nenhum sinal do problema, mesmo com
         # "analise_incompleta" virando true.
-        pontos_atencao = pontos_atencao + [
-            "Esta análise pode estar incompleta: nem todos os itens do edital foram cobertos pelos lotes identificados."]
+        pontos_atencao = pontos_atencao + [aviso_cobertura]
     return {
         "status": "ok",
         "versao": VERSAO_PROMPT,
