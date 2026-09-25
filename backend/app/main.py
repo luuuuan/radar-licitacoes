@@ -1852,6 +1852,20 @@ def listar_editais(
         if vista == "ativos":
             ativo_cond_sm, _ = _condicoes_prazo_editais(agora, hoje_data)
             q_sem_match = q_sem_match.where(ativo_cond_sm)
+        elif vista == "encerrados":
+            # achado real (agentes error-detective/code-reviewer, validação
+            # de "busca por item" pedida pelo usuário): sem isso, a vista
+            # "Encerrados" + busca por item devolvia QUALQUER edital sem
+            # Match que batesse no termo, mesmo ainda "aguardando"/
+            # "recebendo" -- só _query_editais_filtrada (bloco com Match,
+            # linha ~1609) aplicava encerrado_cond nessa vista. Não precisa
+            # do Match.status in (...) que o bloco principal também exige
+            # ali -- edital sem Match nunca teve "participação" registrada,
+            # só o prazo já filtra certo pra este bloco. Hoje inalcançável
+            # pela UI (a busca por item só existe na aba Editais, que sempre
+            # manda vista=ativos), mas é o contrato da própria API pública.
+            _, encerrado_cond_sm = _condicoes_prazo_editais(agora, hoje_data)
+            q_sem_match = q_sem_match.where(encerrado_cond_sm)
         # mesmos filtros de edital aplicados na busca principal (uf, valor,
         # tipo, hoje, data_de/data_ate) — achado real: esta consulta só levava
         # em conta o termo buscado e a "vista", ignorando os demais filtros da

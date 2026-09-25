@@ -285,6 +285,41 @@ def test_sem_match_respeita_vista_ativos_por_padrao():
     assert r["sem_match"] == []
 
 
+def test_sem_match_nao_vaza_edital_ativo_na_vista_encerrados():
+    """Achado real (agentes error-detective/code-reviewer, validação de
+    "busca por item" pedida pelo usuário): _query_editais_filtrada exige
+    encerrado_cond em vista=="encerrados" (bloco com Match), mas o bloco
+    sem_match não tinha filtro de prazo NENHUM nessa vista -- um edital
+    ainda "aguardando" aparecia na aba Encerrados só por bater no termo
+    buscado. Hoje inalcançável pela UI (busca por item só existe na aba
+    Editais, que sempre manda vista=ativos), mas é o contrato da própria
+    API pública (GET /api/editais aceita busca_item+vista livremente)."""
+    db = _sessao()
+    u = _usuario(db)
+    daqui_a_5_dias = date.today() + timedelta(days=5)
+    _edital_sem_match(db, "ed-ainda-nao-abriu", itens=["Grampeador de mesa 26/6"],
+                      data_abertura=daqui_a_5_dias)
+
+    r = _listar(db, u, busca_item="grampeador", vista="encerrados")
+
+    assert r["sem_match"] == []
+
+
+def test_sem_match_continua_aparecendo_na_vista_encerrados_quando_de_fato_encerrado():
+    """Controle positivo do teste acima -- edital genuinamente encerrado
+    ainda precisa aparecer, senão a correção vira um bloqueio geral em vez
+    de um filtro de prazo."""
+    db = _sessao()
+    u = _usuario(db)
+    ha_10_dias = date.today() - timedelta(days=10)
+    _edital_sem_match(db, "ed-encerrado-de-verdade", itens=["Grampeador de mesa 26/6"],
+                      data_abertura=ha_10_dias)
+
+    r = _listar(db, u, busca_item="grampeador", vista="encerrados")
+
+    assert len(r["sem_match"]) == 1
+
+
 # --------- "ativo" x "encerrado" usa o prazo EFETIVO (data_encerramento --------- #
 # quando existe, senão data_abertura), não só data_abertura --------- #
 # Achado real (edital 127082, reportado pelo usuário): data_abertura no
