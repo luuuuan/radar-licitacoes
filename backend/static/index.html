@@ -1968,6 +1968,17 @@ async function carregarNotificacoes(){
   } else {
     badge.style.display = 'none';
   }
+  // achado real (agente code-reviewer, auditoria de notificações pedida
+  // pelo usuário): o polling automático de 30s chama esta função mesmo com
+  // o painel ABERTO, trocando _notifCache por um array novo sem re-render
+  // -- cada item do painel é clicável por ÍNDICE (_abrirNotificacao(i)), e
+  // se a composição da lista mudar entre polls (uma notificação some/
+  // aparece), um clique no item que o usuário VÊ podia abrir uma
+  // notificação diferente (ou nenhuma, se o array encolheu). Reconstruindo
+  // o painel a cada recarga (só quando aberto) mantém o que está na tela
+  // sempre batendo com o que um clique vai de fato abrir.
+  const wrap = $('#notif-wrap');
+  if(wrap && wrap.classList.contains('aberto')) _renderNotificacoes();
 }
 function _notifIconePorTipo(tipo){
   if(tipo==='prazo') return ICN.relogio||'';
@@ -1998,7 +2009,28 @@ function _renderNotificacoes(){
 // (analise_vista_em) e não volta sozinha. Anima cada item saindo pro lado
 // antes de limpar a lista, em vez de sumir tudo de uma vez.
 async function _lerTodasNotificacoes(){
-  api('/api/notificacoes/ler-todas', {method:'POST'}).catch(()=>{});
+  // achado real (agentes error-detective/code-reviewer, auditoria de
+  // notificações pedida pelo usuário): antes disparava o POST sem esperar
+  // (.catch(()=>{}) engolindo qualquer erro) e sempre limpava a lista/badge
+  // como se tivesse dado certo -- se a requisição falhasse (sessão
+  // expirada, rede instável), o backend nunca marcava nada como lido, mas
+  // a UI já mostrava "tudo lido" até o próximo poll de 30s trazer a lista
+  // de volta do zero, sem nenhuma explicação pro usuário. Agora espera o
+  // resultado e só limpa a UI depois de confirmar sucesso.
+  // api() só rejeita em falha de REDE (fetch); erro HTTP (4xx/5xx, exceto
+  // 401 que já redireciona) volta como JSON normal (ex.: {"detail":"..."})
+  // -- por isso confere resp?.ok explicitamente, não só o catch.
+  let ok = false;
+  try{
+    const resp = await api('/api/notificacoes/ler-todas', {method:'POST'});
+    ok = !!(resp && resp.ok);
+  }catch(e){
+    ok = false;
+  }
+  if(!ok){
+    toast('Não deu pra marcar as notificações como lidas. Tenta de novo.', 'erro');
+    return;
+  }
   const semAnimacao = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const finalizar = () => {
     _notifCache = [];

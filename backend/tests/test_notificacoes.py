@@ -421,13 +421,31 @@ def test_ler_todas_volta_no_dia_seguinte_se_a_causa_continuar_valendo():
 def test_ler_todas_marca_analise_vista_e_nao_volta_sozinha(monkeypatch):
     """Pedido do usuário: análise por IA não deve reaparecer sozinha depois
     de "Ler Todos" -- ao contrário de prazo/documento, usa o mesmo campo
-    persistente de sempre (analise_vista_em), não o "resto do dia"."""
+    persistente de sempre (analise_vista_em), não o "resto do dia".
+
+    "agora" mockado em BR_TZ (não datetime.utcnow() real): ler_todas_
+    notificacoes() grava analise_vista_em no mesmo fuso que analise_em
+    (BRT naive, ver comentário no fix) -- comparar contra um analise_em
+    construído com datetime.utcnow() "de verdade" (relógio da máquina que
+    roda o teste, não necessariamente UTC) tornava o teste dependente de
+    QUANDO ele roda, e quebrou quando o fix passou a escrever
+    analise_vista_em ~3h "atrás" do utcnow() real (offset BRT) -- mockar os
+    dois lados no mesmo valor deixa o teste determinístico de verdade."""
+    from app import main as app_main
     from app.main import ler_todas_notificacoes
+
+    class _DateTimeFixo(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 25, 15, 0)
+
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFixo)
+
     db = _sessao()
     u = _usuario(db)
-    ed = _edital(db, analise_em=datetime.utcnow())
+    ed = _edital(db, analise_em=datetime(2026, 9, 25, 15, 0))
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
-                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+                interagido_em=datetime(2026, 9, 25, 13, 0)))
     db.commit()
     assert notificacoes(user=u, db=db)["total"] == 1
 
@@ -435,7 +453,7 @@ def test_ler_todas_marca_analise_vista_e_nao_volta_sozinha(monkeypatch):
 
     assert notificacoes(user=u, db=db)["total"] == 0
     # nem "no dia seguinte" (diferente de prazo/documento) -- ver docstring
-    u.notificacoes_lidas_em = date.today() - timedelta(days=1)
+    u.notificacoes_lidas_em = date(2026, 9, 24)
     db.commit()
     assert notificacoes(user=u, db=db)["total"] == 0
 
@@ -456,3 +474,115 @@ def test_ler_todas_nao_mexe_no_match_de_outro_usuario():
 
     assert notificacoes(user=u1, db=db)["total"] == 1   # intocado
     assert u2.notificacoes_lidas_em == date.today()      # só o próprio u2 foi marcado
+
+
+# ---------------------------------------------------------------------------
+# Fuso horário -- achados reais (agentes error-detective/code-reviewer,
+# auditoria de notificações pedida pelo usuário, mesma classe já corrigida
+# nos filtros de editais, commit 789357e): produção roda em UTC sem TZ
+# configurado, e Edital.analise_em/data_encerramento/data_abertura são
+# gravados em hora de Brasília naive. date.today() nesses dois endpoints, e
+# UTC em analise_vista_em (via _utcnow_main, diferente do BRT de
+# analise_em), causavam dois bugs distintos de fuso -- ver cada teste abaixo.
+# ---------------------------------------------------------------------------
+
+def test_notificacoes_hoje_ignora_date_today_e_usa_fuso_de_brasilia(monkeypatch):
+    """Mesmo cenário do teste equivalente em test_editais_filtros.py: servidor
+    em UTC já "pensa" que é amanhã entre 21h e meia-noite de Brasília --
+    um prazo que encerra HOJE (BRT) não pode sumir da notificação."""
+    from app import main as app_main
+
+    class _DateFalsaAmanha(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 9, 26)
+
+    class _DateTimeFalsaAgora(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 25, 23, 30)   # ainda 25/09 em Brasília
+
+    monkeypatch.setattr(app_main, "date", _DateFalsaAmanha)
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFalsaAgora)
+
+    db = _sessao()
+    u = _usuario(db)
+    # encerra hoje (25/09) às 23h59 em Brasília -- prazo real, ainda não passou
+    ed = _edital(db, data_encerramento=datetime(2026, 9, 25, 23, 59))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="forte"))
+    db.commit()
+
+    r = notificacoes(user=u, db=db)
+
+    item = next((i for i in r["itens"] if i["tipo"] == "prazo"), None)
+    assert item is not None
+    assert item["detalhe"] == "encerra hoje"
+
+
+def test_registrar_interacao_analise_vista_em_usa_mesmo_fuso_que_analise_em(monkeypatch):
+    """O bug mais sério achado pelo error-detective: analise_em é BRT naive
+    (main.py:~3551) mas analise_vista_em vinha em UTC naive (_utcnow_main) --
+    comparar os dois direto criava uma janela de ~3h logo após visitar a aba
+    Análise em que uma reanálise genuinamente NOVA não disparava a
+    notificação. Aqui: usuário visita às 10h30 (BRT), reanálise termina às
+    12h (BRT, só 1h30 depois) -- tem que notificar."""
+    from app import main as app_main
+    from app.main import registrar_interacao
+
+    class _DateTimeFixo(datetime):
+        _agora = datetime(2026, 9, 25, 10, 30)
+        @classmethod
+        def now(cls, tz=None):
+            return cls._agora
+
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFixo)
+
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, analise_em=datetime(2026, 9, 25, 9, 0))   # análise já existia antes da visita
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio"))
+    db.commit()
+
+    registrar_interacao(ed.id, aba="analise", user=u, db=db)   # visita às 10h30 BRT (mockado)
+
+    # reanálise termina às 12h BRT -- só 1h30 depois da visita, bem dentro
+    # da janela de 3h onde o bug antigo (UTC vs BRT) escondia a notificação
+    ed.analise_em = datetime(2026, 9, 25, 12, 0)
+    db.commit()
+
+    r = notificacoes(user=u, db=db)
+
+    assert any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
+
+
+def test_ler_todas_grava_notificacoes_lidas_em_e_analise_vista_em_em_fuso_de_brasilia(monkeypatch):
+    """notificacoes_lidas_em e analise_vista_em gravados por ler-todas têm
+    que usar o mesmo fuso (Brasília) que o resto do sistema lê -- senão
+    "Ler Todos" clicado à noite (21h-meia-noite BRT) escondia prazo/
+    abertura/documento por quase 2 dias em vez de "o resto do dia", e
+    reabria a mesma janela de 3h de analise_vista_em vs analise_em."""
+    from app import main as app_main
+    from app.main import ler_todas_notificacoes
+
+    class _DateTimeFalsaNoite(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 25, 22, 0)   # 22h em Brasília
+
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFalsaNoite)
+
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, analise_em=datetime(2026, 9, 25, 21, 30))
+    match = Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                  interagido_em=datetime(2026, 9, 25, 21, 0))
+    db.add(match)
+    db.commit()
+
+    ler_todas_notificacoes(user=u, db=db)
+
+    # grava a data de HOJE em Brasília (25/09) -- não a de amanhã (26/09),
+    # que é o que date.today() daria se o "agora" fosse interpretado como UTC
+    assert u.notificacoes_lidas_em == date(2026, 9, 25)
+    db.refresh(match)
+    assert match.analise_vista_em == datetime(2026, 9, 25, 22, 0)

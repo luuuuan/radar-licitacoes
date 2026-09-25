@@ -1990,10 +1990,21 @@ def registrar_interacao(edital_id: int, aba: str | None = Query(None),
     concluída" em /api/notificacoes; as outras abas continuam atualizando
     só interagido_em (o card de recentes), sem dispensar essa notificação."""
     m = _match_do_usuario_por_edital(db, edital_id, user)
-    agora = _utcnow_main()
-    m.interagido_em = agora
+    m.interagido_em = _utcnow_main()
     if aba == "analise":
-        m.analise_vista_em = agora
+        # BR_TZ (não _utcnow_main/UTC): achado real (agente error-detective,
+        # auditoria de notificações pedida pelo usuário) -- Edital.analise_em
+        # (linha ~3551) é gravado em hora de Brasília naive, mas
+        # analise_vista_em vinha em UTC naive (mesmo valor de interagido_em,
+        # que É UTC de propósito -- ver _brt() acima, usado pra EXIBIR
+        # interagido_em). Comparar os dois relógios direto em
+        # _query_analise_pendente (analise_em > analise_vista_em) criava uma
+        # janela de ~3h (o offset fixo BRT/UTC, sem horário de verão desde
+        # 2019) logo após visitar a aba Análise em que uma reanálise
+        # genuinamente nova não disparava a notificação "análise concluída"
+        # -- analise_vista_em ficava "adiantado" em relação a analise_em por
+        # até 3h, mesmo a reanálise sendo mais recente de verdade.
+        m.analise_vista_em = datetime.now(BR_TZ).replace(tzinfo=None)
     db.commit()
     return {"ok": True}
 
@@ -4903,8 +4914,20 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
     Agora seleciona só as colunas usadas e empurra os filtros de data pro
     SQL (não Python) -- ~15-40ms e alguns MB por chamada viraram ~2ms e
     bytes. Cada item já vem com pra onde a notificação deve levar ao
-    clicar."""
-    hoje = date.today()
+    clicar.
+
+    hoje = agora.date() (não date.today()): achado real (agentes
+    error-detective/code-reviewer, mesma classe já corrigida em
+    _query_editais_filtrada/listar_editais, commit 789357e) -- produção roda
+    em UTC sem TZ configurado no Dockerfile. Entre 21h e meia-noite de
+    Brasília, date.today() já "é" amanhã: um prazo que encerra HOJE (BRT)
+    saía do filtro "data_encerramento >= hoje" (porque hoje já virou
+    amanhã), um documento ainda válido até o fim do dia aparecia como
+    "vencido há 1 dia(s)", e a contagem de dias de todos os 3 tipos
+    (prazo/abertura/documento) ficava 1 dia a menos do que o calendário
+    real de Brasília mostra."""
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    hoje = agora.date()
     itens = []
 
     if user.notificacoes_lidas_em != hoje:
@@ -4990,12 +5013,22 @@ def ler_todas_notificacoes(user: Usuario = Depends(_auth.get_current_user),
     notificacoes() acima pra semântica completa: prazo/abertura/documento
     somem pelo resto do dia (marca notificacoes_lidas_em = hoje); análise
     usa o mecanismo já existente (analise_vista_em por edital, mesmo que
-    abrir a aba Análise faria) e não volta sozinha depois disso."""
-    user.notificacoes_lidas_em = date.today()
-    agora = _utcnow_main()
+    abrir a aba Análise faria) e não volta sozinha depois disso.
+
+    datetime.now(BR_TZ) (não date.today()/_utcnow_main()): mesmo achado de
+    notificacoes() e de registrar_interacao (ver comentários lá) -- grava o
+    MESMO fuso que aquelas duas funções leem, senão "Ler Todos" clicado à
+    noite marcava notificacoes_lidas_em com a data de amanhã (UTC
+    adiantado), escondendo prazo/abertura/documento por quase 2 dias em vez
+    de "o resto do dia" (a promessa desta docstring); e gravar
+    analise_vista_em em UTC, como analise_em é BRT, reabria a mesma janela
+    de ~3h de "análise concluída" não desaparecendo que o fix em
+    registrar_interacao já resolve pro clique manual na aba."""
+    agora_brt = datetime.now(BR_TZ).replace(tzinfo=None)
+    user.notificacoes_lidas_em = agora_brt.date()
     match_ids = [row[0] for row in db.execute(_query_analise_pendente(user.id)).all()]
     if match_ids:
-        db.execute(update(Match).where(Match.id.in_(match_ids)).values(analise_vista_em=agora))
+        db.execute(update(Match).where(Match.id.in_(match_ids)).values(analise_vista_em=agora_brt))
     db.commit()
     return {"ok": True}
 
