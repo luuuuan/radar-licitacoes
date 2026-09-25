@@ -63,6 +63,31 @@ def _upload_planilha(linhas):
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}))
 
 
+def _upload_planilha_com_link(linhas):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["descricao", "preco_custo", "link_produto"])
+    for linha in linhas:
+        ws.append(list(linha))
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return UploadFile(buf, filename="produtos.xlsx", headers=Headers({
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}))
+
+
+def test_importar_grava_link_produto():
+    db = _sessao()
+    u = _usuario(db)
+    arquivo = _upload_planilha_com_link([
+        ("Papel A4", "10,00", "https://fornecedor.com/produto/a4"),
+    ])
+    resultado = asyncio.run(importar_produtos(arquivo=arquivo, user=u, db=db))
+    assert resultado["criados"] == 1
+    produto = db.execute(select(Produto).where(Produto.descricao == "Papel A4")).scalar_one()
+    assert produto.link_produto == "https://fornecedor.com/produto/a4"
+
+
 def test_importar_cria_produtos_normalmente():
     db = _sessao()
     u = _usuario(db)

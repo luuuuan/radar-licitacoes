@@ -135,6 +135,8 @@ class Produto(Base):
     # Serve para comparar com o preço unitário do órgão sem distorcer a margem.
     unidade_venda: Mapped[str | None] = mapped_column(String(20), nullable=True)   # ex.: resma, unidade, caixa
     itens_por_unidade: Mapped[float | None] = mapped_column(Float, nullable=True)  # ex.: 500
+    # Link direto pra página do produto no site do fornecedor (quando existe).
+    link_produto: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Fornecedor
     fornecedor_nome: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fornecedor_contato: Mapped[str | None] = mapped_column(String(160), nullable=True)

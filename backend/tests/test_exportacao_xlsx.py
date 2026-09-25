@@ -462,3 +462,21 @@ def test_catalogo_xlsx_formata_preco_custo_e_venda_como_moeda():
     # id do produto, então preco_custo/preco_venda ficam em K/L (não J/K).
     assert ws["K2"].number_format == "R$ #,##0.00"
     assert ws["L2"].number_format == "R$ #,##0.00"
+
+
+def test_catalogo_xlsx_exporta_link_produto():
+    db = _sessao()
+    u = _usuario(db)
+    db.add(Produto(usuario_id=u.id, descricao="Papel A4",
+                   link_produto="https://fornecedor.com/produto/123"))
+    db.commit()
+
+    response = exportar_produtos(user=u, db=db)
+    conteudo = _drenar(response)
+    wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+    ws = wb.active
+
+    cabec = [c.value for c in ws[1]]
+    assert "link_produto" in cabec
+    col = cabec.index("link_produto") + 1
+    assert ws.cell(row=2, column=col).value == "https://fornecedor.com/produto/123"

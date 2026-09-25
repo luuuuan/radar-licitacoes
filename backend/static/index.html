@@ -1398,6 +1398,8 @@
             <a href="#" onclick="event.preventDefault();abrirDuvida('itens-por-unidade')" style="font-size:11px">saiba mais →</a></label>
             <input id="p-itens-unid" type="number" step="1" style="width:100%" placeholder="ex: 500"></div>
         </div>
+        <div class="field"><label>Link do produto no site do fornecedor</label>
+          <input id="p-link" style="width:100%" placeholder="https://..."></div>
         <div class="field"><label>Fornecedor
           <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Escolha um fornecedor já cadastrado para puxar os dados de contato automaticamente, ou cadastre um novo na aba Fornecedores.</span></span></label>
           <select id="p-forn-sel" style="width:100%" onchange="aoEscolherFornecedor()">
@@ -3415,7 +3417,7 @@ function filtrarProdutos(){
   $('#lista-produtos').innerHTML = pagina.length
     ? pagina.map(p=>`<tr>
     <td><input type="checkbox" class="chk-produto" onchange="toggleProdutoSelecionado(${p.id},this.checked)" ${_produtosSelecionados.has(p.id)?'checked':''}></td>
-    <td>${esc(p.descricao)}</td><td>${esc(p.ncm||'—')}</td>
+    <td>${esc(p.descricao)}${p.link_produto?` <a href="${esc(p.link_produto)}" target="_blank" rel="noopener" title="Abrir produto no site do fornecedor" onclick="event.stopPropagation()">↗</a>`:''}</td><td>${esc(p.ncm||'—')}</td>
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
@@ -3483,6 +3485,7 @@ async function salvarProduto(){
     fabricante:txt('p-fabricante'), marca:txt('p-marca'), modelo:txt('p-modelo'),
     preco_custo:num('p-custo'), preco_venda:num('p-venda'),
     unidade_venda:$('#p-unidade').value.trim()||null, itens_por_unidade:num('p-itens-unid'),
+    link_produto:txt('p-link'),
     fornecedor_nome:txt('p-forn'), fornecedor_contato:txt('p-forn-contato'), fornecedor_site:txt('p-forn-site'),
     fornecedor_id: ($('#p-forn-sel') && $('#p-forn-sel').value) ? parseInt($('#p-forn-sel').value,10) : null};
   if(!body.descricao){toast('Informe a descrição', 'erro');return;}
@@ -3502,6 +3505,7 @@ async function editarProduto(id){
   set('p-fabricante',p.fabricante); set('p-marca',p.marca); set('p-modelo',p.modelo);
   set('p-custo',p.preco_custo); set('p-venda',p.preco_venda);
   set('p-unidade',p.unidade_venda); set('p-itens-unid',p.itens_por_unidade);
+  set('p-link',p.link_produto);
   set('p-forn',p.fornecedor_nome); set('p-forn-contato',p.fornecedor_contato); set('p-forn-site',p.fornecedor_site);
   if($('#p-forn-sel')) $('#p-forn-sel').value = p.fornecedor_id || '';
   editandoId = id;
@@ -3514,7 +3518,7 @@ async function editarProduto(id){
 
 function cancelarEdicao(){
   editandoId = null;
-  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-fabricante','p-marca','p-modelo','p-custo','p-venda','p-unidade','p-itens-unid','p-forn','p-forn-contato','p-forn-site','p-forn-sel'].forEach(i=>{ const el=$('#'+i); if(el) el.value=''; });
+  ['p-desc','p-ncm','p-ean','p-catmat','p-catser','p-kw','p-fabricante','p-marca','p-modelo','p-custo','p-venda','p-unidade','p-itens-unid','p-link','p-forn','p-forn-contato','p-forn-site','p-forn-sel'].forEach(i=>{ const el=$('#'+i); if(el) el.value=''; });
   $('#form-titulo').textContent = 'Cadastrar produto/serviço';
   $('#btn-salvar-prod').textContent = 'Salvar produto';
 }
@@ -4259,7 +4263,9 @@ function _paresHTML(titulo, pares){
   if(!preenchidos.length) return '';
   return `<div style="margin-top:10px"><strong>${esc(titulo)}</strong>
     <div style="margin:4px 0 0;font-size:13px;line-height:1.6">
-      ${preenchidos.map(([label,v])=>`<div>${esc(label)}: ${esc(v)}</div>`).join('')}
+      ${preenchidos.map(([label,v,ehLink])=>ehLink
+        ? `<div>${esc(label)}: <a href="${esc(v)}" target="_blank" rel="noopener">abrir no site ↗</a></div>`
+        : `<div>${esc(label)}: ${esc(v)}</div>`).join('')}
     </div></div>`;
 }
 
@@ -4693,6 +4699,7 @@ function abrirDetalheItemIA(numero){
         ['Itens por unidade (embalagem)', p.itens_por_unidade],
         ['Custo comparável (mesma base do órgão)', principal.custo_comparavel!=null?fmtMoeda(principal.custo_comparavel):null],
         ['Margem potencial', principal.margem!=null?(fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:'')):null],
+        ['Link do produto', p.link_produto, true],
       ])}
       ${principal.justificativa?`<div style="margin-top:10px"><strong>Justificativa da IA</strong>
         <p class="muted" style="margin:4px 0 0;font-size:13px;line-height:1.5">${esc(principal.justificativa)}</p>
@@ -5419,6 +5426,7 @@ function abrirDetalheItem(numero){
         ['Itens por unidade (embalagem)', p.itens_por_unidade],
         ['Custo comparável (mesma base do órgão)', it.custo_comparavel!=null?fmtMoeda(it.custo_comparavel):null],
         ['Margem potencial', it.margem!=null?(fmtMoeda(it.margem)+(it.margem_pct!=null?` (${it.margem_pct}%)`:'')):null],
+        ['Link do produto', p.link_produto, true],
       ]) : '<p class="muted" style="margin-top:10px">Nenhum produto do catálogo bateu com este item.</p>'}
       ${vt ? `<div style="margin-top:10px"><strong>Validação técnica</strong>
         <div style="margin-top:4px;font-size:13px;color:${CORES_VALIDACAO[vt.classificacao]||''};font-weight:600">${esc(vt.classificacao)}</div>

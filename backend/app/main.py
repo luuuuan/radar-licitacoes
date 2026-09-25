@@ -784,6 +784,7 @@ class ProdutoIn(BaseModel):
     preco_venda: float | None = None
     unidade_venda: str | None = None
     itens_por_unidade: float | None = None
+    link_produto: str | None = None
     fornecedor_nome: str | None = None
     fornecedor_contato: str | None = None
     fornecedor_site: str | None = None
@@ -893,6 +894,7 @@ def _produto_dict(p: Produto) -> dict:
         "fabricante": p.fabricante, "marca": p.marca, "modelo": p.modelo,
         "preco_custo": p.preco_custo, "preco_venda": p.preco_venda,
         "unidade_venda": p.unidade_venda, "itens_por_unidade": p.itens_por_unidade,
+        "link_produto": p.link_produto,
         "fornecedor_nome": p.fornecedor_nome, "fornecedor_contato": p.fornecedor_contato,
         "fornecedor_site": p.fornecedor_site, "fornecedor_id": p.fornecedor_id,
     }
@@ -949,23 +951,23 @@ def modelo_produtos(user: Usuario = Depends(_auth.get_current_user)):
     ws.title = "Produtos"
     cabec = ["id", "descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
              "fabricante", "marca", "modelo",
-             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
+             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade", "link_produto",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
     ws.append(["", "Papel A4 75g branco", "papel, a4, sulfite, resma", "4802.56.99",
                "7891234567890", "150123", "", "", "", "",
-               "18,90", "24,50", "resma", "500",
+               "18,90", "24,50", "resma", "500", "",
                "(45) 99999-0000", "", "", ""])
     ws.append(["", "Caneta esferográfica azul", "caneta, esferográfica, azul", "",
                "", "", "", "", "", "",
-               "1,20", "2,00", "unidade", "",
+               "1,20", "2,00", "unidade", "", "",
                "", "Distribuidora Exemplo", "(45) 99999-0000", "site.com.br"])
     ws["A1"].comment = Comment(
         "Deixe em branco pra produto novo. Só é preenchida de verdade quando "
         "você exporta o catálogo (/api/produtos/exportar.xlsx) e reimporta — "
         "aí a linha atualiza o produto certo mesmo que você tenha corrigido a "
         "descrição, em vez de arriscar criar um duplicado.", "Minha Licitação")
-    ws["O1"].comment = Comment(
+    ws["P1"].comment = Comment(
         "Se o telefone bater com um fornecedor já cadastrado na aba Fornecedores, "
         "o produto é vinculado a ele automaticamente (nome/contato/site vêm de lá "
         "— não precisa preencher as 3 colunas seguintes). Preencha-as só se o "
@@ -1001,7 +1003,7 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
     ws.title = "Produtos"
     cabec = ["id", "descricao", "palavras_chave", "ncm", "ean", "catmat", "catser",
              "fabricante", "marca", "modelo",
-             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade",
+             "preco_custo", "preco_venda", "unidade_venda", "itens_por_unidade", "link_produto",
              "fornecedor_telefone", "fornecedor_nome", "fornecedor_contato", "fornecedor_site"]
     ws.append(cabec)
     linha = 1
@@ -1009,7 +1011,7 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
         ws.append([
             p.id, p.descricao, p.palavras_chave, p.ncm, p.ean, p.catmat, p.catser,
             p.fabricante, p.marca, p.modelo,
-            p.preco_custo, p.preco_venda, p.unidade_venda, p.itens_por_unidade,
+            p.preco_custo, p.preco_venda, p.unidade_venda, p.itens_por_unidade, p.link_produto,
             telefones.get(p.fornecedor_id, ""), p.fornecedor_nome, p.fornecedor_contato, p.fornecedor_site,
         ])
         linha += 1
@@ -1074,6 +1076,7 @@ _COLS_IMPORT = {
     "preco_venda": "preco_venda", "preço_venda": "preco_venda", "venda": "preco_venda",
     "unidade_venda": "unidade_venda", "unidade de venda": "unidade_venda",
     "itens_por_unidade": "itens_por_unidade", "itens por unidade": "itens_por_unidade",
+    "link_produto": "link_produto", "link": "link_produto", "url": "link_produto",
     "fornecedor_nome": "fornecedor_nome", "fornecedor": "fornecedor_nome",
     "fornecedor_contato": "fornecedor_contato", "fornecedor_site": "fornecedor_site",
     # telefone/whatsapp do fornecedor: se bater com um fornecedor já cadastrado,

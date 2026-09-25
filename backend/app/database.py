@@ -127,7 +127,8 @@ for _c in (("link", "VARCHAR(500)"), ("avisado_para_telegram", "DATE"), ("texto_
 _COLUNAS_NOVAS.setdefault("produtos", [])
 for _c in (("unidade_venda", "VARCHAR(20)"), ("itens_por_unidade", "FLOAT"),
            ("fornecedor_id", "INTEGER"), ("fabricante", "VARCHAR(160)"),
-           ("marca", "VARCHAR(160)"), ("modelo", "VARCHAR(160)")):
+           ("marca", "VARCHAR(160)"), ("modelo", "VARCHAR(160)"),
+           ("link_produto", "VARCHAR(500)")):
     if _c not in _COLUNAS_NOVAS["produtos"]:
         _COLUNAS_NOVAS["produtos"].append(_c)
 _COLUNAS_NOVAS.setdefault("itens_edital", [])
