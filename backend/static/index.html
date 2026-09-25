@@ -4522,11 +4522,11 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
     }
     return `<tr id="ia-cat-linha-${esc(it.numero)}">
       <td style="white-space:nowrap">${esc(it.numero??'')}</td>
-      <td style="font-size:13px">${esc(it.descricao_item||'')}</td>
+      <td style="font-size:13px;max-width:220px;overflow-wrap:break-word">${esc(it.descricao_item||'')}</td>
       <td class="muted" style="white-space:nowrap">${esc(it.unidade_medida||'—')}</td>
-      <td style="font-size:13px">${esc(p.descricao||'')}${specsBadge}</td>
+      <td style="font-size:13px;max-width:200px;overflow-wrap:break-word">${esc(p.descricao||'')}${specsBadge}</td>
       <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
-      <td class="muted" style="font-size:12px">${esc(principal.justificativa||'')}</td>
+      <td class="muted" style="font-size:12px;max-width:200px;overflow-wrap:break-word">${esc(principal.justificativa||'')}</td>
       <td>
         <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap">
           ${acaoBtn}
