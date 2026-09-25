@@ -3229,11 +3229,15 @@ async function loadEditais(resetPagina=true){
   // fiscal sozinho não vira match automático). Sem isso, buscar um item
   // ficava restrito ao que o motor já tinha aprovado — inútil bem na hora
   // em que o motor automático não está disponível.
+  // sem_match_total (achado do agente code-reviewer): o bloco sempre corta
+  // em 20 -- sem avisar quantos existem de verdade, uma busca genérica
+  // parecia "incompleta" sem explicação nenhuma.
+  const semMatchTruncado = (r.sem_match_total||0) > semMatch.length;
   const blocoSemMatch = (busca && semMatch.length)
     ? `<h3 style="margin:${eds.length?'22px':'0'} 0 4px;font-size:14px">
         Outros editais que mencionam "${esc(busca)}" (sem análise automática ainda)
         <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">O motor de compatibilidade automático não avaliou estes editais ainda (ex.: sem cota de IA disponível no momento). Abra o edital pra ver os itens e, se quiser, rode a Análise por IA manualmente lá dentro.</span></span>
-      </h3>${semMatch.map(cardEditalSemMatch).join('')}`
+      </h3>${semMatchTruncado ? `<p class="muted" style="font-size:11px;margin:0 0 6px">Mostrando os ${semMatch.length} mais recentes de ${r.sem_match_total} — refine a busca ou combine com outros filtros pra ver mais.</p>` : ''}${semMatch.map(cardEditalSemMatch).join('')}`
     : '';
   if(!eds.length){
     if(semMatch.length){

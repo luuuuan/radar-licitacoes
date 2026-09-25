@@ -1469,6 +1469,59 @@ def _inicio_hoje_utc() -> datetime:
     return inicio.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 
+def _condicoes_edital_comuns(uf: list[str] | None, plataforma: list[str] | None,
+                             modalidade: list[str] | None, tipo: str,
+                             valor_min: float | None, valor_max: float | None,
+                             data_de: date | None, data_ate: date | None,
+                             hoje: bool, hoje_data: date) -> list:
+    """Condições de filtro que dependem só de Edital (não de Match) --
+    compartilhadas entre o bloco principal (_query_editais_filtrada, junto
+    com Match) e o bloco sem_match (listar_editais, editais sem Match
+    nenhum que bateram na busca por item). Achado real (agentes
+    error-detective/code-reviewer, validação de "busca por item" pedida
+    pelo usuário): antes desta função, o bloco sem_match replicava estas
+    MESMAS condições manualmente numa query separada -- já causou um bug
+    real uma vez (essa query ignorava todos os filtros da tela, corrigido
+    à parte) e o próprio comentário daquele fix reconhecia o risco de
+    divergir de novo no futuro sem nada impedindo isso. Um filtro novo
+    (que dependa só de Edital) entra SÓ aqui agora, nunca duplicado."""
+    condicoes = []
+    if uf:
+        condicoes.append(Edital.uf.in_([u.upper() for u in uf]))
+    if plataforma:
+        condicoes.append(Edital.plataforma.in_(plataforma))
+    if modalidade:
+        condicoes.append(Edital.modalidade.in_(modalidade))
+    # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
+    if tipo != "todos":
+        prefixo = "m" if tipo == "produtos" else "s"
+        sub = (select(ItemEdital.edital_id)
+               .where(ItemEdital.edital_id == Edital.id)
+               .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
+        condicoes.append(sub.exists())
+    if valor_min is not None:
+        condicoes.append(Edital.valor_estimado >= valor_min)
+    if valor_max is not None:
+        condicoes.append(Edital.valor_estimado <= valor_max)
+    if data_de is not None:
+        condicoes.append(Edital.data_abertura >= data_de)
+    if data_ate is not None:
+        # data_abertura agora guarda hora -- "<= data_ate" (meia-noite)
+        # excluiria qualquer edital do próprio dia data_ate com hora > 0.
+        # Fim do dia (< o dia seguinte) inclui o dia inteiro.
+        condicoes.append(Edital.data_abertura < data_ate + timedelta(days=1))
+    if hoje:
+        # data_abertura agora guarda hora (ver _parse_data_hora) -- "==
+        # date.today()" só bateria com meia-noite exata. Faixa do dia
+        # inteiro (meia-noite de hoje até meia-noite de amanhã). hoje_data
+        # (não date.today()): mesmo achado de agora.date() -- reaproveita o
+        # valor já corrigido pro fuso de Brasília em vez de chamar
+        # date.today() de novo aqui.
+        condicoes.append(Edital.data_abertura >= hoje_data)
+        condicoes.append(Edital.data_abertura < hoje_data + timedelta(days=1))
+    return condicoes
+
+
 def _query_editais_filtrada(
     user: Usuario, todos_editais: bool, nivel: str | None, uf: list[str] | None,
     plataforma: list[str] | None, modalidade: list[str] | None, status: str | None,
@@ -1536,12 +1589,8 @@ def _query_editais_filtrada(
         filtro = [Match.usuario_id == user.id]
     if nivel:
         filtro.append(Match.nivel == nivel)
-    if uf:
-        filtro.append(Edital.uf.in_([u.upper() for u in uf]))
-    if plataforma:
-        filtro.append(Edital.plataforma.in_(plataforma))
-    if modalidade:
-        filtro.append(Edital.modalidade.in_(modalidade))
+    filtro.extend(_condicoes_edital_comuns(uf, plataforma, modalidade, tipo, valor_min,
+                                           valor_max, data_de, data_ate, hoje, hoje_data))
     if status:
         filtro.append(Match.status == status)
     if apenas_nao_lidos:
@@ -1556,33 +1605,6 @@ def _query_editais_filtrada(
         filtro.append(Match.lido.is_(None) | (Match.lido == False))  # noqa: E712
     if apenas_interessantes:
         filtro.append(Match.interessante == True)  # noqa: E712
-    if hoje:
-        # data_abertura agora guarda hora (ver _parse_data_hora) -- "==
-        # date.today()" só bateria com meia-noite exata. Faixa do dia
-        # inteiro (meia-noite de hoje até meia-noite de amanhã).
-        # hoje_data (não date.today()): mesmo achado do comentário acima de
-        # agora.date() -- reaproveita o valor já corrigido pro fuso de
-        # Brasília em vez de chamar date.today() de novo aqui.
-        filtro.append(Edital.data_abertura >= hoje_data)
-        filtro.append(Edital.data_abertura < hoje_data + timedelta(days=1))
-    # tipo: editais que contêm ao menos um item do tipo escolhido (material/serviço)
-    if tipo != "todos":
-        prefixo = "m" if tipo == "produtos" else "s"
-        sub = (select(ItemEdital.edital_id)
-               .where(ItemEdital.edital_id == Edital.id)
-               .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo))
-        filtro.append(sub.exists())
-    if valor_min is not None:
-        filtro.append(Edital.valor_estimado >= valor_min)
-    if valor_max is not None:
-        filtro.append(Edital.valor_estimado <= valor_max)
-    if data_de is not None:
-        filtro.append(Edital.data_abertura >= data_de)
-    if data_ate is not None:
-        # data_abertura agora guarda hora -- "<= data_ate" (meia-noite)
-        # excluiria qualquer edital do próprio dia data_ate com hora > 0.
-        # Fim do dia (< o dia seguinte) inclui o dia inteiro.
-        filtro.append(Edital.data_abertura < data_ate + timedelta(days=1))
     # busca por item: só editais que tenham pelo menos um item cujo texto
     # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
     # que pedem isso, em vez de precisar abrir cada um pra conferir. Ver
@@ -1838,6 +1860,7 @@ def listar_editais(
     # o "out" acima já inclui editais sem Match (com paginação de verdade),
     # duplicar aqui só repetiria os mesmos editais nos dois blocos.
     sem_match: list[dict] = []
+    sem_match_total = 0
     if not todos_editais and busca_item and busca_item.strip():
         palavras_busca = [p for p in busca_item.strip().lower().split() if p]
         sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
@@ -1872,33 +1895,16 @@ def listar_editais(
         # tela; resultado era o bloco "sem análise automática" misturando
         # editais de qualquer estado/valor/tipo/data mesmo com filtros ativos
         # (nivel/status/lido não se aplicam aqui, já que por definição estes
-        # editais não têm Match).
-        if uf:
-            q_sem_match = q_sem_match.where(Edital.uf.in_([u.upper() for u in uf]))
-        if plataforma:
-            q_sem_match = q_sem_match.where(Edital.plataforma.in_(plataforma))
-        if modalidade:
-            q_sem_match = q_sem_match.where(Edital.modalidade.in_(modalidade))
-        if tipo != "todos":
-            prefixo_sm = "m" if tipo == "produtos" else "s"
-            q_sem_match = q_sem_match.where(
-                select(ItemEdital.edital_id)
-                .where(ItemEdital.edital_id == Edital.id)
-                .where(func.lower(func.substr(func.coalesce(ItemEdital.material_ou_servico, ""), 1, 1)) == prefixo_sm)
-                .exists())
-        if valor_min is not None:
-            q_sem_match = q_sem_match.where(Edital.valor_estimado >= valor_min)
-        if valor_max is not None:
-            q_sem_match = q_sem_match.where(Edital.valor_estimado <= valor_max)
-        if data_de is not None:
-            q_sem_match = q_sem_match.where(Edital.data_abertura >= data_de)
-        if data_ate is not None:
-            # ver o mesmo achado em _query_editais_filtrada/filtro "hoje"
-            # logo abaixo -- data_abertura agora guarda hora.
-            q_sem_match = q_sem_match.where(Edital.data_abertura < data_ate + timedelta(days=1))
-        if hoje:
-            q_sem_match = q_sem_match.where(Edital.data_abertura >= hoje_data)
-            q_sem_match = q_sem_match.where(Edital.data_abertura < hoje_data + timedelta(days=1))
+        # editais não têm Match). Ver _condicoes_edital_comuns -- mesma
+        # função usada em _query_editais_filtrada, não duplicada mais.
+        for cond in _condicoes_edital_comuns(uf, plataforma, modalidade, tipo, valor_min,
+                                             valor_max, data_de, data_ate, hoje, hoje_data):
+            q_sem_match = q_sem_match.where(cond)
+        # total ANTES do limit(20) -- pedido do usuário (achado do agente
+        # code-reviewer): sem isso, uma busca genérica ("papel") que achasse
+        # 60 editais sem match mostrava só os 20 mais recentes sem nenhum
+        # sinal de que havia mais, parecendo que a busca "não achou tudo".
+        sem_match_total = db.scalar(select(func.count()).select_from(q_sem_match.subquery())) or 0
         # eager load de Edital.itens (selectinload = 1 query IN batch pra
         # todos os editais da página, não 1 SELECT por edital dentro do loop
         # abaixo) — achado real (auditoria do agente code-reviewer): sem
@@ -1924,6 +1930,7 @@ def listar_editais(
         "paginas": (total + por_pagina - 1) // por_pagina,
         "resultados": out,
         "sem_match": sem_match,
+        "sem_match_total": sem_match_total,
     }
 
 

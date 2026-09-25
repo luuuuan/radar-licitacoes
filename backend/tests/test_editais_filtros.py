@@ -543,6 +543,34 @@ def test_sem_match_limitado_a_20_resultados():
     assert len(r["sem_match"]) == 20
 
 
+def test_sem_match_total_reflete_universo_completo_nao_so_a_pagina_truncada():
+    """Achado do agente code-reviewer (validação de "busca por item" pedida
+    pelo usuário): sem_match sempre truncava em 20 sem informar ao usuário
+    que havia mais -- uma busca genérica podia parecer "incompleta" sem
+    explicação. sem_match_total devolve o universo inteiro (antes do
+    limit), pro frontend poder avisar "mostrando 20 de N"."""
+    db = _sessao()
+    u = _usuario(db)
+    for i in range(25):
+        _edital_sem_match(db, f"ed{i}", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u, busca_item="grampeador")
+
+    assert len(r["sem_match"]) == 20
+    assert r["sem_match_total"] == 25
+
+
+def test_sem_match_total_zero_quando_busca_por_item_nao_esta_ativa():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_sem_match(db, "ed1", itens=["Grampeador de mesa 26/6"])
+
+    r = _listar(db, u)
+
+    assert r["sem_match"] == []
+    assert r["sem_match_total"] == 0
+
+
 def test_sem_match_nao_faz_n_mais_1_pra_carregar_itens():
     """Achado real (auditoria do agente code-reviewer): o loop que monta
     "itens_batem" acessava ed.itens sem eager loading -- um SELECT extra por
