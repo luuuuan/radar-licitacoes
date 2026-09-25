@@ -1592,7 +1592,21 @@ def _query_editais_filtrada(
     filtro.extend(_condicoes_edital_comuns(uf, plataforma, modalidade, tipo, valor_min,
                                            valor_max, data_de, data_ate, hoje, hoje_data))
     if status:
-        filtro.append(Match.status == status)
+        if status == "novo":
+            # achado real (usuário reportou): edital sem Match nenhum (só
+            # possível com todos_editais=True) é, por definição, "novo"
+            # também -- MESMO raciocínio já usado acima pra
+            # apenas_nao_lidos, só que este aqui nunca tinha sido corrigido.
+            # Sem o IS NULL, "Todos os editais" + Situação="Novo" excluía
+            # silenciosamente TODO edital sem Match -- exatamente o
+            # universo que "Todos os editais" existe pra mostrar. Pra
+            # status != "novo" (proposta_enviada/ganho/perdido/descartado/
+            # vou_participar), um edital sem Match nunca pode estar nesse
+            # estado (exige ação do usuário, que só existe com Match já
+            # criado) -- comportamento de hoje (== direto) continua certo.
+            filtro.append(Match.status.is_(None) | (Match.status == status))
+        else:
+            filtro.append(Match.status == status)
     if apenas_nao_lidos:
         # edital sem Match nenhum (só possível com todos_editais=True) é,
         # por definição, não lido também -- "nunca apareceu pro usuário" é a

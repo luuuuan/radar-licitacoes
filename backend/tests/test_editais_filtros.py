@@ -1008,6 +1008,55 @@ def test_todos_editais_edital_sem_match_vem_com_campos_de_match_vazios():
 
     item = r["resultados"][0]
     assert item["match_id"] is None
+
+
+def test_todos_editais_com_status_novo_inclui_edital_sem_match():
+    """Achado real (usuário reportou): filtrar UF/valor/modalidade + "Todos
+    os editais" + Situação="Novo" devolvia só os poucos editais que JÁ
+    tinham Match (com status "novo" de verdade) -- os que a IA/motor nunca
+    avaliou (sem Match nenhum, o próprio universo que "Todos os editais"
+    existe pra mostrar) sumiam, porque Match.status == "novo" nunca bate
+    com NULL. Mesmo raciocínio já usado pra apenas_nao_lidos (achado
+    anterior do code-reviewer), só que este nunca tinha sido corrigido:
+    edital sem Match é "novo" por definição (ninguém nunca fez nada com
+    ele)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_com = _edital_com_match(db, u, "ed-com")   # Match.status default "novo"
+    ed_sem = _edital_sem_match(db, "ed-sem")
+
+    r = _listar(db, u, todos_editais=True, status="novo")
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_com.id, ed_sem.id}
+
+
+def test_todos_editais_com_status_diferente_de_novo_nao_inclui_edital_sem_match():
+    """Controle do teste acima -- edital sem Match nunca pode estar
+    "ganho"/"proposta_enviada"/etc (exige ação do usuário, que só existe
+    com Match já criado), então continua de fora nesses status."""
+    db = _sessao()
+    u = _usuario(db)
+    ed_com = _edital_com_match(db, u, "ed-com")
+    ed_com_match = db.execute(select(Match).where(Match.edital_id == ed_com.id)).scalar_one()
+    ed_com_match.status = "ganho"
+    db.commit()
+    _edital_sem_match(db, "ed-sem")
+
+    r = _listar(db, u, todos_editais=True, status="ganho")
+
+    ids = {x["edital_id"] for x in r["resultados"]}
+    assert ids == {ed_com.id}
+
+
+def test_todos_editais_edital_sem_match_campos_de_match_vazios():
+    db = _sessao()
+    u = _usuario(db)
+    _edital_sem_match(db, "ed-sem", plataforma="BLL Compras")
+
+    r = _listar(db, u, todos_editais=True)
+
+    item = r["resultados"][0]
     assert item["score"] is None
     assert item["nivel"] is None
     assert item["status"] is None
