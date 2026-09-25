@@ -206,3 +206,59 @@ def test_excluir_documento_incrementa_versao_documentos():
     versao_inicial = u.versao_documentos
     remover_documento(doc.id, user=u, db=db)
     assert u.versao_documentos == versao_inicial + 1
+
+
+# ------------------- fuso de AnaliseIAExtras.atualizado_em ------------------- #
+# Achado real (usuário reportou 2x, edital 139008): o sino de notificações
+# passou a exigir AnaliseIAExtras.atualizado_em >= Edital.analise_em pra
+# avisar "análise concluída" (ver _query_analise_pendente, main.py) --
+# analise_em é gravado em hora de Brasília naive (BR_TZ). Se atualizado_em
+# continuasse em UTC naive (era o default original da coluna, utcnow), a
+# comparação ficaria sistematicamente ~3h ENGANOSAMENTE a favor (UTC "lê"
+# maior que BRT pro mesmo instante), mascarando o problema em vez de
+# corrigi-lo -- exatamente a mesma classe de bug já corrigida em
+# Match.analise_vista_em (commit 00c4dc7). Confere o valor gravado de
+# verdade, não um valor forjado no teste.
+def test_atualizado_em_usa_fuso_de_brasilia_nao_utc():
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    db = _sessao()
+    u, ed, p = _semear(db)
+    with patch("app.analise_edital._gerar") as mock_gerar:
+        mock_gerar.return_value = (_resposta_docs, "ok")
+        _anexar_verificacao_ia_documentos(_resultado_base(ed), ed, u, db, "fake-key")
+    cache = db.query(AnaliseIAExtras).filter_by(usuario_id=u.id, edital_id=ed.id).first()
+
+    agora_brt = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+    agora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert abs((cache.atualizado_em - agora_brt).total_seconds()) < 10
+    # se estivesse em UTC (bug), a diferença pro relógio BRT seria de ~3h --
+    # bem acima de qualquer tolerância de execução do teste.
+    assert abs((cache.atualizado_em - agora_utc).total_seconds()) > 3000
+
+
+def test_pacote_completo_de_extras_habilita_notificacao_de_analise_concluida():
+    """Prova de ponta a ponta (não um AnaliseIAExtras forjado no teste, como
+    em test_notificacoes.py): roda a análise inteira via analise_edital()
+    (parte rápida + _rodar_extras_ia) e confere que Edital.analise_em e
+    AnaliseIAExtras.atualizado_em, escritos por dois módulos diferentes
+    (main.py e models.py) a poucos milissegundos de distância, ficam no
+    MESMO fuso -- é a checagem real que _query_analise_pendente faz."""
+    from app.main import analise_edital
+    from app import analise_edital as ia_module
+    db = _sessao()
+    u, ed, p = _semear(db)
+    chave_gemini = "fake-gemini-key"
+    with patch("app.main._auth.decifrar", return_value=chave_gemini), \
+         patch.object(ia_module, "ia_texto_disponivel", return_value=True), \
+         patch("app.main._texto_pronto_cache", return_value="texto do edital"), \
+         patch.object(ia_module, "analisar", return_value=_resultado_base(ed)), \
+         patch("app.analise_edital._gerar") as mock_gerar:
+        mock_gerar.side_effect = [(_resposta_docs, "ok"), (_resposta_catalogo(p.id), "ok")]
+        analise_edital(ed.id, forcar=False, user=u, db=db)
+
+    db.refresh(ed)
+    cache = db.query(AnaliseIAExtras).filter_by(usuario_id=u.id, edital_id=ed.id).first()
+    assert ed.analise_em is not None
+    assert cache is not None and cache.atualizado_em is not None
+    assert cache.atualizado_em >= ed.analise_em

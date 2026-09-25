@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_, update
+from sqlalchemy import select, func, or_, and_, update
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
@@ -4880,12 +4880,33 @@ def _query_analise_pendente(usuario_id: int):
     /api/notificacoes (usa edital_id/orgao) e /api/notificacoes/ler-todas
     (usa match_id, pra marcar analise_vista_em) -- precisam dispensar
     exatamente os mesmos itens que estão sendo mostrados, sem duplicar a
-    condição em dois lugares e arriscar os dois desalinharem com o tempo."""
+    condição em dois lugares e arriscar os dois desalinharem com o tempo.
+
+    Achado real (usuário reportou 2x, edital 139008): Edital.analise_em é
+    gravado logo após a parte RÁPIDA da análise (resumo/exigências do
+    edital), mas ANTES de _rodar_extras_ia -- comparação de catálogo e
+    verificação de documentos, por usuário, bem mais lenta (lotes de até
+    90s cada) -- terminar. O sino usava só analise_em e avisava "concluída"
+    minutos antes da página realmente sair do loader (que só sai quando
+    /analise/status devolve "resultado", ou seja, quando o pacote INTEIRO,
+    extras incluído, termina -- ver _rodar_analise_bg). Exige também que
+    AnaliseIAExtras.atualizado_em (POR usuário+edital, tocado no fim de
+    _rodar_extras_ia mesmo quando o usuário não tem catálogo/documento
+    algum -- ver _upsert_cache_extras) exista e seja >= Edital.analise_em:
+    só então o pacote completo desta rodada de análise já terminou de
+    verdade. Se a análise foi cancelada no meio dos extras (ou nunca
+    chegou a rodá-los), atualizado_em fica None ou desatualizado em
+    relação a este analise_em -- a notificação simplesmente não aparece
+    ainda, em vez de aparecer cedo demais."""
+    extras = AnaliseIAExtras
     return (select(Match.id, Edital.id, Edital.orgao)
            .join(Edital, Match.edital_id == Edital.id)
+           .join(extras, and_(extras.usuario_id == usuario_id, extras.edital_id == Edital.id))
            .where(Match.usuario_id == usuario_id)
            .where(Match.interagido_em.is_not(None))
            .where(Edital.analise_em.is_not(None))
+           .where(extras.atualizado_em.is_not(None))
+           .where(extras.atualizado_em >= Edital.analise_em)
            .where(or_(Match.analise_vista_em.is_(None),
                      Edital.analise_em > Match.analise_vista_em))
            .limit(_LIMITE_ITENS_NOTIFICACAO))
@@ -4913,8 +4934,10 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
        CONTAGEM (item agrupado), não dos editais em si.
     3. Documentos de habilitação vencendo (mesmo limiar do checklist do
        edital, settings.LEMBRETE_DOC_DIAS -- ver checklist_habilitacao.py).
-    4. Análises por IA que terminaram depois da última vez que o usuário
-       viu especificamente a aba Análise (Edital.analise_em >
+    4. Análises por IA que terminaram (o pacote INTEIRO -- ver achado real
+       em _query_analise_pendente sobre AnaliseIAExtras.atualizado_em, não
+       só a parte rápida) depois da última vez que o usuário viu
+       especificamente a aba Análise (Edital.analise_em >
        Match.analise_vista_em), exigindo que ele já tenha visitado esse
        edital ALGUMA vez (interagido_em IS NOT NULL) -- achado real
        (auditoria dos agentes architect-reviewer/error-detective):

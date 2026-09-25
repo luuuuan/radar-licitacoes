@@ -9,12 +9,23 @@ Entidades principais:
 - RegraExclusao: termos/categorias que o usuário quer ignorar.
 """
 from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 
 
 def utcnow() -> datetime:
     """UTC atual, sem timezone (naive) — substitui o datetime.utcnow() depreciado,
     mantendo o mesmo comportamento (compatível com as colunas DateTime existentes)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _brt_now() -> datetime:
+    """Horário de Brasília atual, sem timezone (naive) -- mesma convenção de
+    Edital.analise_em/analise_vista_em (main.py, datetime.now(BR_TZ).replace
+    (tzinfo=None)), NÃO utcnow() acima. Usado só onde o campo é comparado
+    diretamente contra um desses dois (ex.: AnaliseIAExtras.atualizado_em) --
+    misturar as duas convenções desalinha a comparação por ~3h (mesma classe
+    de bug já corrigida em Match.analise_vista_em, commit 00c4dc7)."""
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
 from sqlalchemy import (
     String, Integer, Float, Text, DateTime, Date, Boolean, ForeignKey, JSON,
     UniqueConstraint,
@@ -353,7 +364,10 @@ class AnaliseIAExtras(Base):
     versao_catalogo_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verificacao_documentos_ia: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     versao_documentos_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # _brt_now, não utcnow -- ver docstring de _brt_now: main.py compara este
+    # campo direto contra Edital.analise_em (BRT naive) em
+    # _query_analise_pendente.
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=_brt_now, onupdate=_brt_now)
 
 
 class RegraExclusao(Base):

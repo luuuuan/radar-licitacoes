@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.main import notificacoes, STATUS_PARTICIPACAO
-from app.models import Base, Usuario, Edital, Match, Documento
+from app.models import Base, Usuario, Edital, Match, Documento, AnaliseIAExtras
 
 
 def _sessao():
@@ -36,6 +36,17 @@ def _edital(db, id_externo="ed1", data_encerramento=None, analise_em=None):
     db.add(ed)
     db.commit()
     return ed
+
+
+def _extras(db, usuario_id, edital_id, atualizado_em):
+    """Simula _rodar_extras_ia já ter terminado (comparação de catálogo +
+    verificação de documentos) pra este usuário+edital -- ver achado real em
+    _query_analise_pendente (main.py): a notificação "análise concluída" só
+    aparece quando ISSO também já rodou, não só a parte rápida (analise_em)."""
+    e = AnaliseIAExtras(usuario_id=usuario_id, edital_id=edital_id, atualizado_em=atualizado_em)
+    db.add(e)
+    db.commit()
+    return e
 
 
 # --------- 1. prazo fechando + vou participar --------- #
@@ -255,16 +266,56 @@ def test_documento_ja_vencido_tambem_aparece():
 def test_analise_concluida_depois_da_ultima_visita_aparece():
     db = _sessao()
     u = _usuario(db)
-    ed = _edital(db, analise_em=datetime.utcnow())
+    agora = datetime.utcnow()
+    ed = _edital(db, analise_em=agora)
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
-                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+                interagido_em=agora - timedelta(hours=2)))
     db.commit()
+    _extras(db, u.id, ed.id, agora)   # pacote inteiro (extras) já terminou
 
     r = notificacoes(user=u, db=db)
 
     item = next(i for i in r["itens"] if i["tipo"] == "analise")
     assert item["edital_id"] == ed.id
     assert item["aba"] == "analise"
+
+
+def test_analise_concluida_mas_extras_ainda_nao_terminou_nao_aparece():
+    """Achado real (usuário reportou 2x, edital 139008): Edital.analise_em é
+    gravado logo após a parte RÁPIDA da análise, mas a comparação de
+    catálogo/verificação de documentos (por usuário, mais lenta) ainda pode
+    estar rodando -- a notificação não pode disparar antes desse pacote
+    inteiro terminar (AnaliseIAExtras nem existe ainda pra este usuário)."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, analise_em=datetime.utcnow())
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+    db.commit()
+    # nenhum AnaliseIAExtras criado -- extras ainda não terminou
+
+    r = notificacoes(user=u, db=db)
+
+    assert not any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
+
+
+def test_analise_concluida_mas_extras_desatualizado_nao_aparece():
+    """Mesmo achado do teste acima, cenário de reanálise: existe um
+    AnaliseIAExtras de uma rodada ANTERIOR (atualizado_em antes do
+    analise_em atual) -- ainda não dá pra saber se o pacote da rodada NOVA
+    já terminou, então a notificação espera."""
+    db = _sessao()
+    u = _usuario(db)
+    agora = datetime.utcnow()
+    ed = _edital(db, analise_em=agora)
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=agora - timedelta(hours=2)))
+    db.commit()
+    _extras(db, u.id, ed.id, agora - timedelta(hours=1))   # extras de uma rodada anterior
+
+    r = notificacoes(user=u, db=db)
+
+    assert not any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
 
 
 def test_analise_concluida_antes_da_ultima_visita_a_aba_analise_nao_aparece():
@@ -290,11 +341,13 @@ def test_analise_concluida_continua_aparecendo_apos_visitar_outra_aba():
     sumir só por causa disso, senão o usuário nunca chega a vê-la."""
     db = _sessao()
     u = _usuario(db)
-    ed = _edital(db, analise_em=datetime.utcnow() - timedelta(hours=1))
+    analise_em = datetime.utcnow() - timedelta(hours=1)
+    ed = _edital(db, analise_em=analise_em)
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
                 interagido_em=datetime.utcnow(),   # visitou de novo (outra aba)...
                 analise_vista_em=None))            # ...mas nunca abriu a aba Análise
     db.commit()
+    _extras(db, u.id, ed.id, analise_em)
 
     r = notificacoes(user=u, db=db)
 
@@ -351,13 +404,15 @@ def test_notificacoes_e_por_usuario():
 def test_total_bate_com_tamanho_da_lista():
     db = _sessao()
     u = _usuario(db)
+    agora = datetime.utcnow()
     ed = _edital(db, data_encerramento=date.today() + timedelta(days=1),
-                analise_em=datetime.utcnow())
+                analise_em=agora)
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO,
-                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+                interagido_em=agora - timedelta(hours=2)))
     db.add(Documento(usuario_id=u.id, nome="CND Federal",
                      data_validade=date.today() + timedelta(days=1), ativo=True))
     db.commit()
+    _extras(db, u.id, ed.id, agora)
 
     r = notificacoes(user=u, db=db)
 
@@ -447,6 +502,7 @@ def test_ler_todas_marca_analise_vista_e_nao_volta_sozinha(monkeypatch):
     db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
                 interagido_em=datetime(2026, 9, 25, 13, 0)))
     db.commit()
+    _extras(db, u.id, ed.id, datetime(2026, 9, 25, 15, 0))
     assert notificacoes(user=u, db=db)["total"] == 1
 
     ler_todas_notificacoes(user=u, db=db)
@@ -465,10 +521,12 @@ def test_ler_todas_nao_mexe_no_match_de_outro_usuario():
     u2 = Usuario(nome="Outro", email="outro2@t.com", senha_hash="x")
     db.add(u2)
     db.commit()
-    ed = _edital(db, analise_em=datetime.utcnow())
+    agora = datetime.utcnow()
+    ed = _edital(db, analise_em=agora)
     db.add(Match(usuario_id=u1.id, edital_id=ed.id, score=0.5, nivel="medio",
-                interagido_em=datetime.utcnow() - timedelta(hours=2)))
+                interagido_em=agora - timedelta(hours=2)))
     db.commit()
+    _extras(db, u1.id, ed.id, agora)
 
     ler_todas_notificacoes(user=u2, db=db)
 
@@ -549,6 +607,7 @@ def test_registrar_interacao_analise_vista_em_usa_mesmo_fuso_que_analise_em(monk
     # da janela de 3h onde o bug antigo (UTC vs BRT) escondia a notificação
     ed.analise_em = datetime(2026, 9, 25, 12, 0)
     db.commit()
+    _extras(db, u.id, ed.id, datetime(2026, 9, 25, 12, 0))   # extras da reanálise também terminou
 
     r = notificacoes(user=u, db=db)
 
@@ -578,6 +637,7 @@ def test_ler_todas_grava_notificacoes_lidas_em_e_analise_vista_em_em_fuso_de_bra
                   interagido_em=datetime(2026, 9, 25, 21, 0))
     db.add(match)
     db.commit()
+    _extras(db, u.id, ed.id, datetime(2026, 9, 25, 21, 30))
 
     ler_todas_notificacoes(user=u, db=db)
 
