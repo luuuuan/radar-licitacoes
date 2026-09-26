@@ -1826,6 +1826,20 @@ def listar_editais(
     for match, ed in linhas:
         dias = _dias_restantes_edital(ed)
         detalhe = match.detalhe if match else None
+        # achado real (usuário reportou): abrir/interagir com um edital sem
+        # sinal automático nenhum (_match_do_usuario_por_edital, chamado por
+        # marcar/status/interacao) cria um Match na hora só pra guardar
+        # lido/interessante/status/interagido_em, com nivel/score que NUNCA
+        # foram calculados de verdade -- sem essa distinção, o card passava
+        # a mostrar "Média compatibilidade" só por o usuário ter aberto o
+        # edital. O motor sempre grava detalhe (mesmo pro "fraco" que
+        # sobrevive por engajamento, ver service.py) -- detalhe None é o
+        # sinal de "nunca avaliado de verdade", só criado pela própria
+        # interação do usuário. match_id também é escondido aqui de
+        # propósito: o front decide cardEdital x cardEditalSemMatch por
+        # `e.match_id`, e este caso deve renderizar exatamente como um
+        # edital sem match nenhum (mesmo a linha existindo no banco).
+        match_avaliado = match is not None and detalhe is not None
         itens_compativeis = match.itens_compativeis if match else 0
         if detalhe and detalhe.get("itens"):
             itens_compativeis = sum(1 for it in detalhe["itens"] if _item_conta_como_compativel(it))
@@ -1849,14 +1863,14 @@ def listar_editais(
                     }
             detalhe = {**detalhe, "itens": itens_copia}
         out.append({
-            "match_id": match.id if match else None, "edital_id": ed.id,
+            "match_id": match.id if match_avaliado else None, "edital_id": ed.id,
             "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
             "municipio": ed.municipio, "modalidade": ed.modalidade,
             "plataforma": ed.plataforma,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed), "link": ed.link,
-            "score": match.score if match else None, "nivel": match.nivel if match else None,
+            "score": match.score if match_avaliado else None, "nivel": match.nivel if match_avaliado else None,
             "itens_compativeis": itens_compativeis,
             "lido": match.lido if match else False, "interessante": match.interessante if match else False,
             "status": match.status if match else None,
@@ -2236,6 +2250,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         _reconsultar_datas_pncp(ed, db)
     match = db.execute(select(Match).where(Match.edital_id == edital_id)
                        .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    match_avaliado = match is not None and match.detalhe is not None
 
     # item (número) -> dado bruto do detalhe do match
     itens_match: dict = {}
@@ -2321,9 +2336,22 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
             "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
             "bloqueio_edicao": _bloqueio_edicao_edital(ed, match, user, db),
-            "nivel": match.nivel if match else None,
-            "score": match.score if match else None,
-            "match_id": match.id if match else None,
+            # match_avaliado (não só "match"): achado real (usuário
+            # reportou -- ver mesmo achado em listar_editais) -- abrir/
+            # interagir com um edital sem sinal automático nenhum
+            # (_match_do_usuario_por_edital, chamado por marcar/status/
+            # interacao) cria um Match na hora só pra guardar lido/
+            # interessante/status/interagido_em, com nivel/score que NUNCA
+            # foram calculados de verdade -- sem essa distinção, a própria
+            # página do edital mostrava "Média compatibilidade" no
+            # cabeçalho só por o usuário ter aberto a aba. O motor sempre
+            # grava detalhe (mesmo pro "fraco" que sobrevive por
+            # engajamento, ver service.py) -- detalhe None é o sinal de
+            # "nunca avaliado de verdade", só criado pela própria interação
+            # do usuário.
+            "nivel": match.nivel if match_avaliado else None,
+            "score": match.score if match_avaliado else None,
+            "match_id": match.id if match_avaliado else None,
             "lido": match.lido if match else None,
             "interessante": match.interessante if match else None,
             "status": match.status if match else None,
