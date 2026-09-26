@@ -205,6 +205,33 @@
     background:rgba(239,68,68,.14);border-radius:999px;padding:2px 8px;white-space:nowrap}
   .widget .sub{font-size:11px;color:var(--muted);margin-top:2px}
 
+  /* Pipeline (kanban por status) -- colunas roláveis na horizontal (uma
+     tela pode ter mais colunas do que cabe de largura, mesmo em desktop),
+     cada coluna rolando na vertical por conta própria (o cabeçalho da
+     coluna fica fixo, só os cards rolam) pra não perder a contagem/título
+     ao rolar uma lista comprida. */
+  .pipeline-board{display:flex;gap:14px;margin-top:16px;overflow-x:auto;padding-bottom:6px;align-items:flex-start}
+  .pipeline-coluna{flex:0 0 260px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;display:flex;flex-direction:column;max-height:calc(100vh - 260px)}
+  .pipeline-coluna.arraste-sobre{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-pale, var(--accent)) inset}
+  .pipeline-coluna h3{font-size:13px;margin:0;padding:12px 14px;display:flex;
+    align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line)}
+  .pipeline-coluna h3 .contagem{font-size:11px;font-weight:700;color:var(--muted);
+    background:var(--panel2);border-radius:999px;padding:1px 8px}
+  .pipeline-cards{padding:10px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-height:60px}
+  .pipeline-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;cursor:grab;border-left:3px solid var(--fraco)}
+  .pipeline-card[data-nivel="forte"]{border-left-color:var(--forte)}
+  .pipeline-card[data-nivel="medio"]{border-left-color:var(--medio)}
+  .pipeline-card.arrastando{opacity:.4}
+  .pipeline-card .orgao{font-size:12px;font-weight:700;display:-webkit-box;-webkit-line-clamp:2;
+    -webkit-box-orient:vertical;overflow:hidden}
+  .pipeline-card .objeto{font-size:11px;color:var(--muted);margin-top:3px;display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pipeline-card .meta{display:flex;justify-content:space-between;gap:6px;margin-top:6px;
+    font-size:11px;color:var(--muted);align-items:center}
+  .pipeline-vazio{padding:14px 12px;font-size:11px;color:var(--muted);text-align:center}
+
   .nav-semana{display:flex;align-items:center;gap:2px;flex-shrink:0}
   .nav-semana button{display:flex;align-items:center;justify-content:center;
     background:none;border:1px solid var(--line);color:var(--muted);
@@ -1028,6 +1055,7 @@
           <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
         <div class="nav-dropdown">
           <button data-tab="editais" onclick="tab('editais')">Encontrados</button>
+          <button data-tab="pipeline" onclick="tab('pipeline')">Pipeline</button>
           <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
           <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
         </div>
@@ -1092,6 +1120,7 @@
         <svg class="nav-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
       <div class="nav-dropdown">
         <button data-tab="editais" onclick="tab('editais')">Encontrados</button>
+        <button data-tab="pipeline" onclick="tab('pipeline')">Pipeline</button>
         <button data-tab="encerrados" onclick="tab('encerrados')">Encerrados</button>
         <button data-tab="favoritos" onclick="tab('favoritos')">Favoritos</button>
       </div>
@@ -1294,6 +1323,18 @@
         <div id="lista-editais"></div>
       </div>
     </div>
+  </section>
+
+  <!-- PIPELINE (funil por status -- pedido do usuário) -->
+  <section id="t-pipeline" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Pipeline</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">
+        Editais de alta compatibilidade ainda não decididos, mais qualquer edital em que você já mudou o status —
+        arraste um card entre as colunas pra atualizar a situação (mesmo campo já editável na aba Editais).
+      </p>
+    </div>
+    <div id="pipeline-board" class="pipeline-board"></div>
   </section>
 
   <!-- ENCERRADOS (que participei) -->
@@ -2273,7 +2314,7 @@ function tab(name){
     const grupo = ativo.closest('.nav-grupo-wrap');
     if(grupo) grupo.querySelector('.nav-grupo-btn').classList.add('tem-ativo');
   });
-  ['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
+  ['inicio','editais','pipeline','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].forEach(t=>$('#t-'+t).classList.toggle('hidden',t!==name));
   // a página de um edital (#t-edital) não faz parte da lista acima — sem
   // isso, ir para qualquer aba normal a partir dela (inclusive pelos cards
   // de KPI, ex. "Produtos"/"Editais ativos") carregava o conteúdo novo mas
@@ -2302,6 +2343,7 @@ function tab(name){
   // entrar pela navegação normal sempre reseta o filtro de status (mesmo
   // que uma visita anterior via verGanhosEmEncerrados() tenha deixado
   // "ganho" grudado) -- só quem entra explicitamente por ali pede filtro.
+  if(name==='pipeline') loadPipeline();
   if(name==='encerrados') loadEncerrados(true, null);
   if(name==='favoritos') loadFavoritos();
   if(name==='catalogo') loadProdutos();
@@ -3885,6 +3927,75 @@ async function mudarStatus(matchId, status){
   await api(`/api/editais/${matchId}/status`,{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
   loadResumo();
+}
+
+// ---------------- Pipeline (funil por status, pedido do usuário) ---------------- //
+// Kanban simples: arrastar (desktop, HTML5 drag-and-drop nativo) OU o select
+// de status em cada card (sempre funciona, inclusive no celular -- drag-and-
+// -drop nativo não é confiável em touch). Os dois caminhos chamam a MESMA
+// mudarStatus() já usada pelo dropdown de status em Editais -- nenhuma rota
+// nova só pra mover o card.
+function rotuloStatusPipeline(s){
+  return {novo:'Novo', vou_participar:'Vou participar', proposta_enviada:'Proposta enviada',
+          ganho:'Ganho', perdido:'Perdido', descartado:'Descartado'}[s] || s;
+}
+let _pipelineOrdem = [];
+async function loadPipeline(){
+  const board = $('#pipeline-board');
+  board.innerHTML = _radarCarregandoHTML('Carregando pipeline...');
+  const r = await api('/api/pipeline');
+  _pipelineOrdem = r.ordem || [];
+  board.innerHTML = _pipelineOrdem.map(status => _pipelineColunaHTML(status, (r.colunas||{})[status]||[])).join('');
+}
+function _pipelineColunaHTML(status, itens){
+  return `<div class="pipeline-coluna" data-status="${esc(status)}"
+      ondragover="_pipelineDragOver(event)" ondragleave="_pipelineDragLeave(event)" ondrop="_pipelineDrop(event,'${status}')">
+    <h3>${esc(rotuloStatusPipeline(status))} <span class="contagem">${itens.length}</span></h3>
+    <div class="pipeline-cards">
+      ${itens.length ? itens.map(c=>_pipelineCardHTML(c, status)).join('') : '<div class="pipeline-vazio">Nenhum edital aqui</div>'}
+    </div>
+  </div>`;
+}
+function _pipelineCardHTML(c, statusAtual){
+  const linkEdital = linkSeguro(c.link);
+  const prazo = c.dias_restantes==null ? 'prazo n/d' : fmtPrazoEdital(c.dias_restantes, c.status_prazo);
+  return `<div class="pipeline-card" draggable="true" data-edital-id="${c.edital_id}" data-nivel="${esc(c.nivel||'')}"
+      ondragstart="_pipelineDragStart(event,${c.edital_id})" ondragend="_pipelineDragEnd(event)">
+    <div class="orgao" onclick="abrirPaginaEdital(${c.edital_id})" style="cursor:pointer" title="Ver edital">${esc(c.orgao||'Órgão não informado')}</div>
+    <div class="objeto">${esc(c.objeto||'')}</div>
+    <div class="meta"><span>${fmtMoeda(c.valor_estimado)}</span><span>${esc(prazo)}</span></div>
+    ${linkEdital?`<div class="meta"><a href="${esc(linkEdital)}" target="_blank" onclick="event.stopPropagation()">Abrir edital ${ICN.externo}</a></div>`:''}
+    <select class="status-sel st-${esc(statusAtual)}" style="margin-top:6px;width:100%;font-size:11px"
+        onclick="event.stopPropagation()" onchange="_pipelineMoverCard(${c.edital_id}, this.value)">
+      ${_pipelineOrdem.map(s=>`<option value="${s}"${s===statusAtual?' selected':''}>${esc(rotuloStatusPipeline(s))}</option>`).join('')}
+    </select>
+  </div>`;
+}
+let _pipelineArrastandoId = null;
+function _pipelineDragStart(ev, editalId){
+  _pipelineArrastandoId = editalId;
+  ev.currentTarget.classList.add('arrastando');
+  ev.dataTransfer.effectAllowed = 'move';
+  try{ ev.dataTransfer.setData('text/plain', String(editalId)); }catch(e){}   // alguns navegadores exigem setData pro drag valer
+}
+function _pipelineDragEnd(ev){ ev.currentTarget.classList.remove('arrastando'); }
+function _pipelineDragOver(ev){ ev.preventDefault(); ev.currentTarget.classList.add('arraste-sobre'); }
+function _pipelineDragLeave(ev){ ev.currentTarget.classList.remove('arraste-sobre'); }
+async function _pipelineDrop(ev, novoStatus){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('arraste-sobre');
+  const editalId = _pipelineArrastandoId;
+  _pipelineArrastandoId = null;
+  if(editalId==null) return;
+  await _pipelineMoverCard(editalId, novoStatus);
+}
+async function _pipelineMoverCard(editalId, novoStatus){
+  const cardAtual = document.querySelector(`.pipeline-card[data-edital-id="${editalId}"]`);
+  const colunaOrigem = cardAtual ? cardAtual.closest('.pipeline-coluna') : null;
+  if(colunaOrigem && colunaOrigem.dataset.status === novoStatus) return;   // soltou na mesma coluna, nada a fazer
+  await mudarStatus(editalId, novoStatus);
+  toast('Status atualizado.', 'ok');
+  loadPipeline();
 }
 
 const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});

@@ -2163,6 +2163,47 @@ def mudar_status(edital_id: int, dados: StatusIn,
     return {"ok": True}
 
 
+# Ordem das colunas do funil (aba Pipeline) -- terminal (ganho/perdido/
+# descartado) por último, de propósito: reflete o fluxo natural de uma
+# oportunidade, não a ordem alfabética nem a de STATUS_VALIDOS (que é um
+# set, sem ordem nenhuma).
+_STATUS_ORDEM_PIPELINE = ["novo", STATUS_PARTICIPACAO, "proposta_enviada", "ganho", "perdido", "descartado"]
+
+
+@app.get("/api/pipeline")
+def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depends(get_session)):
+    """Editais do usuário organizados por Match.status, pra visão de funil
+    (aba Pipeline) -- pedido do usuário. Mesmo status já editável no
+    dropdown de cada card em Editais; aqui o card MOVE de coluna ao
+    arrastar (o front chama o mesmo POST /api/editais/{edital_id}/status
+    de sempre, sem rota nova só pra mover).
+
+    Escopo: só matches com status != "novo" (usuário já tomou alguma ação
+    -- marcar "vou participar", enviar proposta, etc.) OU nivel == "forte"
+    (alta compatibilidade, fila de triagem que ainda não foi decidida).
+    Sem esse filtro, a coluna "Novo" teria TODO match "novo"/"médio"/"fraco"
+    que o motor automático já criou (pode ser centenas ou milhares) -- a
+    grande maioria que o usuário nunca abriu nem vai abrir, o mesmo
+    problema de escala já visto em outras telas deste app."""
+    linhas = db.execute(
+        select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
+        .where(Match.usuario_id == user.id)
+        .where(or_(Match.status != "novo", Match.nivel == "forte"))
+        .order_by(Edital.data_abertura.asc().nulls_last())
+    ).all()
+    colunas: dict[str, list] = {s: [] for s in _STATUS_ORDEM_PIPELINE}
+    for match, ed in linhas:
+        colunas[match.status].append({
+            "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
+            "uf": ed.uf, "municipio": ed.municipio,
+            "valor_estimado": ed.valor_estimado,
+            "dias_restantes": _dias_restantes_edital(ed),
+            "status_prazo": _status_prazo_edital(ed),
+            "nivel": match.nivel, "score": match.score, "link": ed.link,
+        })
+    return {"colunas": colunas, "ordem": _STATUS_ORDEM_PIPELINE}
+
+
 @app.post("/api/editais/{edital_id}/interacao")
 def registrar_interacao(edital_id: int, aba: str | None = Query(None),
                         user: Usuario = Depends(_auth.get_current_user),
