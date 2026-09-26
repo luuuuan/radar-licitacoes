@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # Banco de dados
     DATABASE_URL: str = "postgresql+psycopg2://radar:radar@db:5432/radar"
 
+    # Bot protection no cadastro (Cloudflare Turnstile, gratuito). SITE_KEY é
+    # pública (vai pro HTML de /cadastro sem problema); SECRET_KEY nunca sai
+    # do servidor. Ambas vazias (padrão) = captcha desligado, mesmo padrão de
+    # outras integrações opcionais deste app (SMTP, chave Gemini): o cadastro
+    # continua funcionando sem, só fica sem essa camada extra até configurar
+    # as duas em dash.cloudflare.com -> Turnstile.
+    TURNSTILE_SITE_KEY: str = ""
+    TURNSTILE_SECRET_KEY: str = ""
+
     # PNCP (API pública de consultas — Lei 14.133/2021)
     PNCP_BASE_URL: str = "https://pncp.gov.br/api/consulta"
     PNCP_ITENS_BASE_URL: str = "https://pncp.gov.br/api/pncp"

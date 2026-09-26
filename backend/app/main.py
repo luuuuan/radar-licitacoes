@@ -64,11 +64,109 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Minha Licitação", version="2.0", lifespan=lifespan)
+# mesmo sinal já usado por cookie_sessao (auth.py) pra decidir "secure" no
+# cookie -- reaproveitado aqui em vez de mais uma flag de ambiente nova.
+_PRODUCAO = settings.APP_BASE_URL.startswith("https")
+
+
+def _urls_documentacao(producao: bool) -> tuple[str | None, str | None, str | None]:
+    """(docs_url, redoc_url, openapi_url) pro construtor do FastAPI -- None
+    desliga a rota. Achado real (auditoria de segurança pedida pelo usuário,
+    item 15): /docs, /redoc e /openapi.json ficavam públicos em produção
+    (confirmado ao vivo, sem exigir login) -- expunham o mapa inteiro da API
+    (toda rota, parâmetro e formato) pra qualquer visitante. Continuam
+    ligados localmente (sem APP_BASE_URL https) pra não atrapalhar o
+    desenvolvimento. Extraído numa função pura só pra dar pra testar sem
+    precisar recriar o app inteiro."""
+    if producao:
+        return None, None, None
+    return "/docs", "/redoc", "/openapi.json"
+
+
+_docs_url, _redoc_url, _openapi_url = _urls_documentacao(_PRODUCAO)
+
+app = FastAPI(
+    title="Minha Licitação", version="2.0", lifespan=lifespan,
+    docs_url=_docs_url, redoc_url=_redoc_url, openapi_url=_openapi_url,
+)
 
 # Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
 _ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar", "/redefinir-senha"}
 _PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
+
+
+# ---------------------------------------------------------------------------
+# Cabeçalhos de segurança (item 18 da auditoria pedida pelo usuário) + rate
+# limit geral (item 11). O app inteiro (index.html) é UM script/style inline
+# só (nenhum <script src=...> externo, handlers via onclick= por toda a
+# tela) -- uma CSP sem 'unsafe-inline' em script-src/style-src quebraria o
+# app inteiro (nada executaria). Travar isso de verdade (bloquear inline)
+# exigiria reescrever o front pra nonce/addEventListener -- fora do escopo
+# desta auditoria; deixado documentado aqui pra não parecer um descuido.
+# Mesmo com 'unsafe-inline' ligado, as outras diretivas ainda valem de
+# verdade: um XSS que conseguisse rodar não teria como exfiltrar dado pra
+# fora (connect-src/img-src restritos a 'self'), nem hijackar a página via
+# <base> (base-uri) ou formulário (form-action), nem ser embutido em
+# iframe de outro site (frame-ancestors).
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-src https://challenges.cloudflare.com; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+# rate limit geral -- reusa o mesmo mecanismo já usado pras rotas de auth
+# (ratelimit.py), só que aplicado a QUALQUER rota /api/*. Generoso de
+# propósito: várias abas/usuários por trás do mesmo IP (rede de escritório)
+# fazem polling normal a cada 30s (notificações, status de coleta/análise)
+# -- o limite existe pra barrar flood/scraping automatizado, não pra
+# incomodar uso real, por mais pesado que seja.
+_ROTAS_SEM_RATE_LIMIT_GERAL = {"/health", "/api/coletar-cron"}
+_LIMITE_API_GERAL = 600
+_JANELA_API_GERAL_SEG = 60
+
+
+def _checar_rate_limit_geral(path: str, ip: str) -> None:
+    """Levanta 429 (via ratelimit.checar) se `ip` já bateu o limite geral de
+    chamadas /api/* dentro da janela -- extraído numa função pura (sem
+    Request/middleware) só pra dar pra testar direto, mesmo padrão dos
+    outros testes deste app (chamar a função, não montar um cliente HTTP)."""
+    if path.startswith("/api/") and path not in _ROTAS_SEM_RATE_LIMIT_GERAL:
+        _rl.checar(f"api-geral-ip:{ip}", limite=_LIMITE_API_GERAL, janela_seg=_JANELA_API_GERAL_SEG)
+
+
+def _aplicar_cabecalhos_seguranca(resp: Response, producao: bool) -> None:
+    """Aplica os cabeçalhos de segurança padrão (item 18) numa Response já
+    pronta -- extraído numa função pura pelo mesmo motivo de
+    _checar_rate_limit_geral acima."""
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    resp.headers["Content-Security-Policy"] = _CSP
+    if producao:
+        # só faz sentido com https de verdade (senão o navegador ignora) --
+        # local/sem APP_BASE_URL não manda, pra não travar http://localhost.
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+
+@app.middleware("http")
+async def _seguranca_http(request: Request, call_next):
+    try:
+        _checar_rate_limit_geral(request.url.path, _rl.ip_cliente(request))
+    except HTTPException as e:
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code,
+                            headers=getattr(e, "headers", None))
+    resp = await call_next(request)
+    _aplicar_cabecalhos_seguranca(resp, _PRODUCAO)
+    return resp
 
 BASE_DIR = os.path.dirname(__file__)
 # A pasta static fica em backend/static (um nível acima de backend/app)
@@ -123,6 +221,46 @@ class CadastroIn(BaseModel):
     dados_empresa: dict | None = None   # {telefone, representante_legal, inscricao_estadual,
                                          #  inscricao_municipal, banco_nome, banco_agencia, banco_conta}
     logo_base64: str | None = None      # data URI ("data:image/png;base64,...") pra timbrar a proposta
+    turnstile_token: str | None = None  # resposta do widget Cloudflare Turnstile (ver _verificar_turnstile)
+
+
+# bot protection no cadastro (item 12 da auditoria de segurança pedida pelo
+# usuário) -- Cloudflare Turnstile, mesmo domínio que já está na frente do
+# app (Cloudflare), gratuito. TURNSTILE_SECRET_KEY vazia (padrão) = captcha
+# desligado, mesmo padrão de outras integrações opcionais aqui (SMTP, chave
+# Gemini): o cadastro continua funcionando normal sem, só sem essa camada
+# extra até configurar. Escopo só no cadastro (não no login) -- login já tem
+# rate limit por IP+e-mail bem mais restrito, e exigir captcha em TODO login
+# atrapalharia quem usa o app todo dia; cadastro é ação única por conta,
+# custo de UX bem menor.
+_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+def _verificar_turnstile(token: str | None, request: Request) -> None:
+    if not settings.TURNSTILE_SECRET_KEY:
+        return
+    if not token:
+        raise HTTPException(400, "Confirme que você não é um robô.")
+    try:
+        r = requests.post(_TURNSTILE_VERIFY_URL, data={
+            "secret": settings.TURNSTILE_SECRET_KEY,
+            "response": token,
+            "remoteip": _rl.ip_cliente(request),
+        }, timeout=10)
+        ok = bool(r.json().get("success"))
+    except (requests.RequestException, ValueError):
+        ok = False
+    if not ok:
+        raise HTTPException(400, "Não foi possível confirmar que você não é um robô. Tente novamente.")
+
+
+@app.get("/api/auth/turnstile-config")
+def turnstile_config():
+    """Público de propósito (antes do login) -- a página de cadastro chama
+    isso pra saber se deve renderizar o widget (e com qual site key). Vazio
+    quando TURNSTILE_SITE_KEY não está configurada: o front simplesmente não
+    mostra nada, igual ao captcha desligado no backend."""
+    return {"site_key": settings.TURNSTILE_SITE_KEY or None}
 
 
 def _email_html_verificacao(nome: str, link: str) -> str:
@@ -216,6 +354,7 @@ def auth_cadastro(dados: CadastroIn, request: Request, resp: _Resp, bg: Backgrou
     # rajada) -- barra criação automatizada de contas em massa a partir de
     # um mesmo IP.
     _rl.checar(f"cadastro-ip:{_rl.ip_cliente(request)}", limite=5, janela_seg=3600)
+    _verificar_turnstile(dados.turnstile_token, request)
     # valida e-mail
     try:
         email = validate_email(dados.email, check_deliverability=False).normalized.lower()

@@ -256,6 +256,10 @@
       <span class="espaco"></span>
       <button type="button" class="btn" id="wizard-avancar" onclick="wizardAvancar()">Avançar</button>
     </div>
+    <!-- widget do Cloudflare Turnstile (bot protection) -- só aparece se o
+         backend tiver TURNSTILE_SITE_KEY configurada (ver _iniciarTurnstile
+         no <script> abaixo); sem isso, fica vazio e o cadastro segue igual. -->
+    <div id="turnstile-cadastro" class="hidden" style="margin:10px 0"></div>
     <button id="c-submit" class="btn hidden" type="submit">Criar conta</button>
   </form>
 
@@ -316,6 +320,30 @@ function mascaraRgLogin(v){
   const d=(v||'').toUpperCase().replace(/[^0-9X]/g,'').slice(0,9);
   return d.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2}\.\d{3})(\d)/,'$1.$2')
           .replace(/^(\d{2}\.\d{3}\.\d{3})([0-9X])/,'$1-$2');
+}
+// Bot protection no cadastro (Cloudflare Turnstile) -- só carrega o script
+// externo e mostra o widget se o backend tiver TURNSTILE_SITE_KEY
+// configurada (GET /api/auth/turnstile-config, público). Sem isso
+// configurado (padrão), o cadastro segue funcionando normalmente sem
+// captcha nenhum -- mesmo espírito de outras integrações opcionais do app.
+let _turnstileWidgetId = null;
+async function _iniciarTurnstile(){
+  if(_turnstileWidgetId !== null) return;   // já iniciado (F5 na mesma aba)
+  try{
+    const r = await fetch('/api/auth/turnstile-config');
+    const d = await r.json();
+    if(!d.site_key) return;
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+      script.async = true; script.defer = true;
+      script.onload = resolve; script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    const alvo = $('#turnstile-cadastro');
+    alvo.classList.remove('hidden');
+    _turnstileWidgetId = turnstile.render(alvo, {sitekey: d.site_key, theme: 'auto'});
+  }catch(e){ /* falha ao carregar o widget não pode travar o cadastro */ }
 }
 function mostrar(qual){
   const formularios = {login:'#form-login', cadastro:'#form-cadastro',
@@ -541,8 +569,13 @@ async function cadastrar(e){
     endereco: temEndereco ? endereco : null,
     dados_empresa: temDadosEmpresa ? dadosEmpresa : null,
     logo_base64: _wizardLogoBase64 || null,
+    turnstile_token: _turnstileWidgetId !== null ? turnstile.getResponse(_turnstileWidgetId) : null,
   });
   btn.disabled=false;
+  // token do Turnstile é de uso único -- reseta pra próxima tentativa,
+  // dê ela certo ou errada (senão a 2ª tentativa manda o mesmo token
+  // já consumido e o backend rejeita mesmo com o desafio resolvido certo).
+  if(_turnstileWidgetId !== null) turnstile.reset(_turnstileWidgetId);
   if(r.ok){
     if(r.data.verificar_email){
       msg(r.data.mensagem || 'Enviamos um link de confirmação para o seu e-mail. Confirme para entrar.', 'ok');
@@ -632,7 +665,7 @@ async function redefinirSenha(e){
       msg(detalhe);
     }
   }
-  if(location.pathname==='/cadastro') mostrar('cadastro');
+  if(location.pathname==='/cadastro'){ mostrar('cadastro'); _iniciarTurnstile(); }
   if(location.pathname==='/redefinir-senha'){
     mostrar('redefinir');
     if(!params.get('token')) msg('Link de redefinição inválido ou expirado.');
