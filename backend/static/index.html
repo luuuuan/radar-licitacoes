@@ -429,7 +429,6 @@
     color:var(--forte);background:rgba(34,197,94,.14);
     border:1.5px solid var(--forte);border-radius:999px;padding:3px 11px}
   .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
-  .acoes a{color:var(--accent);text-decoration:none;font-size:13px}
   table{width:100%;border-collapse:collapse}
   th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--muted);font-weight:600}
@@ -756,7 +755,6 @@
     .modal{padding:14px 8px}
     .modal-card{padding:16px;max-width:100%}
     .acoes .btn,.acoes .status-sel{flex:1 1 auto}
-    .acoes a{flex-basis:100%}
     /* nenhum campo/elemento pode ser mais largo que a tela */
     .wrap,section,.card{max-width:100%}
     input,select,textarea{max-width:100%}
@@ -775,7 +773,6 @@
     .pill{font-size:12px}
     .kpi .l{font-size:13px}
     .ed-meta{font-size:13px}
-    .acoes a{font-size:14px}
     .det{font-size:13px}
     label{font-size:13px}
     .forn{font-size:14px}
@@ -2912,7 +2909,7 @@ function cardEdital(e){
     </div>
     ${det?`<div class="det">${det}</div>`:''}
     <div class="acoes">
-      ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      ${linkEdital?`<a class="btn ghost" href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
       <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.edital_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
@@ -3332,7 +3329,7 @@ function cardEditalSemMatch(e){
     </div>
     ${itens?`<div class="det">${itens}</div>`:''}
     <div class="acoes">
-      ${linkEdital?`<a href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
+      ${linkEdital?`<a class="btn ghost" href="${esc(linkEdital)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}
       <button class="btn ghost" onclick="abrirPaginaEdital(${e.edital_id})">${ICN.detalhe} Ver edital</button>
       <select class="status-sel st-${e.status}" onchange="mudarStatus(${e.edital_id}, this.value)" title="Acompanhamento">
         <option value="novo"${e.status==='novo'?' selected':''}>Novo</option>
@@ -3976,7 +3973,8 @@ function _pipelineCardHTML(c){
     </div>
     <div class="objeto">${esc(c.objeto||'')}</div>
     <div class="meta"><span>${fmtMoeda(c.valor_estimado)}</span><span>${esc(prazo)}</span></div>
-    ${linkEdital?`<div class="meta"><a href="${esc(linkEdital)}" target="_blank" onclick="event.stopPropagation()">Abrir edital ${ICN.externo}</a></div>`:''}
+    ${linkEdital?`<a class="btn ghost" href="${esc(linkEdital)}" target="_blank" onclick="event.stopPropagation()"
+        style="display:block;margin-top:6px;width:100%;text-align:center;padding:4px 0;font-size:11px;box-sizing:border-box">Abrir edital ${ICN.externo}</a>`:''}
   </div>`;
 }
 let _pipelineArrastandoId = null;
@@ -4071,7 +4069,7 @@ async function abrirEditaisPreco(produtoId){
             <td>${esc(l.orgao||'—')}</td>
             <td class="muted">${esc(local||'—')}</td>
             <td>${fmtR(l.valor_unitario)}${l.valor_original!=null?`<br><span class="muted" style="font-size:11px">valor por unidade — órgão cotou ${fmtR(l.valor_original)} pela embalagem</span>`:''}${excluido?`<br><span class="muted" style="font-size:11px">excluído do cálculo — ${esc(motivoTxt[l.motivo_exclusao]||'')}</span>`:''}</td>
-            <td>${link?`<a href="${esc(link)}" target="_blank">Abrir edital ↗</a>`:''}</td>
+            <td>${link?`<a class="btn ghost" href="${esc(link)}" target="_blank">Abrir edital ${ICN.externo}</a>`:''}</td>
           </tr>`;
         }).join('')}</tbody></table>`
       : '<p class="muted">Nenhum edital encontrado para este produto.</p>';
