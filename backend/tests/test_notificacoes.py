@@ -38,12 +38,15 @@ def _edital(db, id_externo="ed1", data_encerramento=None, analise_em=None):
     return ed
 
 
-def _extras(db, usuario_id, edital_id, atualizado_em):
-    """Simula _rodar_extras_ia já ter terminado (comparação de catálogo +
-    verificação de documentos) pra este usuário+edital -- ver achado real em
-    _query_analise_pendente (main.py): a notificação "análise concluída" só
-    aparece quando ISSO também já rodou, não só a parte rápida (analise_em)."""
-    e = AnaliseIAExtras(usuario_id=usuario_id, edital_id=edital_id, atualizado_em=atualizado_em)
+def _extras(db, usuario_id, edital_id, pacote_concluido_em):
+    """Simula o PACOTE INTEIRO de extras (comparação de catálogo +
+    verificação de documentos) já ter terminado pra este usuário+edital --
+    ver achado real em _query_analise_pendente (main.py): a notificação
+    "análise concluída" só aparece quando ISSO também já rodou, não só a
+    parte rápida (analise_em). pacote_concluido_em (não atualizado_em, que
+    tem onupdate automático e bate cedo demais -- ver edital 145353 em
+    test_analise_extras_cache.py) é o campo que representa isso."""
+    e = AnaliseIAExtras(usuario_id=usuario_id, edital_id=edital_id, pacote_concluido_em=pacote_concluido_em)
     db.add(e)
     db.commit()
     return e
@@ -293,6 +296,28 @@ def test_analise_concluida_mas_extras_ainda_nao_terminou_nao_aparece():
                 interagido_em=datetime.utcnow() - timedelta(hours=2)))
     db.commit()
     # nenhum AnaliseIAExtras criado -- extras ainda não terminou
+
+    r = notificacoes(user=u, db=db)
+
+    assert not any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
+
+
+def test_analise_concluida_mas_so_atualizado_em_sem_pacote_concluido_nao_aparece():
+    """Achado real (usuário reportou, edital 145353): AnaliseIAExtras.
+    atualizado_em tem onupdate AUTOMÁTICO e já bate assim que a PRIMEIRA das
+    duas checagens (verificação de documentos, comparação de catálogo)
+    grava -- não é sinal confiável de que o PACOTE INTEIRO terminou. A
+    notificação exige pacote_concluido_em (tocado manualmente, uma vez, só
+    no fim das duas), que aqui fica None mesmo com atualizado_em já batido."""
+    db = _sessao()
+    u = _usuario(db)
+    agora = datetime.utcnow()
+    ed = _edital(db, analise_em=agora)
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio",
+                interagido_em=agora - timedelta(hours=2)))
+    db.commit()
+    db.add(AnaliseIAExtras(usuario_id=u.id, edital_id=ed.id, atualizado_em=agora, pacote_concluido_em=None))
+    db.commit()
 
     r = notificacoes(user=u, db=db)
 

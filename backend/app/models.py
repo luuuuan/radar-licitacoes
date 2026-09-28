@@ -370,10 +370,24 @@ class AnaliseIAExtras(Base):
     versao_catalogo_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verificacao_documentos_ia: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     versao_documentos_calc: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # _brt_now, não utcnow -- ver docstring de _brt_now: main.py compara este
-    # campo direto contra Edital.analise_em (BRT naive) em
-    # _query_analise_pendente.
+    # _brt_now, não utcnow -- ver docstring de _brt_now. Só serve pra "qual
+    # dos dois campos abaixo mudou por último" -- NÃO é mais o campo que
+    # _query_analise_pendente usa pra saber se o pacote inteiro terminou
+    # (ver pacote_concluido_em).
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=_brt_now, onupdate=_brt_now)
+    # Achado real (usuário reportou, edital 145353): atualizado_em (acima)
+    # tem onupdate AUTOMÁTICO -- dispara já na PRIMEIRA das duas checagens
+    # que _rodar_extras_ia roda em sequência (verificação de documentos,
+    # depois comparação de catálogo), não só quando as DUAS terminam. A
+    # notificação "análise concluída" (main.py:_query_analise_pendente)
+    # comparava contra esse campo e podia disparar minutos antes da
+    # comparação de catálogo (até 90s por lote, catálogo grande) realmente
+    # acabar -- usuário clicava, a página ainda mostrava o loader. Este
+    # campo só é tocado manualmente, UMA VEZ, em main.py:_marcar_extras_
+    # completos, exatamente quando _rodar_extras_ia retorna com as duas
+    # etapas já feitas -- bate 1:1 com o momento em que o polling do front
+    # (rodando:false) sai do loader de verdade.
+    pacote_concluido_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RegraExclusao(Base):

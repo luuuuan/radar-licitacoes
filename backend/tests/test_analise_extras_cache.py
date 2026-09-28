@@ -241,7 +241,7 @@ def test_pacote_completo_de_extras_habilita_notificacao_de_analise_concluida():
     """Prova de ponta a ponta (não um AnaliseIAExtras forjado no teste, como
     em test_notificacoes.py): roda a análise inteira via analise_edital()
     (parte rápida + _rodar_extras_ia) e confere que Edital.analise_em e
-    AnaliseIAExtras.atualizado_em, escritos por dois módulos diferentes
+    AnaliseIAExtras.pacote_concluido_em, escritos por dois módulos diferentes
     (main.py e models.py) a poucos milissegundos de distância, ficam no
     MESMO fuso -- é a checagem real que _query_analise_pendente faz."""
     from app.main import analise_edital
@@ -260,5 +260,52 @@ def test_pacote_completo_de_extras_habilita_notificacao_de_analise_concluida():
     db.refresh(ed)
     cache = db.query(AnaliseIAExtras).filter_by(usuario_id=u.id, edital_id=ed.id).first()
     assert ed.analise_em is not None
-    assert cache is not None and cache.atualizado_em is not None
-    assert cache.atualizado_em >= ed.analise_em
+    assert cache is not None and cache.pacote_concluido_em is not None
+    assert cache.pacote_concluido_em >= ed.analise_em
+
+
+def test_atualizado_em_bate_antes_do_pacote_completo_pacote_concluido_em_so_no_fim():
+    """Prova de ponta a ponta do bug relatado (usuário, edital 145353):
+    atualizado_em (onupdate automático em AnaliseIAExtras) já bate assim que
+    a PRIMEIRA das duas chamadas de IA (verificação de documentos) termina e
+    commita -- ANTES da segunda (comparação de catálogo, a mais lenta,
+    lotes de até 90s pra catálogo grande) sequer começar. pacote_concluido_em
+    só é gravado depois que as DUAS terminam -- é por isso que
+    _query_analise_pendente usa esse campo, não atualizado_em, pra decidir
+    quando notificar "análise concluída"."""
+    from app.main import analise_edital
+    from app import analise_edital as ia_module
+    db = _sessao()
+    u, ed, p = _semear(db)
+    chave_gemini = "fake-gemini-key"
+    estado_apos_1a_chamada = {}
+
+    def _gerar_e_capturar(*a, **kw):
+        # 1ª chamada (verificação de documentos): retorna e deixa o commit
+        # dela acontecer normalmente (dentro de _upsert_cache_extras).
+        if not estado_apos_1a_chamada:
+            estado_apos_1a_chamada["chamada"] = 1
+            return (_resposta_docs, "ok")
+        # 2ª chamada (comparação de catálogo): a 1ª já commitou antes de
+        # chegarmos aqui -- captura o estado ANTES desta 2ª rodar.
+        if estado_apos_1a_chamada["chamada"] == 1:
+            cache = db.query(AnaliseIAExtras).filter_by(usuario_id=u.id, edital_id=ed.id).first()
+            estado_apos_1a_chamada["atualizado_em"] = cache.atualizado_em if cache else None
+            estado_apos_1a_chamada["pacote_concluido_em"] = cache.pacote_concluido_em if cache else None
+            estado_apos_1a_chamada["chamada"] = 2
+        return (_resposta_catalogo(p.id), "ok")
+
+    with patch("app.main._auth.decifrar", return_value=chave_gemini), \
+         patch.object(ia_module, "ia_texto_disponivel", return_value=True), \
+         patch("app.main._texto_pronto_cache", return_value="texto do edital"), \
+         patch.object(ia_module, "analisar", return_value=_resultado_base(ed)), \
+         patch("app.analise_edital._gerar", side_effect=_gerar_e_capturar):
+        analise_edital(ed.id, forcar=False, user=u, db=db)
+
+    assert estado_apos_1a_chamada["atualizado_em"] is not None      # já bateu só com a 1ª checagem
+    assert estado_apos_1a_chamada["pacote_concluido_em"] is None    # mas o pacote inteiro ainda não
+
+    db.refresh(ed)
+    cache = db.query(AnaliseIAExtras).filter_by(usuario_id=u.id, edital_id=ed.id).first()
+    assert cache.pacote_concluido_em is not None
+    assert cache.pacote_concluido_em >= ed.analise_em

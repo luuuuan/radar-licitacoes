@@ -3703,6 +3703,27 @@ def analise_cancelar(edital_id: int, user: Usuario = Depends(_auth.get_current_u
     return {"ok": True, "mensagem": "Cancelamento solicitado — a análise vai parar assim que possível."}
 
 
+def _marcar_extras_completos(db: Session, user: Usuario, edital_id: int) -> None:
+    """Sinaliza que o PACOTE INTEIRO de extras (verificação de documentos +
+    comparação de catálogo) terminou pra este usuário+edital -- achado real
+    (usuário reportou, edital 145353): AnaliseIAExtras.atualizado_em tem
+    onupdate AUTOMÁTICO e já bate "mudou" assim que a PRIMEIRA das duas
+    checagens de _rodar_extras_ia grava, não só quando as DUAS terminam. A
+    notificação (_query_analise_pendente) comparava contra esse campo e
+    podia disparar minutos antes da comparação de catálogo (até 90s por
+    lote pra catálogo grande) realmente acabar -- usuário clicava na
+    notificação e a página ainda mostrava o loader. Chamado só UMA VEZ, do
+    lado de fora de _rodar_extras_ia, exatamente quando ela já retornou
+    (as duas etapas terminaram, cache-hit ou fresco) -- bate 1:1 com o
+    momento em que o polling do front (rodando:false) sai do loader."""
+    cache = _obter_cache_extras(db, user, edital_id)
+    if not cache:
+        cache = AnaliseIAExtras(usuario_id=user.id, edital_id=edital_id)
+        db.add(cache)
+    cache.pacote_concluido_em = datetime.now(BR_TZ).replace(tzinfo=None)
+    db.commit()
+
+
 def _rodar_extras_ia(resultado: dict, ed: Edital, user: Usuario, db: Session,
                      api_key: str | None, deve_cancelar, forcar: bool = False) -> dict:
     """Roda verificação de documentos + comparação de catálogo, checando
@@ -3760,6 +3781,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     if cache:
         cache["cache"] = True
         cache = _rodar_extras_ia(cache, ed, user, db, chave, deve_cancelar, forcar)
+        if cache.get("status") == "ok" and not cache.get("cancelado"):
+            _marcar_extras_completos(db, user, edital_id)
         cache = _anexar_checklist_documentos(cache, user, db)
         return _anexar_cobertura_lotes(cache, ed, user, db)
     # para RODAR uma análise nova, exige a chave Gemini do próprio usuário
@@ -3821,6 +3844,8 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
                 ed.analise_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
                 db.commit()
     resultado = _rodar_extras_ia(resultado, ed, user, db, chave, deve_cancelar, forcar)
+    if resultado.get("status") == "ok" and not resultado.get("cancelado"):
+        _marcar_extras_completos(db, user, edital_id)
     resultado = _anexar_checklist_documentos(resultado, user, db)
     return _anexar_cobertura_lotes(resultado, ed, user, db)
 
@@ -5148,15 +5173,21 @@ def _query_analise_pendente(usuario_id: int):
     90s cada) -- terminar. O sino usava só analise_em e avisava "concluída"
     minutos antes da página realmente sair do loader (que só sai quando
     /analise/status devolve "resultado", ou seja, quando o pacote INTEIRO,
-    extras incluído, termina -- ver _rodar_analise_bg). Exige também que
-    AnaliseIAExtras.atualizado_em (POR usuário+edital, tocado no fim de
-    _rodar_extras_ia mesmo quando o usuário não tem catálogo/documento
-    algum -- ver _upsert_cache_extras) exista e seja >= Edital.analise_em:
-    só então o pacote completo desta rodada de análise já terminou de
-    verdade. Se a análise foi cancelada no meio dos extras (ou nunca
-    chegou a rodá-los), atualizado_em fica None ou desatualizado em
-    relação a este analise_em -- a notificação simplesmente não aparece
-    ainda, em vez de aparecer cedo demais."""
+    extras incluído, termina -- ver _rodar_analise_bg).
+
+    2º achado real (usuário reportou de novo, edital 145353): a correção
+    acima comparava contra AnaliseIAExtras.atualizado_em, que tem onupdate
+    AUTOMÁTICO -- dispara já na PRIMEIRA das duas checagens de
+    _rodar_extras_ia (verificação de documentos), não só quando as DUAS
+    (a comparação de catálogo, a mais lenta, é a segunda) terminam. Mesmo
+    sintoma de novo: sino avisava "concluída", página ainda no loader.
+    Agora compara contra AnaliseIAExtras.pacote_concluido_em -- campo
+    tocado manualmente, UMA VEZ, só depois que _rodar_extras_ia já
+    retornou com as duas etapas prontas (ver _marcar_extras_completos).
+    Se a análise foi cancelada no meio dos extras (ou nunca chegou a
+    rodá-los), pacote_concluido_em fica None ou desatualizado em relação a
+    este analise_em -- a notificação simplesmente não aparece ainda, em
+    vez de aparecer cedo demais."""
     extras = AnaliseIAExtras
     return (select(Match.id, Edital.id, Edital.orgao)
            .join(Edital, Match.edital_id == Edital.id)
@@ -5164,8 +5195,8 @@ def _query_analise_pendente(usuario_id: int):
            .where(Match.usuario_id == usuario_id)
            .where(Match.interagido_em.is_not(None))
            .where(Edital.analise_em.is_not(None))
-           .where(extras.atualizado_em.is_not(None))
-           .where(extras.atualizado_em >= Edital.analise_em)
+           .where(extras.pacote_concluido_em.is_not(None))
+           .where(extras.pacote_concluido_em >= Edital.analise_em)
            .where(or_(Match.analise_vista_em.is_(None),
                      Edital.analise_em > Match.analise_vista_em))
            .limit(_LIMITE_ITENS_NOTIFICACAO))
@@ -5194,8 +5225,8 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
     3. Documentos de habilitação vencendo (mesmo limiar do checklist do
        edital, settings.LEMBRETE_DOC_DIAS -- ver checklist_habilitacao.py).
     4. Análises por IA que terminaram (o pacote INTEIRO -- ver achado real
-       em _query_analise_pendente sobre AnaliseIAExtras.atualizado_em, não
-       só a parte rápida) depois da última vez que o usuário viu
+       em _query_analise_pendente sobre AnaliseIAExtras.pacote_concluido_em,
+       não só a parte rápida) depois da última vez que o usuário viu
        especificamente a aba Análise (Edital.analise_em >
        Match.analise_vista_em), exigindo que ele já tenha visitado esse
        edital ALGUMA vez (interagido_em IS NOT NULL) -- achado real

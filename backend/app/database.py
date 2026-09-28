@@ -135,6 +135,9 @@ for _c in (("unidade_venda", "VARCHAR(20)"), ("itens_por_unidade", "FLOAT"),
 _COLUNAS_NOVAS.setdefault("itens_edital", [])
 if ("unidade_medida", "VARCHAR(60)") not in _COLUNAS_NOVAS["itens_edital"]:
     _COLUNAS_NOVAS["itens_edital"].append(("unidade_medida", "VARCHAR(60)"))
+_COLUNAS_NOVAS.setdefault("analise_ia_extras", [])
+if ("pacote_concluido_em", "TIMESTAMP") not in _COLUNAS_NOVAS["analise_ia_extras"]:
+    _COLUNAS_NOVAS["analise_ia_extras"].append(("pacote_concluido_em", "TIMESTAMP"))
 
 
 def _migrar_colunas_novas() -> None:
