@@ -1182,9 +1182,6 @@
 
   <!-- EDITAIS -->
   <section id="t-editais">
-    <button class="btn ghost filtros-btn-mobile" id="btn-filtros-abrir" onclick="_abrirFiltros()">
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4z"/></svg> Filtros
-    </button>
     <div class="editais-layout">
       <div class="filtros-overlay" id="filtros-overlay" onclick="toggleFiltrosMobile()"></div>
       <aside class="filtros-lateral" id="filtros-lateral">
@@ -1328,6 +1325,9 @@
       </aside>
       <div class="editais-principal">
         <div id="slot-busca-desktop"></div>
+        <button class="btn ghost filtros-btn-mobile" id="btn-filtros-abrir" onclick="_abrirFiltros()">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4z"/></svg> Filtros
+        </button>
         <div id="lista-editais"></div>
       </div>
     </div>
@@ -2293,11 +2293,12 @@ function _toggleFiltrosDesktop(){
   const colapsado = $('#t-editais').classList.toggle('filtros-colapsados');
   try{ localStorage.setItem('radar-filtros-colapsados', colapsado ? '1' : '0'); }catch(e){}
 }
-// #btn-filtros-abrir ("Filtros", acima da lista) serve os dois papéis: no
-// celular é quem ABRE o painel por cima (toggleFiltrosMobile); no desktop
-// só aparece quando os filtros estão ocultos (ver CSS), e aí precisa
-// chamar o toggle certo -- reusar toggleFiltrosMobile ali não fazia nada
-// visível no desktop (mexia numa classe que o CSS de desktop ignora).
+// #btn-filtros-abrir ("Filtros", pedido do usuário: logo depois do campo de
+// busca, acima da lista) serve os dois papéis: no celular é quem ABRE o
+// painel por cima (toggleFiltrosMobile); no desktop só aparece quando os
+// filtros estão ocultos (ver CSS), e aí precisa chamar o toggle certo --
+// reusar toggleFiltrosMobile ali não fazia nada visível no desktop (mexia
+// numa classe que o CSS de desktop ignora).
 function _abrirFiltros(){
   if(matchMedia('(min-width:681px)').matches) _toggleFiltrosDesktop();
   else toggleFiltrosMobile();
@@ -3938,11 +3939,11 @@ async function mudarStatus(matchId, status){
 }
 
 // ---------------- Pipeline (funil por status, pedido do usuário) ---------------- //
-// Kanban simples: arrastar (desktop, HTML5 drag-and-drop nativo) OU o select
-// de status em cada card (sempre funciona, inclusive no celular -- drag-and-
-// -drop nativo não é confiável em touch). Os dois caminhos chamam a MESMA
-// mudarStatus() já usada pelo dropdown de status em Editais -- nenhuma rota
-// nova só pra mover o card.
+// Kanban simples: arrastar o card entre colunas (HTML5 drag-and-drop
+// nativo) -- pedido do usuário: tirou o select de status que existia em
+// cada card (mudança de status continua disponível na aba Editais e na
+// página do edital, ambos com o dropdown de sempre). Chama a MESMA
+// mudarStatus() já usada lá -- nenhuma rota nova só pra mover o card.
 function rotuloStatusPipeline(s){
   return {novo:'Novo', vou_participar:'Vou participar', proposta_enviada:'Proposta enviada',
           ganho:'Ganho', perdido:'Perdido', descartado:'Descartado'}[s] || s;
@@ -3960,11 +3961,11 @@ function _pipelineColunaHTML(status, itens){
       ondragover="_pipelineDragOver(event)" ondragleave="_pipelineDragLeave(event)" ondrop="_pipelineDrop(event,'${status}')">
     <h3>${esc(rotuloStatusPipeline(status))} <span class="contagem">${itens.length}</span></h3>
     <div class="pipeline-cards">
-      ${itens.length ? itens.map(c=>_pipelineCardHTML(c, status)).join('') : '<div class="pipeline-vazio">Nenhum edital aqui</div>'}
+      ${itens.length ? itens.map(c=>_pipelineCardHTML(c)).join('') : '<div class="pipeline-vazio">Nenhum edital aqui</div>'}
     </div>
   </div>`;
 }
-function _pipelineCardHTML(c, statusAtual){
+function _pipelineCardHTML(c){
   const linkEdital = linkSeguro(c.link);
   const prazo = c.dias_restantes==null ? 'prazo n/d' : fmtPrazoEdital(c.dias_restantes, c.status_prazo);
   return `<div class="pipeline-card" draggable="true" data-edital-id="${c.edital_id}" data-nivel="${esc(c.nivel||'')}"
@@ -3976,10 +3977,6 @@ function _pipelineCardHTML(c, statusAtual){
     <div class="objeto">${esc(c.objeto||'')}</div>
     <div class="meta"><span>${fmtMoeda(c.valor_estimado)}</span><span>${esc(prazo)}</span></div>
     ${linkEdital?`<div class="meta"><a href="${esc(linkEdital)}" target="_blank" onclick="event.stopPropagation()">Abrir edital ${ICN.externo}</a></div>`:''}
-    <select class="status-sel st-${esc(statusAtual)}" style="margin-top:6px;width:100%;font-size:11px"
-        onclick="event.stopPropagation()" onchange="_pipelineMoverCard(${c.edital_id}, this.value)">
-      ${_pipelineOrdem.map(s=>`<option value="${s}"${s===statusAtual?' selected':''}>${esc(rotuloStatusPipeline(s))}</option>`).join('')}
-    </select>
   </div>`;
 }
 let _pipelineArrastandoId = null;
@@ -4022,8 +4019,6 @@ async function _pipelineMoverCard(editalId, novoStatus){
   toast('Status atualizado.', 'ok');
   if(!cardAtual){ loadPipeline(); return; }   // card sumiu da tela por algum motivo -- recarrega pra garantir consistência
   const colunaDestino = document.querySelector(`.pipeline-coluna[data-status="${novoStatus}"]`);
-  const selecao = cardAtual.querySelector('.status-sel');
-  if(selecao){ selecao.className = `status-sel st-${novoStatus}`; selecao.value = novoStatus; }
   if(colunaDestino){
     const vazioDestino = colunaDestino.querySelector('.pipeline-vazio');
     if(vazioDestino) vazioDestino.remove();
