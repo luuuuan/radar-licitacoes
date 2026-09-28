@@ -2177,11 +2177,16 @@ def pipeline_remover_card(edital_id: int, user: Usuario = Depends(_auth.get_curr
     return {"ok": True}
 
 
-# Ordem das colunas do funil (aba Pipeline) -- terminal (ganho/perdido/
-# descartado) por último, de propósito: reflete o fluxo natural de uma
-# oportunidade, não a ordem alfabética nem a de STATUS_VALIDOS (que é um
-# set, sem ordem nenhuma).
-_STATUS_ORDEM_PIPELINE = ["novo", STATUS_PARTICIPACAO, "proposta_enviada", "ganho", "perdido", "descartado"]
+# Ordem das colunas do funil (aba Pipeline) -- reflete o fluxo natural de
+# uma oportunidade, não a ordem alfabética nem a de STATUS_VALIDOS (que é
+# um set, sem ordem nenhuma). "novo" e "descartado" ficam de fora de
+# propósito (pedido do usuário): "novo" é a fila de triagem inteira (pode
+# ser centenas/milhares de matches automáticos que o usuário nunca decidiu
+# nada sobre -- o mesmo problema de escala já visto em outras telas deste
+# app) e "descartado" é lixeira, não funil ativo. Continuam válidos como
+# status em STATUS_VALIDOS (dropdown de status na lista de Editais/página
+# do edital) -- só não aparecem como coluna NESTA tela.
+_STATUS_ORDEM_PIPELINE = [STATUS_PARTICIPACAO, "proposta_enviada", "ganho", "perdido"]
 
 
 @app.get("/api/pipeline")
@@ -2192,31 +2197,18 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
     arrastar (o front chama o mesmo POST /api/editais/{edital_id}/status
     de sempre, sem rota nova só pra mover).
 
-    Escopo: só matches com status != "novo" (usuário já tomou alguma ação
-    -- marcar "vou participar", enviar proposta, etc.) OU nivel == "forte"
-    (alta compatibilidade, fila de triagem que ainda não foi decidida).
-    Sem esse filtro, a coluna "Novo" teria TODO match "novo"/"médio"/"fraco"
-    que o motor automático já criou (pode ser centenas ou milhares) -- a
-    grande maioria que o usuário nunca abriu nem vai abrir, o mesmo
-    problema de escala já visto em outras telas deste app.
-
-    Dois cortes adicionais, também pedidos pelo usuário: exclui
-    Match.oculto_pipeline (botão "excluir" do card, ver
-    pipeline_remover_card) e, dentro dos "novo" que só entram por nivel
-    forte, exclui edital já "encerrado" -- uma triagem que nunca foi
-    decidida e cujo prazo já passou não é mais acionável, só polui a
-    coluna Novo."""
+    Escopo: só os status em _STATUS_ORDEM_PIPELINE (ver comentário ali) --
+    de resto, exclui Match.oculto_pipeline (botão "excluir" do card, ver
+    pipeline_remover_card)."""
     linhas = db.execute(
         select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
-        .where(or_(Match.status != "novo", Match.nivel == "forte"))
+        .where(Match.status.in_(_STATUS_ORDEM_PIPELINE))
         .where(Match.oculto_pipeline.isnot(True))
         .order_by(Edital.data_abertura.asc().nulls_last())
     ).all()
     colunas: dict[str, list] = {s: [] for s in _STATUS_ORDEM_PIPELINE}
     for match, ed in linhas:
-        if match.status == "novo" and _status_prazo_edital(ed) == "encerrado":
-            continue
         colunas[match.status].append({
             "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
             "uf": ed.uf, "municipio": ed.municipio,

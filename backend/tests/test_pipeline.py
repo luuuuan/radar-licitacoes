@@ -3,8 +3,6 @@ GET /api/pipeline -- editais do usuário organizados por Match.status, pra
 visão de funil (aba Pipeline, pedido do usuário). Banco sqlite em memória,
 sem HTTP. Rode com:  cd backend && pytest
 """
-from datetime import datetime, timedelta
-
 from fastapi import HTTPException
 import pytest
 from sqlalchemy import create_engine
@@ -52,31 +50,24 @@ def test_pipeline_agrupa_por_status():
     assert [c["edital_id"] for c in r["colunas"]["ganho"]] == [ed_ganho.id]
 
 
-def test_pipeline_inclui_nivel_forte_com_status_novo():
-    """Fila de triagem: alta compatibilidade que o usuário ainda não decidiu
-    o que fazer continua aparecendo na coluna Novo."""
+def test_pipeline_nao_tem_coluna_novo_nem_descartado():
+    """Pedido do usuário: "Novo" (fila de triagem inteira, pode ser
+    centenas/milhares de matches automáticos) e "Descartado" (lixeira, não
+    funil ativo) não são colunas desta tela -- nenhum match com esses
+    status aparece aqui, nem mesmo nivel forte (que era a única exceção
+    antes desta mudança). Esses dois continuam status válidos em
+    STATUS_VALIDOS, só não têm coluna NESTA tela."""
     db = _sessao()
     u = _usuario(db)
-    ed = _match(db, u, "ed1", status="novo", nivel="forte")
+    _match(db, u, "ed-novo-forte", status="novo", nivel="forte")
+    _match(db, u, "ed-novo-medio", status="novo", nivel="medio")
+    _match(db, u, "ed-descartado", status="descartado", nivel="forte")
 
     r = pipeline(user=u, db=db)
 
-    assert [c["edital_id"] for c in r["colunas"]["novo"]] == [ed.id]
-
-
-def test_pipeline_exclui_novo_com_nivel_medio_ou_fraco():
-    """Achado real (pedido do usuário): sem esse filtro, a coluna "Novo"
-    teria TODO match que o motor automático criou -- a maioria nunca vista
-    pelo usuário. Só nivel forte entra sem ação nenhuma; médio/fraco só
-    aparecem quando o usuário já mexeu no status."""
-    db = _sessao()
-    u = _usuario(db)
-    _match(db, u, "ed-medio", status="novo", nivel="medio")
-    _match(db, u, "ed-fraco", status="novo", nivel="fraco")
-
-    r = pipeline(user=u, db=db)
-
-    assert r["colunas"]["novo"] == []
+    assert "novo" not in r["colunas"]
+    assert "descartado" not in r["colunas"]
+    assert sum(len(itens) for itens in r["colunas"].values()) == 0
 
 
 def test_pipeline_nao_mostra_match_de_outro_usuario():
@@ -96,7 +87,7 @@ def test_pipeline_ordem_das_colunas_e_o_fluxo_natural():
 
     r = pipeline(user=u, db=db)
 
-    assert r["ordem"] == ["novo", "vou_participar", "proposta_enviada", "ganho", "perdido", "descartado"]
+    assert r["ordem"] == ["vou_participar", "proposta_enviada", "ganho", "perdido"]
 
 
 def test_pipeline_card_traz_campos_para_o_kanban():
@@ -112,32 +103,6 @@ def test_pipeline_card_traz_campos_para_o_kanban():
     assert card["nivel"] == "forte"
     assert card["score"] == 0.9
     assert "dias_restantes" in card and "status_prazo" in card
-
-
-def test_pipeline_exclui_novo_forte_com_edital_ja_encerrado():
-    """Pedido do usuário: uma triagem "novo"+forte que nunca foi decidida e
-    cujo prazo de propostas já passou não é mais acionável -- só polui a
-    coluna Novo. Continua excluída mesmo sendo nivel forte (que normalmente
-    é o único jeito de um "novo" aparecer)."""
-    db = _sessao()
-    u = _usuario(db)
-    _match(db, u, "ed1", status="novo", nivel="forte",
-           data_encerramento=datetime.utcnow() - timedelta(days=1))
-
-    r = pipeline(user=u, db=db)
-
-    assert r["colunas"]["novo"] == []
-
-
-def test_pipeline_mantem_novo_forte_com_edital_ainda_nao_encerrado():
-    db = _sessao()
-    u = _usuario(db)
-    ed = _match(db, u, "ed1", status="novo", nivel="forte",
-                data_encerramento=datetime.utcnow() + timedelta(days=3))
-
-    r = pipeline(user=u, db=db)
-
-    assert [c["edital_id"] for c in r["colunas"]["novo"]] == [ed.id]
 
 
 def test_pipeline_remover_card_some_da_pipeline_sem_mexer_no_resto():
