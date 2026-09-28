@@ -127,7 +127,7 @@ class Settings(BaseSettings):
 
     # Lembretes
     LEMBRETE_PRAZO_DIAS: int = 2     # avisa quando faltam <= X dias p/ encerrar proposta
-    LEMBRETE_DOC_DIAS: int = 15      # avisa quando um documento vence em <= X dias
+    LEMBRETE_DOC_DIAS: int = 5       # avisa quando um documento vence em <= X dias
 
     # achado real: gemini-2.5-flash parou de responder pra contas novas
     # ANTES da data de desligamento anunciada (HTTP 404 "no longer
