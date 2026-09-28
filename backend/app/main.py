@@ -2159,6 +2159,20 @@ def mudar_status(edital_id: int, dados: StatusIn,
     # quando o status mudou, não só o valor atual -- alimenta o filtro por
     # mês do card "Editais ganhos" do painel Início (ver GET /api/ganhos).
     m.status_atualizado_em = _utcnow_main()
+    # reengajamento explícito (o usuário está de olho nisso de novo) desfaz
+    # um "excluir do Pipeline" anterior -- ver Match.oculto_pipeline.
+    m.oculto_pipeline = False
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/editais/{edital_id}/pipeline/remover")
+def pipeline_remover_card(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    """Botão "excluir" no card do Pipeline (pedido do usuário) -- só some da
+    visão de funil, sem mexer em status/lido/interessante/nivel."""
+    m = _match_do_usuario_por_edital(db, edital_id, user)
+    m.oculto_pipeline = True
     db.commit()
     return {"ok": True}
 
@@ -2184,15 +2198,25 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
     Sem esse filtro, a coluna "Novo" teria TODO match "novo"/"médio"/"fraco"
     que o motor automático já criou (pode ser centenas ou milhares) -- a
     grande maioria que o usuário nunca abriu nem vai abrir, o mesmo
-    problema de escala já visto em outras telas deste app."""
+    problema de escala já visto em outras telas deste app.
+
+    Dois cortes adicionais, também pedidos pelo usuário: exclui
+    Match.oculto_pipeline (botão "excluir" do card, ver
+    pipeline_remover_card) e, dentro dos "novo" que só entram por nivel
+    forte, exclui edital já "encerrado" -- uma triagem que nunca foi
+    decidida e cujo prazo já passou não é mais acionável, só polui a
+    coluna Novo."""
     linhas = db.execute(
         select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
         .where(or_(Match.status != "novo", Match.nivel == "forte"))
+        .where(Match.oculto_pipeline.isnot(True))
         .order_by(Edital.data_abertura.asc().nulls_last())
     ).all()
     colunas: dict[str, list] = {s: [] for s in _STATUS_ORDEM_PIPELINE}
     for match, ed in linhas:
+        if match.status == "novo" and _status_prazo_edital(ed) == "encerrado":
+            continue
         colunas[match.status].append({
             "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto,
             "uf": ed.uf, "municipio": ed.municipio,

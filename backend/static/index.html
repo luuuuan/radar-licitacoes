@@ -218,14 +218,22 @@
     align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line)}
   .pipeline-coluna h3 .contagem{font-size:11px;font-weight:700;color:var(--muted);
     background:var(--panel2);border-radius:999px;padding:1px 8px}
+  .pipeline-board,.pipeline-cards{scrollbar-width:thin;scrollbar-color:var(--accent) var(--panel)}
+  .pipeline-board::-webkit-scrollbar,.pipeline-cards::-webkit-scrollbar{width:6px;height:6px}
+  .pipeline-board::-webkit-scrollbar-track,.pipeline-cards::-webkit-scrollbar-track{background:var(--panel)}
+  .pipeline-board::-webkit-scrollbar-thumb,.pipeline-cards::-webkit-scrollbar-thumb{background:var(--accent);border-radius:999px}
   .pipeline-cards{padding:10px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-height:60px}
   .pipeline-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
     padding:10px 12px;cursor:grab;border-left:3px solid var(--fraco)}
   .pipeline-card[data-nivel="forte"]{border-left-color:var(--forte)}
   .pipeline-card[data-nivel="medio"]{border-left-color:var(--medio)}
   .pipeline-card.arrastando{opacity:.4}
+  .pipeline-card .topo{display:flex;align-items:flex-start;gap:6px}
+  .pipeline-card .excluir{flex:0 0 auto;width:18px;height:18px;line-height:16px;text-align:center;
+    border:none;background:transparent;color:var(--muted);cursor:pointer;border-radius:5px;font-size:14px;padding:0}
+  .pipeline-card .excluir:hover{background:var(--destructive-pale, rgba(220,38,38,.12));color:var(--destructive)}
   .pipeline-card .orgao{font-size:12px;font-weight:700;display:-webkit-box;-webkit-line-clamp:2;
-    -webkit-box-orient:vertical;overflow:hidden}
+    -webkit-box-orient:vertical;overflow:hidden;flex:1 1 auto}
   .pipeline-card .objeto{font-size:11px;color:var(--muted);margin-top:3px;display:-webkit-box;
     -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .pipeline-card .meta{display:flex;justify-content:space-between;gap:6px;margin-top:6px;
@@ -3961,7 +3969,10 @@ function _pipelineCardHTML(c, statusAtual){
   const prazo = c.dias_restantes==null ? 'prazo n/d' : fmtPrazoEdital(c.dias_restantes, c.status_prazo);
   return `<div class="pipeline-card" draggable="true" data-edital-id="${c.edital_id}" data-nivel="${esc(c.nivel||'')}"
       ondragstart="_pipelineDragStart(event,${c.edital_id})" ondragend="_pipelineDragEnd(event)">
-    <div class="orgao" onclick="abrirPaginaEdital(${c.edital_id})" style="cursor:pointer" title="Ver edital">${esc(c.orgao||'Órgão não informado')}</div>
+    <div class="topo">
+      <div class="orgao" onclick="abrirPaginaEdital(${c.edital_id})" style="cursor:pointer" title="Ver edital">${esc(c.orgao||'Órgão não informado')}</div>
+      <button type="button" class="excluir" title="Remover do Pipeline" onclick="event.stopPropagation();_pipelineExcluirCard(${c.edital_id})">✕</button>
+    </div>
     <div class="objeto">${esc(c.objeto||'')}</div>
     <div class="meta"><span>${fmtMoeda(c.valor_estimado)}</span><span>${esc(prazo)}</span></div>
     ${linkEdital?`<div class="meta"><a href="${esc(linkEdital)}" target="_blank" onclick="event.stopPropagation()">Abrir edital ${ICN.externo}</a></div>`:''}
@@ -3989,13 +4000,47 @@ async function _pipelineDrop(ev, novoStatus){
   if(editalId==null) return;
   await _pipelineMoverCard(editalId, novoStatus);
 }
+// Achado real (pedido do usuário): recarregar o board inteiro (loadPipeline)
+// a cada troca de coluna piscava a tela e perdia a posição de rolagem de
+// cada coluna -- move o card de coluna direto no DOM em vez disso; só
+// recarrega do zero se o card não estiver mais na tela por algum motivo.
+function _pipelineAtualizarContagem(coluna){
+  if(!coluna) return;
+  const cardsWrap = coluna.querySelector('.pipeline-cards');
+  const qtd = cardsWrap.querySelectorAll('.pipeline-card').length;
+  const contagem = coluna.querySelector('h3 .contagem');
+  if(contagem) contagem.textContent = qtd;
+  const vazio = cardsWrap.querySelector('.pipeline-vazio');
+  if(qtd===0 && !vazio) cardsWrap.insertAdjacentHTML('beforeend', '<div class="pipeline-vazio">Nenhum edital aqui</div>');
+  else if(qtd>0 && vazio) vazio.remove();
+}
 async function _pipelineMoverCard(editalId, novoStatus){
   const cardAtual = document.querySelector(`.pipeline-card[data-edital-id="${editalId}"]`);
   const colunaOrigem = cardAtual ? cardAtual.closest('.pipeline-coluna') : null;
   if(colunaOrigem && colunaOrigem.dataset.status === novoStatus) return;   // soltou na mesma coluna, nada a fazer
   await mudarStatus(editalId, novoStatus);
   toast('Status atualizado.', 'ok');
-  loadPipeline();
+  if(!cardAtual){ loadPipeline(); return; }   // card sumiu da tela por algum motivo -- recarrega pra garantir consistência
+  const colunaDestino = document.querySelector(`.pipeline-coluna[data-status="${novoStatus}"]`);
+  const selecao = cardAtual.querySelector('.status-sel');
+  if(selecao){ selecao.className = `status-sel st-${novoStatus}`; selecao.value = novoStatus; }
+  if(colunaDestino){
+    const vazioDestino = colunaDestino.querySelector('.pipeline-vazio');
+    if(vazioDestino) vazioDestino.remove();
+    colunaDestino.querySelector('.pipeline-cards').appendChild(cardAtual);
+    _pipelineAtualizarContagem(colunaDestino);
+  }
+  _pipelineAtualizarContagem(colunaOrigem);
+}
+async function _pipelineExcluirCard(editalId){
+  const cardAtual = document.querySelector(`.pipeline-card[data-edital-id="${editalId}"]`);
+  const coluna = cardAtual ? cardAtual.closest('.pipeline-coluna') : null;
+  try{
+    await api(`/api/editais/${editalId}/pipeline/remover`, {method:'POST'});
+  }catch(e){ toast('Não deu pra remover. Tenta de novo.', 'erro'); return; }
+  if(cardAtual) cardAtual.remove();
+  _pipelineAtualizarContagem(coluna);
+  toast('Removido do Pipeline.', 'ok');
 }
 
 const fmtR = v => v==null ? '—' : 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -5015,7 +5060,7 @@ async function _renderPaginaEdital(editalId, aba){
   _propostaCarregadaPara = null;   // idem pra proposta
   _cotacaoSelecionados = new Set();   // idem pra seleção de itens da cotação
   _comparacaoCatalogoExcluidos = new Set();   // idem pra itens descartados na comparação por IA
-  ['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
+  ['inicio','editais','pipeline','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']
     .forEach(t=>$('#t-'+t).classList.add('hidden'));
   $('#t-edital').classList.remove('hidden');
   // achado real: abrir um edital a partir de fora da aba "Editais
@@ -6782,7 +6827,7 @@ async function sair(){
     let abaSalva = 'inicio';
     try{
       const v = localStorage.getItem('radar-ultima-aba');
-      if(['inicio','editais','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].includes(v)) abaSalva = v;
+      if(['inicio','editais','pipeline','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs'].includes(v)) abaSalva = v;
     }catch(e){}
     tab(abaSalva);
   }

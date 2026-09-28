@@ -299,6 +299,12 @@ class Match(Base):
     abertura_avisada_telegram_2: Mapped[bool] = mapped_column(Boolean, default=False)
     # acompanhamento (pipeline): novo, vou_participar, proposta_enviada, ganho, perdido, descartado
     status: Mapped[str] = mapped_column(String(20), default="novo")
+    # pedido do usuário: botão "excluir" no card do Pipeline -- some da
+    # visão de funil sem tocar em status/lido/interessante/nivel (nada mais
+    # no app é afetado). Volta a aparecer sozinho se o status mudar de novo
+    # (ver mudar_status em main.py) -- reengajamento explícito desfaz o
+    # "esconder", em vez de virar um beco sem saída.
+    oculto_pipeline: Mapped[bool] = mapped_column(Boolean, default=False)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # última vez que o usuário navegou entre as abas da página deste edital
     # (itens/cotação/análise/documentos/proposta) -- alimenta o card

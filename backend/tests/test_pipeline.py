@@ -3,10 +3,14 @@ GET /api/pipeline -- editais do usuário organizados por Match.status, pra
 visão de funil (aba Pipeline, pedido do usuário). Banco sqlite em memória,
 sem HTTP. Rode com:  cd backend && pytest
 """
+from datetime import datetime, timedelta
+
+from fastapi import HTTPException
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import pipeline
+from app.main import pipeline, pipeline_remover_card, mudar_status, StatusIn
 from app.models import Base, Usuario, Edital, Match
 
 
@@ -24,9 +28,9 @@ def _usuario(db, email="t@t.com"):
     return u
 
 
-def _match(db, usuario, id_externo, status="novo", nivel="medio", score=0.5):
+def _match(db, usuario, id_externo, status="novo", nivel="medio", score=0.5, data_encerramento=None):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao=f"Orgao {id_externo}",
-               objeto="Aquisicao", uf="SP")
+               objeto="Aquisicao", uf="SP", data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=score, nivel=nivel, status=status))
@@ -108,3 +112,71 @@ def test_pipeline_card_traz_campos_para_o_kanban():
     assert card["nivel"] == "forte"
     assert card["score"] == 0.9
     assert "dias_restantes" in card and "status_prazo" in card
+
+
+def test_pipeline_exclui_novo_forte_com_edital_ja_encerrado():
+    """Pedido do usuário: uma triagem "novo"+forte que nunca foi decidida e
+    cujo prazo de propostas já passou não é mais acionável -- só polui a
+    coluna Novo. Continua excluída mesmo sendo nivel forte (que normalmente
+    é o único jeito de um "novo" aparecer)."""
+    db = _sessao()
+    u = _usuario(db)
+    _match(db, u, "ed1", status="novo", nivel="forte",
+           data_encerramento=datetime.utcnow() - timedelta(days=1))
+
+    r = pipeline(user=u, db=db)
+
+    assert r["colunas"]["novo"] == []
+
+
+def test_pipeline_mantem_novo_forte_com_edital_ainda_nao_encerrado():
+    db = _sessao()
+    u = _usuario(db)
+    ed = _match(db, u, "ed1", status="novo", nivel="forte",
+                data_encerramento=datetime.utcnow() + timedelta(days=3))
+
+    r = pipeline(user=u, db=db)
+
+    assert [c["edital_id"] for c in r["colunas"]["novo"]] == [ed.id]
+
+
+def test_pipeline_remover_card_some_da_pipeline_sem_mexer_no_resto():
+    """Botão "excluir" no card do Pipeline (pedido do usuário): esconde só
+    da visão de funil, sem tocar em status/lido/interessante/nivel -- nada
+    mais no app é afetado."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _match(db, u, "ed1", status="vou_participar", nivel="forte")
+
+    pipeline_remover_card(edital_id=ed.id, user=u, db=db)
+
+    r = pipeline(user=u, db=db)
+    assert r["colunas"]["vou_participar"] == []
+
+    m = db.query(Match).filter(Match.edital_id == ed.id, Match.usuario_id == u.id).one()
+    assert m.status == "vou_participar"   # nada mais mudou
+    assert m.nivel == "forte"
+
+
+def test_pipeline_remover_card_404_quando_edital_nao_existe():
+    db = _sessao()
+    u = _usuario(db)
+    with pytest.raises(HTTPException) as exc:
+        pipeline_remover_card(edital_id=99999, user=u, db=db)
+    assert exc.value.status_code == 404
+
+
+def test_mudar_status_desfaz_remocao_anterior_do_pipeline():
+    """Achado real: sem isso, remover um card do Pipeline seria um beco sem
+    saída -- reengajamento explícito (o usuário mudou o status de novo, seja
+    arrastando ou pelo select) precisa trazer o card de volta."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _match(db, u, "ed1", status="vou_participar", nivel="forte")
+    pipeline_remover_card(edital_id=ed.id, user=u, db=db)
+    assert pipeline(user=u, db=db)["colunas"]["vou_participar"] == []
+
+    mudar_status(edital_id=ed.id, dados=StatusIn(status="proposta_enviada"), user=u, db=db)
+
+    r = pipeline(user=u, db=db)
+    assert [c["edital_id"] for c in r["colunas"]["proposta_enviada"]] == [ed.id]
