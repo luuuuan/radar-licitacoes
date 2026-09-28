@@ -12,19 +12,23 @@ jobs:
   disparar-coleta:
     runs-on: ubuntu-latest
     steps:
-      - name: Disparar coleta no Render
+      - name: Disparar coleta em produção
         run: |
+          # RENDER_URL: nome histórico da variável (app rodava no Render até
+          # 2026-09; migrou pra Railway) -- mantido como está pra não exigir
+          # renomear a variável no painel do GitHub junto com este commit.
+          # Guarda a URL de produção atual (Railway), seja qual for o nome.
           URL="${{ vars.RENDER_URL }}"
           if [ -z "$URL" ]; then
-            echo "⚠ Defina a variável RENDER_URL (Settings → Secrets and variables → Actions → Variables)"
+            echo "⚠ Defina a variável RENDER_URL (Settings → Secrets and variables → Actions → Variables) com a URL de produção"
             exit 1
           fi
           code=$(curl -s -o /tmp/resp.txt -w "%{http_code}" --max-time 120 \
             -X POST "${URL%/}/api/coletar-cron" \
             -H "X-Cron-Key: ${{ secrets.CRON_SECRET }}")
-          echo "Resposta do Render: HTTP $code"
+          echo "Resposta: HTTP $code"
           cat /tmp/resp.txt; echo
-          # 200 = coleta iniciada. A coleta em si roda em segundo plano no Render.
+          # 200 = coleta iniciada. A coleta em si roda em segundo plano no servidor.
           if [ "$code" != "200" ]; then
             echo "Falha ao disparar a coleta (verifique RENDER_URL e CRON_SECRET)."
             exit 1
