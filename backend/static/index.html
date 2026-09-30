@@ -4578,6 +4578,128 @@ function _rotuloLote(numero){
   const n = String(numero||'').trim();
   return /^\d+$/.test(n) ? `Lote ${n}` : n;
 }
+// Renderiza uma linha da tabela de comparação por IA -- extraída da
+// closure de _comparacaoCatalogoIAHTML pra poder ser chamada de novo
+// SOZINHA, depois que o usuário escolhe/troca o produto de um item (ver
+// _atualizarLinhaComparacaoIA), sem precisar reconstruir a tabela inteira.
+function _iaCatLinhaHTML(it){
+  const _motivoBloq = _motivoBloqueioEdicao();
+  const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
+  const principal = it.candidatos[0];
+  // Achado real: item confirmado numa análise antiga (produto A), esse
+  // produto depois excluído do catálogo, e uma NOVA análise sugerindo um
+  // produto B diferente pro mesmo item -- o botão continuava travado em
+  // "na cotação" porque _cotacaoSelecionados só sabe o NÚMERO do item (é
+  // a Proposta salva, que não guarda produto nenhum), sem saber se é
+  // justamente ESTE candidato que está confirmado. Confere contra o
+  // produto ao vivo do item (_paginaEditalDetalhe) -- só trava o botão
+  // quando é de fato o mesmo produto já confirmado, senão deixa reabrir
+  // pra confirmar o novo candidato.
+  const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
+    .find(x => String(x.numero) === String(it.numero));
+  const produtoJaConfirmado = !!(itemAoVivo && itemAoVivo.compativel
+    && itemAoVivo.produto && itemAoVivo.produto.id === principal.produto_id);
+  const naCotacao = _cotacaoSelecionados.has(String(it.numero)) && produtoJaConfirmado;
+  const p = principal.produto || {};
+  const vt = principal.validacao_tecnica;
+  // badge compacta de specs: reaproveita a MESMA validação determinística
+  // (medidas/material/características) que já roda pros itens que o motor
+  // de matching compatibilizou — pega exatamente o caso real que motivou
+  // isso ("Fita ... largura 50mm" vs sugestão "... 48mm x 50m": categoria
+  // certa, medida errada, e a IA sozinha não tinha percebido).
+  let specsBadge = '';
+  if(vt){
+    const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
+    const icone = vt.classificacao==='Não atende' ? '✗' : (vt.classificacao==='Atende' ? '✓' : '⚠');
+    const pendencias = [...vt.criticas, ...vt.avisos];
+    specsBadge = `<div style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`
+      + (pendencias.length ? `<div class="muted" style="font-size:10px;margin-top:1px">${esc(pendencias.join(' · '))}</div>` : '');
+  }
+  let mg='—', mgCls='';
+  if(principal.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
+  else if(principal.margem!=null){ mg=fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:''); mgCls=principal.margem>=0?'margem-pos':'margem-neg'; }
+  const siteForn = linkSeguro(p.fornecedor_site);
+  // 3 estados: já na cotação (desabilitado) · só 1 candidato (adiciona
+  // direto) · 2 candidatos (abre modal pra escolher, mostrando o custo
+  // dos dois — pedido explícito do usuário).
+  let acaoBtn;
+  if(naCotacao){
+    acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(true)}" disabled>${ICN.check} na cotação</button>`;
+  } else if(it.candidatos.length>1){
+    acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" onclick="escolherProdutoIA(${it.numero})" ${_atribBloq}>Escolher produto (${it.candidatos.length} opções)</button>`;
+  } else {
+    acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}"
+        onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${principal.produto_id}, this)" ${_atribBloq}>
+        + Adicionar na cotação
+      </button>`;
+  }
+  return `<tr id="ia-cat-linha-${esc(it.numero)}">
+    <td style="white-space:nowrap">${esc(it.numero??'')}</td>
+    <td style="font-size:13px;max-width:220px;overflow-wrap:break-word">${esc(it.descricao_item||'')}</td>
+    <td class="muted" style="white-space:nowrap">${esc(it.unidade_medida||'—')}</td>
+    <td style="font-size:13px;max-width:200px;overflow-wrap:break-word">${esc(p.descricao||'')}${specsBadge}</td>
+    <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
+    <td class="muted" style="font-size:12px;max-width:200px;overflow-wrap:break-word">${esc(principal.justificativa||'')}</td>
+    <td>
+      <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap">
+        ${acaoBtn}
+        <span class="acoes-ia" id="acoes-ia-${it.numero}">
+          <button class="btn ghost" type="button" style="padding:4px 8px" title="Mais ações"
+              aria-haspopup="true" aria-expanded="false" onclick="toggleAcoesIA(${it.numero}, event)">${ICN.mais}</button>
+          <div class="menu" role="menu">
+            <button class="btn ghost" role="menuitem" style="padding:6px 8px;font-size:12px" ${_atribBloq}
+                onclick="_fecharAcoesIA(this.closest('.acoes-ia'));escolherProdutoIA(${it.numero})">${ICN.trocar} trocar produto</button>
+            <button class="btn ghost" role="menuitem" style="padding:6px 8px;font-size:12px"
+                onclick="_fecharAcoesIA(this.closest('.acoes-ia'));abrirDetalheItemIA(${it.numero})">${ICN.detalhe} detalhes</button>
+            ${siteForn?`<a class="btn ghost" role="menuitem" href="${esc(siteForn)}" target="_blank" style="padding:6px 8px;font-size:12px"
+                onclick="_fecharAcoesIA(this.closest('.acoes-ia'))">${ICN.externo} fornecedor</a>`:''}
+          </div>
+        </span>
+        <button class="btn perigo" onclick="_excluirComparacaoIA(${it.numero}, this)" style="padding:4px 10px;font-size:12px">excluir</button>
+      </div>
+    </td>
+  </tr>`;
+}
+
+// Depois de confirmar um candidato (ou um produto buscado à parte, fora da
+// sugestão da IA) pra um item da comparação por IA, a LINHA da tabela
+// (produto sugerido/margem/justificativa) tem que ser atualizada também,
+// não só o botão -- achado real (pedido do usuário): escolher o 2º
+// candidato (ou um produto de fora da sugestão da IA, via busca) confirmava
+// certo no backend, mas a tabela continuava mostrando o candidato ORIGINAL
+// (o 1º) até o usuário sair da aba e voltar. Promove o candidato escolhido
+// pra 1º da lista (_iaCatLinhaHTML sempre usa candidatos[0] como
+// "principal") e re-renderiza só essa linha, sem reconstruir a tabela
+// inteira nem ir ao servidor de novo.
+function _atualizarLinhaComparacaoIA(numero, produtoId){
+  const it = _comparacaoCatalogoItensAtual[numero];
+  if(!it) return;
+  const candidatos = it.candidatos || [];
+  let escolhido = candidatos.find(cnd => cnd.produto_id === produtoId);
+  if(escolhido){
+    it.candidatos = [escolhido, ...candidatos.filter(cnd => cnd !== escolhido)];
+  } else {
+    // produto de fora dos candidatos sugeridos pela IA (busca livre no
+    // modal "escolher produto") -- monta um candidato com o dado ao vivo
+    // do item (_paginaEditalDetalhe já foi recarregado por
+    // adicionarItemIaNaCotacao antes de chamar esta função), sem
+    // justificativa nenhuma da IA (ela nunca opinou sobre este produto).
+    const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
+      .find(x => String(x.numero) === String(numero));
+    if(!itemAoVivo || !itemAoVivo.produto) return;
+    escolhido = {
+      produto_id: produtoId, produto: itemAoVivo.produto,
+      justificativa: 'Produto selecionado manualmente (fora da sugestão da IA).',
+      validacao_tecnica: itemAoVivo.validacao_tecnica,
+      margem: itemAoVivo.margem, margem_pct: itemAoVivo.margem_pct,
+      custo_comparavel: itemAoVivo.custo_comparavel, alerta_unidade: itemAoVivo.alerta_unidade,
+    };
+    it.candidatos = [escolhido, ...candidatos];
+  }
+  const tr = document.getElementById('ia-cat-linha-'+numero);
+  if(tr) tr.outerHTML = _iaCatLinhaHTML(it);
+}
+
 function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
   const _motivoBloq = _motivoBloqueioEdicao();
@@ -4624,85 +4746,9 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
   c.itens.forEach(it => _comparacaoCatalogoItensAtual[it.numero] = it);   // detalhes/troca precisam achar item excluído também
-  const linhaHTML = (it)=>{
-    const principal = it.candidatos[0];
-    // Achado real: item confirmado numa análise antiga (produto A), esse
-    // produto depois excluído do catálogo, e uma NOVA análise sugerindo um
-    // produto B diferente pro mesmo item -- o botão continuava travado em
-    // "na cotação" porque _cotacaoSelecionados só sabe o NÚMERO do item (é
-    // a Proposta salva, que não guarda produto nenhum), sem saber se é
-    // justamente ESTE candidato que está confirmado. Confere contra o
-    // produto ao vivo do item (_paginaEditalDetalhe) -- só trava o botão
-    // quando é de fato o mesmo produto já confirmado, senão deixa reabrir
-    // pra confirmar o novo candidato.
-    const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
-      .find(x => String(x.numero) === String(it.numero));
-    const produtoJaConfirmado = !!(itemAoVivo && itemAoVivo.compativel
-      && itemAoVivo.produto && itemAoVivo.produto.id === principal.produto_id);
-    const naCotacao = _cotacaoSelecionados.has(String(it.numero)) && produtoJaConfirmado;
-    const p = principal.produto || {};
-    const vt = principal.validacao_tecnica;
-    // badge compacta de specs: reaproveita a MESMA validação determinística
-    // (medidas/material/características) que já roda pros itens que o motor
-    // de matching compatibilizou — pega exatamente o caso real que motivou
-    // isso ("Fita ... largura 50mm" vs sugestão "... 48mm x 50m": categoria
-    // certa, medida errada, e a IA sozinha não tinha percebido).
-    let specsBadge = '';
-    if(vt){
-      const cor = CORES_VALIDACAO[vt.classificacao] || 'var(--muted-fg,#888)';
-      const icone = vt.classificacao==='Não atende' ? '✗' : (vt.classificacao==='Atende' ? '✓' : '⚠');
-      const pendencias = [...vt.criticas, ...vt.avisos];
-      specsBadge = `<div style="color:${cor};font-weight:600;font-size:11px;margin-top:2px">${icone} ${esc(vt.classificacao)}</div>`
-        + (pendencias.length ? `<div class="muted" style="font-size:10px;margin-top:1px">${esc(pendencias.join(' · '))}</div>` : '');
-    }
-    let mg='—', mgCls='';
-    if(principal.alerta_unidade){ mg='⚠ conferir'; mgCls='margem-neg'; }
-    else if(principal.margem!=null){ mg=fmtMoeda(principal.margem)+(principal.margem_pct!=null?` (${principal.margem_pct}%)`:''); mgCls=principal.margem>=0?'margem-pos':'margem-neg'; }
-    const siteForn = linkSeguro(p.fornecedor_site);
-    // 3 estados: já na cotação (desabilitado) · só 1 candidato (adiciona
-    // direto) · 2 candidatos (abre modal pra escolher, mostrando o custo
-    // dos dois — pedido explícito do usuário).
-    let acaoBtn;
-    if(naCotacao){
-      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" style="${_estiloBotaoCotacao(true)}" disabled>${ICN.check} na cotação</button>`;
-    } else if(it.candidatos.length>1){
-      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}" onclick="escolherProdutoIA(${it.numero})" ${_atribBloq}>Escolher produto (${it.candidatos.length} opções)</button>`;
-    } else {
-      acaoBtn = `<button class="btn ghost" id="ia-cat-btn-${esc(it.numero)}"
-          onclick="adicionarItemIaNaCotacao('${esc(it.numero)}', ${principal.produto_id}, this)" ${_atribBloq}>
-          + Adicionar na cotação
-        </button>`;
-    }
-    return `<tr id="ia-cat-linha-${esc(it.numero)}">
-      <td style="white-space:nowrap">${esc(it.numero??'')}</td>
-      <td style="font-size:13px;max-width:220px;overflow-wrap:break-word">${esc(it.descricao_item||'')}</td>
-      <td class="muted" style="white-space:nowrap">${esc(it.unidade_medida||'—')}</td>
-      <td style="font-size:13px;max-width:200px;overflow-wrap:break-word">${esc(p.descricao||'')}${specsBadge}</td>
-      <td class="${mgCls}" style="font-size:13px;white-space:nowrap">${mg}</td>
-      <td class="muted" style="font-size:12px;max-width:200px;overflow-wrap:break-word">${esc(principal.justificativa||'')}</td>
-      <td>
-        <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap">
-          ${acaoBtn}
-          <span class="acoes-ia" id="acoes-ia-${it.numero}">
-            <button class="btn ghost" type="button" style="padding:4px 8px" title="Mais ações"
-                aria-haspopup="true" aria-expanded="false" onclick="toggleAcoesIA(${it.numero}, event)">${ICN.mais}</button>
-            <div class="menu" role="menu">
-              <button class="btn ghost" role="menuitem" style="padding:6px 8px;font-size:12px" ${_atribBloq}
-                  onclick="_fecharAcoesIA(this.closest('.acoes-ia'));escolherProdutoIA(${it.numero})">${ICN.trocar} trocar produto</button>
-              <button class="btn ghost" role="menuitem" style="padding:6px 8px;font-size:12px"
-                  onclick="_fecharAcoesIA(this.closest('.acoes-ia'));abrirDetalheItemIA(${it.numero})">${ICN.detalhe} detalhes</button>
-              ${siteForn?`<a class="btn ghost" role="menuitem" href="${esc(siteForn)}" target="_blank" style="padding:6px 8px;font-size:12px"
-                  onclick="_fecharAcoesIA(this.closest('.acoes-ia'))">${ICN.externo} fornecedor</a>`:''}
-            </div>
-          </span>
-          <button class="btn perigo" onclick="_excluirComparacaoIA(${it.numero}, this)" style="padding:4px 10px;font-size:12px">excluir</button>
-        </div>
-      </td>
-    </tr>`;
-  };
   const tabelaHTML = (itens)=>`<div style="overflow-x:auto"><table>
       <thead><tr><th>Item</th><th>Descrição</th><th>Unidade</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
-      <tbody>${itens.map(linhaHTML).join('')}</tbody>
+      <tbody>${itens.map(_iaCatLinhaHTML).join('')}</tbody>
     </table></div>`;
   // pedido do usuário: quando o edital é julgado por lote (r.lotes só vem
   // preenchido nesse caso, ver backend), separa a tabela em uma por lote —
@@ -4794,10 +4840,14 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
       {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({produto_id: produtoId, candidatos})});
     _marcarSelecaoCotacao(numero, true);
     _paginaEditalDetalhe = await api(`/api/editais/${_paginaEditalId}/detalhe`);
-    if(btn){ btn.innerHTML = ICN.check+' na cotação'; btn.style.cssText = _estiloBotaoCotacao(true); }
+    // pedido do usuário: a linha inteira (produto sugerido/margem/
+    // justificativa), não só o botão, tem que refletir o candidato
+    // realmente confirmado -- ver _atualizarLinhaComparacaoIA.
+    _atualizarLinhaComparacaoIA(numero, produtoId);
     // _marcarSelecaoCotacao (chamada acima) já invalida _analiseCache --
-    // o botão em tela é atualizado na hora (2 linhas acima), sem precisar
-    // reconstruir o resto da tela; reabrir a aba depois busca fresco.
+    // a linha em tela é atualizada na hora, sem precisar reconstruir o
+    // resto da tela; reabrir a aba depois busca fresco.
+    if(_analiseCache) _analiseCache = $('#edital-conteudo').innerHTML;
     toast('Item confirmado e adicionado à cotação.', 'ok');
   }catch(e){
     if(btn) btn.disabled = false;
@@ -4812,7 +4862,18 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
 // qualquer produto_id do usuário em /confirmar, só a UI daqui é que nunca
 // tinha oferecido isso).
 async function escolherProdutoIA(numero){
-  const candidatos = (_comparacaoCatalogoItensAtual[numero] || {}).candidatos || [];
+  const it = _comparacaoCatalogoItensAtual[numero] || {};
+  const candidatos = it.candidatos || [];
+  // pedido do usuário: mostrar o que o EDITAL pede aqui também -- sem isso,
+  // a única forma de conferir a descrição/quantidade/valor do item era
+  // fechar este modal e abrir "detalhes" à parte, enquanto escolhe ou troca
+  // o produto às cegas.
+  const doEdital = `<p style="margin:8px 0 0;line-height:1.5;font-size:14px">${esc(it.descricao_item||'')}</p>
+    ${_paresHTML('Pedido no edital', [
+      ['Valor do órgão (unit.)', it.valor_orgao!=null?fmtMoeda(it.valor_orgao):null],
+      ['Quantidade pedida', it.quantidade],
+      ['Unidade', it.unidade_medida],
+    ])}`;
   const cards = candidatos.map(c=>{
     const p = c.produto || {};
     let mg='—', mgCls='';
@@ -4832,8 +4893,11 @@ async function escolherProdutoIA(numero){
   $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
     <div class="modal-card" style="max-width:480px">
       <button class="close-x" onclick="fecharModal()">×</button>
-      <h2>Escolher produto</h2>
-      ${candidatos.length ? `<p class="muted" style="font-size:12px;margin-top:4px">${candidatos.length>1?'A IA encontrou mais de um produto do seu catálogo compatível com este item.':'A IA sugeriu este produto do seu catálogo pra este item.'}</p>${cards}` : ''}
+      <h2>Escolher produto — item ${esc(it.numero??'')}</h2>
+      ${doEdital}
+      <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+        ${candidatos.length ? `<p class="muted" style="font-size:12px">${candidatos.length>1?'A IA encontrou mais de um produto do seu catálogo compatível com este item.':'A IA sugeriu este produto do seu catálogo pra este item.'}</p>${cards}` : ''}
+      </div>
       <div style="margin-top:${candidatos.length?16:4}px;${candidatos.length?'border-top:1px solid var(--line);padding-top:12px':''}">
         <label style="font-size:12px;font-weight:600">Ou busque outro produto no seu catálogo</label>
         <input type="text" id="ia-troca-busca" placeholder="Digite parte da descrição..." style="width:100%;margin-top:6px" oninput="_filtrarTrocaProdutoIA(${numero})">
@@ -5850,7 +5914,11 @@ async function _corpoCotacaoEdital(id){
   const linhas = selecionados.map(it=>{
     const desc = it.descricao||'';
     const descCurta = desc.length>100 ? desc.slice(0,100)+'…' : desc;
-    const linkItem = linkSeguro(it.produto ? it.produto.fornecedor_site : null);
+    // pedido do usuário: o link aqui é pra abrir o ITEM (conferir preço
+    // atual enquanto cota), não a home do fornecedor -- link_produto (link
+    // direto cadastrado no catálogo) é o certo; fornecedor_site só como
+    // fallback quando o produto não tem link próprio cadastrado.
+    const linkItem = linkSeguro(it.produto ? (it.produto.link_produto || it.produto.fornecedor_site) : null);
     const temTotal = it.valor_orgao!=null && it.quantidade!=null;
     const totalItem = temTotal ? it.valor_orgao * it.quantidade : null;
     if(temTotal) totalGeral += totalItem; else totalGeralCompleto = false;

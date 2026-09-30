@@ -2263,6 +2263,12 @@ def _produto_json(p: Produto) -> dict:
         "fornecedor_nome": p.fornecedor_nome,
         "fornecedor_contato": p.fornecedor_contato,
         "fornecedor_site": p.fornecedor_site,
+        # achado real (usuário reportou): faltava aqui -- os links "abrir
+        # item"/"Link do produto" espalhados pelo app (Cotação, comparação
+        # por IA, "Ver detalhes") sempre caíam pro fornecedor_site (home do
+        # fornecedor) porque este campo nunca chegava no JSON, mesmo o
+        # usuário tendo cadastrado o link direto do produto no catálogo.
+        "link_produto": p.link_produto,
     }
 
 
