@@ -205,3 +205,43 @@ def test_documento_cadastrado_vencido_ainda_reporta_vencido_quando_o_match_e_cor
     resultado = montar(exigidos, usuario)
     assert resultado[0]["status"] == "vencido"
     assert resultado[0]["dias_para_vencer"] == -5
+
+
+def test_candidato_curto_contido_literalmente_no_texto_exigido_bate():
+    """Achado real (edital 153160, usuário reportou "não reconheceu a
+    certidão simplificada"): o edital escreve a exigência como uma frase
+    longa que começa com o nome oficial do documento e emenda uma
+    explicação entre parênteses -- "Certidão simplificada expedida pela
+    Junta Comercial (para comprovação de enquadramento como ME/EPP, com
+    validade de até 120 dias)". O usuário tem cadastrado só "Certidão
+    Simplificada", que está CONTIDO literalmente no texto exigido. Mesmo
+    assim isso NÃO batia (score 0.236, limiar 0.48) -- a verificação por IA
+    (que lê o conteúdo do arquivo) reconhecia certo, só o checklist por
+    nome (fuzzy) é que ficava divergente, porque token_sort_ratio penaliza
+    a diferença de TAMANHO entre um candidato curto e um alvo longo como se
+    fosse diferença de CONTEÚDO, mesmo quando o candidato é IDÊNTICO a um
+    trecho do alvo."""
+    exigidos = {
+        "juridica": [
+            "Certidão simplificada expedida pela Junta Comercial (para comprovação de "
+            "enquadramento como ME/EPP, com validade de até 120 dias)"
+        ],
+        "fiscal_trabalhista": [], "tecnica": [], "economico_financeira": [], "declaracoes": [],
+    }
+    usuario = [_doc_sem_validade("Certidão Simplificada")]
+    resultado = montar(exigidos, usuario)
+    assert resultado[0]["status"] == "valido"
+    assert resultado[0]["nome_cadastrado"] == "Certidão Simplificada"
+
+
+def test_candidato_curto_generico_nao_bate_so_por_estar_contido():
+    """A heurística de containment não pode virar uma porta dos fundos pro
+    próprio viés que o min(set, sort) foi desenhado pra evitar: um
+    candidato CURTO e GENÉRICO (uma palavra comum, tipo "certidao" sozinho)
+    não pode bater só porque a palavra aparece em qualquer texto exigido
+    que cite alguma certidão."""
+    exigidos = {"juridica": ["Certidão simplificada expedida pela Junta Comercial"],
+               "fiscal_trabalhista": [], "tecnica": [], "economico_financeira": [], "declaracoes": []}
+    usuario = [_doc_sem_validade("Certidão")]
+    resultado = montar(exigidos, usuario)
+    assert resultado[0]["status"] == "nao_cadastrado"

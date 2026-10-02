@@ -116,10 +116,35 @@ def _esferas_mencionadas(texto_norm: str) -> set[str]:
     return {esfera for esfera, palavras in _ESFERAS_GOVERNO.items() if tokens & palavras}
 
 
+def _contido(alvo_norm: str, cand_norm: str) -> bool:
+    """Candidato cujo nome inteiro aparece literalmente dentro do texto da
+    exigência (ex.: edital 153160 — exigido escreve "Certidão simplificada
+    expedida pela Junta Comercial (para comprovação de enquadramento como
+    ME/EPP, com validade de até 120 dias)" e o usuário tem cadastrado só
+    "Certidão Simplificada") é o sinal mais forte de match que existe —
+    mais forte que qualquer score de fuzzy, porque não é parecido, é
+    IDÊNTICO ao trecho central do texto exigido.
+
+    Esse caso escapava do min(set, sort) de _score por um motivo oposto ao
+    que esse mínimo foi desenhado pra evitar: lá o problema era candidato
+    CURTO inflando o score contra um alvo genérico; aqui o candidato é
+    CURTO mas específico, e o alvo é o MESMO texto só que com uma
+    explicação extra, e token_sort_ratio pune a diferença de tamanho como
+    se fosse diferença de conteúdo. Exige candidato com conteúdo mínimo
+    (não é só uma palavra genérica tipo "certidao") pra não disparar à
+    toa em candidatos vagos.
+    """
+    if len(cand_norm) < 10 and len(cand_norm.split()) < 2:
+        return False
+    return cand_norm in alvo_norm
+
+
 def _score(alvo_norm: str, cand_norm: str) -> float:
     """min(set, sort): ver _LIMIAR_MATCH -- token_set_ratio sozinho é
     enviesado a favor de candidatos com nome CURTO. Penaliza quando exigido
     e candidato citam esferas de governo diferentes (ver _ESFERAS_GOVERNO)."""
+    if _contido(alvo_norm, cand_norm):
+        return 0.9
     base = min(fuzz.token_set_ratio(alvo_norm, cand_norm),
               fuzz.token_sort_ratio(alvo_norm, cand_norm)) / 100.0
     esf_alvo, esf_cand = _esferas_mencionadas(alvo_norm), _esferas_mencionadas(cand_norm)
