@@ -4585,20 +4585,35 @@ function _rotuloLote(numero){
 function _iaCatLinhaHTML(it){
   const _motivoBloq = _motivoBloqueioEdicao();
   const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
-  const principal = it.candidatos[0];
-  // Achado real: item confirmado numa análise antiga (produto A), esse
-  // produto depois excluído do catálogo, e uma NOVA análise sugerindo um
-  // produto B diferente pro mesmo item -- o botão continuava travado em
-  // "na cotação" porque _cotacaoSelecionados só sabe o NÚMERO do item (é
-  // a Proposta salva, que não guarda produto nenhum), sem saber se é
-  // justamente ESTE candidato que está confirmado. Confere contra o
-  // produto ao vivo do item (_paginaEditalDetalhe) -- só trava o botão
-  // quando é de fato o mesmo produto já confirmado, senão deixa reabrir
-  // pra confirmar o novo candidato.
   const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
     .find(x => String(x.numero) === String(it.numero));
-  const produtoJaConfirmado = !!(itemAoVivo && itemAoVivo.compativel
-    && itemAoVivo.produto && itemAoVivo.produto.id === principal.produto_id);
+  const produtoConfirmadoId = (itemAoVivo && itemAoVivo.compativel && itemAoVivo.produto)
+    ? itemAoVivo.produto.id : null;
+  // Achado real (pedido do usuário): escolher um candidato que NÃO é o 1º
+  // sugerido pela IA (ou um produto de fora da sugestão, via busca) salvava
+  // certo no backend (Match.detalhe, fonte da verdade), mas esta linha
+  // sempre mostrava candidatos[0] -- o cache da comparação por IA
+  // (AnaliseIAExtras) nunca reordena sozinho. Sair da aba (ou do edital) e
+  // voltar buscava o cache de novo e voltava a mostrar a sugestão
+  // ORIGINAL da IA, como se a troca nunca tivesse acontecido. Em vez de
+  // confiar na ordem do cache, acha entre os candidatos qual bate com o
+  // produto REALMENTE confirmado (_paginaEditalDetalhe, sempre ao vivo) --
+  // index.html nunca precisa saber de reordenar nada, a linha sempre
+  // mostra o estado de verdade.
+  let principal = it.candidatos.find(c => c.produto_id === produtoConfirmadoId) || it.candidatos[0];
+  if(produtoConfirmadoId!=null && !it.candidatos.some(c => c.produto_id === produtoConfirmadoId)){
+    // confirmado é um produto de fora dos candidatos sugeridos pela IA
+    // (busca livre no modal "escolher produto") -- ela nunca opinou sobre
+    // ele, então monta um "candidato" com o dado ao vivo do item.
+    principal = {
+      produto_id: produtoConfirmadoId, produto: itemAoVivo.produto,
+      justificativa: 'Produto selecionado manualmente (fora da sugestão da IA).',
+      validacao_tecnica: itemAoVivo.validacao_tecnica,
+      margem: itemAoVivo.margem, margem_pct: itemAoVivo.margem_pct,
+      custo_comparavel: itemAoVivo.custo_comparavel, alerta_unidade: itemAoVivo.alerta_unidade,
+    };
+  }
+  const produtoJaConfirmado = produtoConfirmadoId!=null && produtoConfirmadoId === principal.produto_id;
   const naCotacao = _cotacaoSelecionados.has(String(it.numero)) && produtoJaConfirmado;
   const p = principal.produto || {};
   const vt = principal.validacao_tecnica;
@@ -4671,33 +4686,14 @@ function _iaCatLinhaHTML(it){
 // pra 1º da lista (_iaCatLinhaHTML sempre usa candidatos[0] como
 // "principal") e re-renderiza só essa linha, sem reconstruir a tabela
 // inteira nem ir ao servidor de novo.
-function _atualizarLinhaComparacaoIA(numero, produtoId){
+function _atualizarLinhaComparacaoIA(numero){
+  // _iaCatLinhaHTML já deriva sozinho qual produto mostrar a partir do que
+  // está REALMENTE confirmado (_paginaEditalDetalhe) -- não precisa mais
+  // reordenar nada aqui, só mandar redesenhar a linha com o dado fresco
+  // (chamado depois de _paginaEditalDetalhe ser recarregado).
   const it = _comparacaoCatalogoItensAtual[numero];
-  if(!it) return;
-  const candidatos = it.candidatos || [];
-  let escolhido = candidatos.find(cnd => cnd.produto_id === produtoId);
-  if(escolhido){
-    it.candidatos = [escolhido, ...candidatos.filter(cnd => cnd !== escolhido)];
-  } else {
-    // produto de fora dos candidatos sugeridos pela IA (busca livre no
-    // modal "escolher produto") -- monta um candidato com o dado ao vivo
-    // do item (_paginaEditalDetalhe já foi recarregado por
-    // adicionarItemIaNaCotacao antes de chamar esta função), sem
-    // justificativa nenhuma da IA (ela nunca opinou sobre este produto).
-    const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
-      .find(x => String(x.numero) === String(numero));
-    if(!itemAoVivo || !itemAoVivo.produto) return;
-    escolhido = {
-      produto_id: produtoId, produto: itemAoVivo.produto,
-      justificativa: 'Produto selecionado manualmente (fora da sugestão da IA).',
-      validacao_tecnica: itemAoVivo.validacao_tecnica,
-      margem: itemAoVivo.margem, margem_pct: itemAoVivo.margem_pct,
-      custo_comparavel: itemAoVivo.custo_comparavel, alerta_unidade: itemAoVivo.alerta_unidade,
-    };
-    it.candidatos = [escolhido, ...candidatos];
-  }
   const tr = document.getElementById('ia-cat-linha-'+numero);
-  if(tr) tr.outerHTML = _iaCatLinhaHTML(it);
+  if(it && tr) tr.outerHTML = _iaCatLinhaHTML(it);
 }
 
 function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
@@ -4843,7 +4839,7 @@ async function adicionarItemIaNaCotacao(numero, produtoId, btn){
     // pedido do usuário: a linha inteira (produto sugerido/margem/
     // justificativa), não só o botão, tem que refletir o candidato
     // realmente confirmado -- ver _atualizarLinhaComparacaoIA.
-    _atualizarLinhaComparacaoIA(numero, produtoId);
+    _atualizarLinhaComparacaoIA(numero);
     // _marcarSelecaoCotacao (chamada acima) já invalida _analiseCache --
     // a linha em tela é atualizada na hora, sem precisar reconstruir o
     // resto da tela; reabrir a aba depois busca fresco.
@@ -5069,15 +5065,49 @@ function abrirPaginaEdital(editalId, aba='itens'){
 // usuário chegou colando a URL direto ou vindo de outro site, back() pode
 // sair do app ou não fazer nada). Navega direto e explicitamente pro
 // dashboard, sempre.
-function voltarDoEdital(){
+async function voltarDoEdital(){
   history.pushState({view:'dashboard'}, '', '/');
-  _fecharPaginaEdital();
+  // achado real (usuário reportou): mesmo com o requestAnimationFrame
+  // abaixo, "Voltar" ainda subia um pouco -- loadEditais() (chamado dentro
+  // de _fecharPaginaEdital) troca #lista-editais pra um "Buscando
+  // editais..." de UMA LINHA já na parte síncrona dela (antes do primeiro
+  // await), ENCOLHENDO a página inteira antes mesmo do rAF rodar. O
+  // scrollTo() restaurava certo contra essa altura ainda encolhida (ficava
+  // clampado pra baixo do valor salvo) e nunca se ajustava de volta quando
+  // a lista de verdade terminava de carregar e a página crescia de novo.
+  // Esperar a promise inteira (lista já com o conteúdo final) antes do
+  // rAF+scrollTo resolve -- não é só esconder a aba antiga, é também
+  // esperar a nova terminar de carregar.
+  await _fecharPaginaEdital();
   // requestAnimationFrame, não direto: o navegador só termina o layout da
-  // lista (agora visível de novo, alta) depois desse ponto — chamar
-  // scrollTo() na mesma tick via classList.remove('hidden') ainda vê a
-  // página com a altura antiga (curta) e CLAMPA a posição pra baixo do
-  // valor salvo (achado real: sem isso, "Voltar" sempre ia pro topo).
-  requestAnimationFrame(() => window.scrollTo(0, _scrollAoAbrirEdital));
+  // lista (agora com o conteúdo final) depois desse ponto — chamar
+  // scrollTo() na mesma tick ainda vê a página com a altura de antes do
+  // reflow e CLAMPA a posição pra baixo do valor salvo (achado real: sem
+  // isso, "Voltar" sempre ia pro topo).
+  requestAnimationFrame(() => {
+    // 2º achado real (telas largas, ≥1500px, onde o cabeçalho compacto
+    // tem efeito visual -- ver _atualizarNavCompacta): a página do edital
+    // sempre abre com scrollY=0, e isso desliga o modo compacto (volta o
+    // cabeçalho pro tamanho expandido). scrollTo() dispara um evento
+    // 'scroll' nativo, que só RELIGA o compacto de volta DEPOIS -- sem
+    // acertar isso ANTES de rolar, o cabeçalho encolhe em reação ao
+    // scroll já em andamento. Acertar o estado aqui evita essa 1ª cascata.
+    if(!_navCompacta && _scrollAoAbrirEdital > 60){
+      _navCompacta = true;
+      $('#topo-fixo').classList.add('compacto');
+    }
+    window.scrollTo(0, _scrollAoAbrirEdital);
+    // #topo-spacer (ver CSS) tem transition:height .3s -- mesmo já
+    // começando no tamanho certo (acima), ele ainda ANIMA de 147px pra
+    // 72px nessa troca de classe (não pula direto), e o scroll anchoring
+    // do navegador (compensa automaticamente pra manter o conteúdo visível
+    // estável enquanto algo ACIMA do viewport muda de tamanho) vai
+    // "arrastando" scrollY pra baixo conforme o espaçador encolhe --
+    // sobra ~75px abaixo do valor salvo quando a transição termina.
+    // Reaplica o scrollTo depois que a transição acaba (.3s) pra corrigir
+    // esse arrasto, sem precisar desligar a transição em si.
+    setTimeout(() => window.scrollTo(0, _scrollAoAbrirEdital), 320);
+  });
 }
 function _fecharPaginaEdital(){
   $('#t-edital').classList.add('hidden');
@@ -5089,8 +5119,10 @@ function _fecharPaginaEdital(){
   // card continuava mostrando o status ANTERIOR à mudança até o usuário
   // dar um F5 ou mudar algum filtro (o que dispara loadEditais() de novo).
   // resetPagina=false: mantém a página em que o usuário já estava, só
-  // atualiza o conteúdo dela.
-  loadEditais(false);
+  // atualiza o conteúdo dela. Devolve a promise (ver voltarDoEdital, que
+  // espera ela terminar antes de restaurar o scroll) -- popstate (abaixo)
+  // continua chamando isso sem esperar, de propósito: não mexe em scroll.
+  return loadEditais(false);
 }
 // Sub-aba lembrada (ver abaEdital()) só reaproveitada quando é do MESMO
 // edital -- o valor salvo é {id, aba}, não só o nome, porque tanto o F5
