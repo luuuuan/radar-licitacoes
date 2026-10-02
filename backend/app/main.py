@@ -1225,6 +1225,7 @@ _COLS_IMPORT = {
     "fornecedor_whatsapp": "_fornecedor_telefone", "whatsapp_fornecedor": "_fornecedor_telefone",
 }
 _CAMPOS_NUM = {"preco_custo", "preco_venda", "itens_por_unidade"}
+_LOTE_COMMIT_IMPORT = 200  # commita a cada N linhas (ver comentário no loop de importação)
 
 
 def _num_br(v):
@@ -1345,34 +1346,35 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                 .where(func.lower(Produto.descricao) == desc.lower())
             ).scalars().first()
         try:
-            if existente:
-                for campo, valor in dados.items():
-                    if valor is not None:           # só sobrescreve o que veio preenchido
-                        setattr(existente, campo, valor)
-            else:
-                db.add(Produto(**dados, usuario_id=user.id))
-            # Achado real (auditoria do agente code-reviewer): db.add()/
-            # setattr() só ENFILEIRAM a mudança -- o INSERT/UPDATE de
-            # verdade só acontece no autoflush da PRÓXIMA linha (fora deste
-            # try) ou no commit final, então um erro de banco causado por
-            # esta linha (valor fora do tipo/tamanho da coluna, etc.)
-            # explodia sem tratamento bem depois de onde foi "capturado",
-            # derrubando a importação INTEIRA (nada commitado, nem as linhas
-            # boas). O flush força o erro de banco a aparecer AQUI DENTRO do
-            # try, e o commit por linha garante que uma falha nesta linha só
-            # descarta ela mesma (rollback), sem perder as anteriores.
-            db.flush()
-            db.commit()
+            # Achado real (planilha de catálogo externo com ~3600 linhas,
+            # banco em produção): um commit por linha fazia a importação
+            # demorar tempo suficiente pra dar timeout antes de terminar --
+            # cada commit é um round-trip de rede + fsync no Postgres, ao
+            # contrário do SQLite local onde isso passa despercebido. Troca
+            # pra SAVEPOINT (begin_nested): ainda isola o erro de uma linha
+            # (rollback só desfaz o que essa linha tentou, sem perder as
+            # anteriores já flushadas), mas sem pagar o commit de verdade a
+            # cada iteração -- o commit de fato só acontece a cada
+            # _LOTE_COMMIT linhas (e no final).
+            with db.begin_nested():
+                if existente:
+                    for campo, valor in dados.items():
+                        if valor is not None:       # só sobrescreve o que veio preenchido
+                            setattr(existente, campo, valor)
+                else:
+                    db.add(Produto(**dados, usuario_id=user.id))
+                db.flush()
             if existente:
                 atualizados += 1
             else:
                 criados += 1
         except Exception as e:
-            db.rollback()
             erros.append(f"linha {n}: {e}")
+        if (n - 1) % _LOTE_COMMIT_IMPORT == 0:
+            db.commit()
     if criados or atualizados:
         user.versao_catalogo += 1
-        db.commit()
+    db.commit()
     return {"status": "ok", "criados": criados, "atualizados": atualizados,
             "ignorados": ignorados, "erros": erros[:20]}
 
