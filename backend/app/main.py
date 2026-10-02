@@ -3466,6 +3466,22 @@ def _anexar_cobertura_lotes(resultado: dict, ed: Edital, user: Usuario, db: Sess
     lotes = resultado.get("lotes") or []
     if not lotes:
         return resultado
+    # Achado real (usuário reportou, edital 151950): a IA às vezes extrai um
+    # número de item errado pra dentro do lote (ex.: um código/CATMAT do
+    # documento, tipo 50957, em vez da numeração sequencial 1..32 que o
+    # órgão usa de verdade) -- esse número nunca vai bater com nenhum item
+    # real do edital, então o lote aparecia com "tudo faltando" pra sempre,
+    # por um motivo que não tem nada a ver com o catálogo do usuário (mesmo
+    # raciocínio do filtro de 0/negativo já feito em analise_edital.py,
+    # só que aqui dá pra validar contra os números REAIS do edital, que
+    # aquele módulo não tem acesso). Filtra pra fora qualquer número de
+    # item que não existe de verdade neste edital -- se um lote ficar sem
+    # item válido nenhum, cai no mesmo "não foi possível identificar os
+    # itens deste lote" que lotes_cobertura/itens vazio já tratava.
+    numeros_reais = set(db.execute(
+        select(ItemEdital.numero).where(ItemEdital.edital_id == ed.id)).scalars())
+    for lote in lotes:
+        lote["itens"] = [n for n in (lote.get("itens") or []) if n in numeros_reais]
     confirmados = _produtos_confirmados_por_numero(ed.id, user, db)
     cobertura = []
     for lote in lotes:
