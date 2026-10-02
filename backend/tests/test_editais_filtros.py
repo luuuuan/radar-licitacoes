@@ -63,7 +63,8 @@ def _listar(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, plataforma=None, modalidade=None, status=None,
                   vista="ativos", apenas_nao_lidos=False, apenas_interessantes=False,
                   hoje=False, tipo="todos", valor_min=None, valor_max=None,
-                  data_de=None, data_ate=None, busca_item=None, todos_editais=False,
+                  data_de=None, data_ate=None, data_fim_de=None, data_fim_ate=None,
+                  busca_item=None, todos_editais=False,
                   pagina=1, por_pagina=50)
     padrao.update(kwargs)
     return listar_editais(user=user, db=db, **padrao)
@@ -74,7 +75,8 @@ def _plataformas(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, modalidade=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
-                  data_de=None, data_ate=None, busca_item=None, todos_editais=False)
+                  data_de=None, data_ate=None, data_fim_de=None, data_fim_ate=None,
+                  busca_item=None, todos_editais=False)
     padrao.update(kwargs)
     return listar_plataformas(user=user, db=db, **padrao)
 
@@ -84,7 +86,8 @@ def _modalidades(db, user, **kwargs):
     padrao = dict(nivel=None, uf=None, plataforma=None, status=None, vista="ativos",
                   apenas_nao_lidos=False, apenas_interessantes=False, hoje=False,
                   tipo="todos", valor_min=None, valor_max=None,
-                  data_de=None, data_ate=None, busca_item=None, todos_editais=False)
+                  data_de=None, data_ate=None, data_fim_de=None, data_fim_ate=None,
+                  busca_item=None, todos_editais=False)
     padrao.update(kwargs)
     return listar_modalidades(user=user, db=db, **padrao)
 
@@ -192,6 +195,69 @@ def test_edital_sem_data_abertura_fica_de_fora_quando_ha_filtro_de_data():
     _edital_com_match(db, u, "ed1", data_abertura=None)
 
     r = _listar(db, u, data_de=datetime.date.today())
+    assert r["total"] == 0
+
+
+# --------- filtro de fim do recebimento de propostas (data_fim_de/data_fim_ate) --------- #
+# Filtra por data_encerramento (dataEncerramentoProposta no PNCP -- prazo
+# final para enviar proposta), diferente do filtro de data_de/data_ate acima
+# (que é sobre data_abertura, início do recebimento).
+
+def test_data_fim_de_exclui_editais_com_encerramento_antes():
+    import datetime
+    hoje = datetime.date.today()
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1),
+                      data_encerramento=hoje + datetime.timedelta(days=2))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=1),
+                            data_encerramento=hoje + datetime.timedelta(days=20))
+
+    r = _listar(db, u, data_fim_de=hoje + datetime.timedelta(days=10))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed2.id
+
+
+def test_data_fim_ate_exclui_editais_com_encerramento_depois():
+    import datetime
+    hoje = datetime.date.today()
+    db = _sessao()
+    u = _usuario(db)
+    ed1 = _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1),
+                            data_encerramento=hoje + datetime.timedelta(days=2))
+    _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=1),
+                      data_encerramento=hoje + datetime.timedelta(days=20))
+
+    r = _listar(db, u, data_fim_ate=hoje + datetime.timedelta(days=10))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed1.id
+
+
+def test_faixa_de_data_fim_combinada_de_e_ate():
+    import datetime
+    hoje = datetime.date.today()
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=hoje + datetime.timedelta(days=1),
+                      data_encerramento=hoje + datetime.timedelta(days=2))
+    ed2 = _edital_com_match(db, u, "ed2", data_abertura=hoje + datetime.timedelta(days=1),
+                            data_encerramento=hoje + datetime.timedelta(days=20))
+    _edital_com_match(db, u, "ed3", data_abertura=hoje + datetime.timedelta(days=1),
+                      data_encerramento=hoje + datetime.timedelta(days=35))
+
+    r = _listar(db, u, data_fim_de=hoje + datetime.timedelta(days=10),
+               data_fim_ate=hoje + datetime.timedelta(days=25))
+    assert r["total"] == 1
+    assert r["resultados"][0]["edital_id"] == ed2.id
+
+
+def test_edital_sem_data_encerramento_fica_de_fora_quando_ha_filtro_de_data_fim():
+    import datetime
+    db = _sessao()
+    u = _usuario(db)
+    _edital_com_match(db, u, "ed1", data_abertura=datetime.date.today(), data_encerramento=None)
+
+    r = _listar(db, u, data_fim_de=datetime.date.today())
     assert r["total"] == 0
 
 

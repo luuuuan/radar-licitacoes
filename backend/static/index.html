@@ -1227,6 +1227,15 @@
           </div>
         </div>
         <div class="field">
+          <label>Fim do recebimento de propostas
+            <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Data em que a janela de propostas fecha no PNCP (dataEncerramentoProposta) -- é o prazo final pra enviar proposta, diferente do filtro de início acima.</span></span>
+          </label>
+          <div style="display:flex;gap:6px">
+            <input type="date" id="f-data-fim-de" onchange="loadEditais()" style="width:50%">
+            <input type="date" id="f-data-fim-ate" onchange="loadEditais()" style="width:50%">
+          </div>
+        </div>
+        <div class="field">
           <label>Nível de compatibilidade</label>
           <select id="f-nivel" onchange="loadEditais()">
             <option value="">Todos os níveis</option>
@@ -3013,6 +3022,8 @@ function _capturarFiltroAtual(){
     valorMax: $('#f-valor-max') ? $('#f-valor-max').value : '',
     dataDe: $('#f-data-de') ? $('#f-data-de').value : '',
     dataAte: $('#f-data-ate') ? $('#f-data-ate').value : '',
+    dataFimDe: $('#f-data-fim-de') ? $('#f-data-fim-de').value : '',
+    dataFimAte: $('#f-data-fim-ate') ? $('#f-data-fim-ate').value : '',
     buscaItem: $('#f-busca-item') ? $('#f-busca-item').value : '',
   };
 }
@@ -3041,6 +3052,8 @@ function _aplicarFiltroSalvo(){
   if($('#f-valor-max')) $('#f-valor-max').value = f.valorMax || '';
   if($('#f-data-de')) $('#f-data-de').value = f.dataDe || '';
   if($('#f-data-ate')) $('#f-data-ate').value = f.dataAte || '';
+  if($('#f-data-fim-de')) $('#f-data-fim-de').value = f.dataFimDe || '';
+  if($('#f-data-fim-ate')) $('#f-data-fim-ate').value = f.dataFimAte || '';
   if($('#f-busca-item')) $('#f-busca-item').value = f.buscaItem || '';
   _plataformasSelecionadas = f.plataformas || [];
   _atualizarBotaoPlataformas();
@@ -3092,6 +3105,8 @@ function _lerFiltrosAtivos(){
     vmax: $('#f-valor-max') ? $('#f-valor-max').value : '',
     dde: $('#f-data-de') ? $('#f-data-de').value : '',
     date_: $('#f-data-ate') ? $('#f-data-ate').value : '',
+    dfde: $('#f-data-fim-de') ? $('#f-data-fim-de').value : '',
+    dfate: $('#f-data-fim-ate') ? $('#f-data-fim-ate').value : '',
   };
 }
 
@@ -3112,6 +3127,8 @@ function _qsFiltrosAtivos(f){
   if(f.vmax!=='') qs.set('valor_max', f.vmax);
   if(f.dde!=='') qs.set('data_de', f.dde);
   if(f.date_!=='') qs.set('data_ate', f.date_);
+  if(f.dfde!=='') qs.set('data_fim_de', f.dfde);
+  if(f.dfate!=='') qs.set('data_fim_ate', f.dfate);
   return qs;
 }
 
@@ -3242,6 +3259,8 @@ function _zerarCamposFiltro(){
   $('#f-valor-max').value = '';
   $('#f-data-de').value = '';
   $('#f-data-ate').value = '';
+  $('#f-data-fim-de').value = '';
+  $('#f-data-fim-ate').value = '';
 }
 
 function limparFiltros(){
@@ -3254,13 +3273,13 @@ function limparFiltros(){
 async function loadEditais(resetPagina=true){
   if(resetPagina) paginaEditais = 1;
   const f = _lerFiltrosAtivos();
-  const {nivel, ufs, st, nl, hoje, todosEd, tipo, busca, vmin, vmax, dde, date_} = f;
+  const {nivel, ufs, st, nl, hoje, todosEd, tipo, busca, vmin, vmax, dde, date_, dfde, dfate} = f;
   const plataformas = _plataformasSelecionadas;
   const modalidades = _modalidadesSelecionadas;
   // algum filtro além do padrão "ativos" está ligado? decide qual mensagem
   // mostrar se a busca não achar nada (filtro sem resultado != base vazia).
   const temFiltroAtivo = !!(nivel || ufs.length || plataformas.length || modalidades.length || st || nl || hoje || todosEd ||
-    tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='');
+    tipo!=='todos' || busca || vmin!=='' || vmax!=='' || dde!=='' || date_!=='' || dfde!=='' || dfate!=='');
   $('#lista-editais').innerHTML = _radarCarregandoHTML('Buscando editais...');
   const porPag = $('#f-porpag') ? $('#f-porpag').value : 20;
   const qs = _qsFiltrosAtivos(f);

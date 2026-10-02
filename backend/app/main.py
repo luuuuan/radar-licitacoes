@@ -1612,6 +1612,7 @@ def _condicoes_edital_comuns(uf: list[str] | None, plataforma: list[str] | None,
                              modalidade: list[str] | None, tipo: str,
                              valor_min: float | None, valor_max: float | None,
                              data_de: date | None, data_ate: date | None,
+                             data_fim_de: date | None, data_fim_ate: date | None,
                              hoje: bool, hoje_data: date) -> list:
     """Condições de filtro que dependem só de Edital (não de Match) --
     compartilhadas entre o bloco principal (_query_editais_filtrada, junto
@@ -1649,6 +1650,18 @@ def _condicoes_edital_comuns(uf: list[str] | None, plataforma: list[str] | None,
         # excluiria qualquer edital do próprio dia data_ate com hora > 0.
         # Fim do dia (< o dia seguinte) inclui o dia inteiro.
         condicoes.append(Edital.data_abertura < data_ate + timedelta(days=1))
+    # Pedido do usuário: filtro simétrico ao de cima (data_de/data_ate), só
+    # que pra FIM do recebimento de propostas (Edital.data_encerramento),
+    # não o início -- até agora só dava pra filtrar pelo início da janela.
+    # Mesmo raciocínio de hora exata: data_encerramento >= data_fim_de direto
+    # (não precisa de ajuste de meia-noite, já que ">=" já inclui o dia
+    # inteiro de data_fim_de a partir da meia-noite); data_fim_ate precisa do
+    # mesmo "dia seguinte" de baixo pra incluir o dia inteiro, não só até
+    # meia-noite dele.
+    if data_fim_de is not None:
+        condicoes.append(Edital.data_encerramento >= data_fim_de)
+    if data_fim_ate is not None:
+        condicoes.append(Edital.data_encerramento < data_fim_ate + timedelta(days=1))
     if hoje:
         # data_abertura agora guarda hora (ver _parse_data_hora) -- "==
         # date.today()" só bateria com meia-noite exata. Faixa do dia
@@ -1666,7 +1679,8 @@ def _query_editais_filtrada(
     plataforma: list[str] | None, modalidade: list[str] | None, status: str | None,
     apenas_nao_lidos: bool, apenas_interessantes: bool, hoje: bool, tipo: str,
     valor_min: float | None, valor_max: float | None, data_de: date | None,
-    data_ate: date | None, busca_item: str | None, vista: str, db: Session,
+    data_ate: date | None, data_fim_de: date | None, data_fim_ate: date | None,
+    busca_item: str | None, vista: str, db: Session,
 ):
     """Select(Match, Edital) com todos os filtros da tela de Editais já
     aplicados (WHERE) -- compartilhado entre GET /api/editais e GET
@@ -1729,7 +1743,8 @@ def _query_editais_filtrada(
     if nivel:
         filtro.append(Match.nivel == nivel)
     filtro.extend(_condicoes_edital_comuns(uf, plataforma, modalidade, tipo, valor_min,
-                                           valor_max, data_de, data_ate, hoje, hoje_data))
+                                           valor_max, data_de, data_ate, data_fim_de,
+                                           data_fim_ate, hoje, hoje_data))
     if status:
         if status == "novo":
             # achado real (usuário reportou): edital sem Match nenhum (só
@@ -1809,6 +1824,8 @@ def listar_plataformas(
     valor_max: float | None = Query(None, ge=0),
     data_de: date | None = Query(None),
     data_ate: date | None = Query(None),
+    data_fim_de: date | None = Query(None),
+    data_fim_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     todos_editais: bool = Query(False),
     user: Usuario = Depends(_auth.get_current_user),
@@ -1837,7 +1854,7 @@ def listar_plataformas(
     base, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, None, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
-        data_ate, busca_item, vista, db)
+        data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
     q = (base.where(Edital.plataforma.is_not(None))
          .with_only_columns(Edital.plataforma).distinct().order_by(Edital.plataforma))
     valores = db.execute(q).scalars().all()
@@ -1859,6 +1876,8 @@ def listar_modalidades(
     valor_max: float | None = Query(None, ge=0),
     data_de: date | None = Query(None),
     data_ate: date | None = Query(None),
+    data_fim_de: date | None = Query(None),
+    data_fim_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     todos_editais: bool = Query(False),
     user: Usuario = Depends(_auth.get_current_user),
@@ -1872,7 +1891,7 @@ def listar_modalidades(
     base, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, None, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
-        data_ate, busca_item, vista, db)
+        data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
     q = (base.where(Edital.modalidade.is_not(None))
          .with_only_columns(Edital.modalidade).distinct().order_by(Edital.modalidade))
     valores = db.execute(q).scalars().all()
@@ -1895,6 +1914,8 @@ def listar_editais(
     valor_max: float | None = Query(None, ge=0),
     data_de: date | None = Query(None),   # filtra por data_abertura (início de recebimento de propostas)
     data_ate: date | None = Query(None),
+    data_fim_de: date | None = Query(None),   # idem, por data_encerramento (fim de recebimento de propostas)
+    data_fim_ate: date | None = Query(None),
     busca_item: str | None = Query(None),
     todos_editais: bool = Query(False),
     pagina: int = Query(1, ge=1),
@@ -1908,7 +1929,7 @@ def listar_editais(
     base, prazo_efetivo = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
-        data_ate, busca_item, vista, db)
+        data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
 
     total = db.scalar(
         select(func.count()).select_from(base.subquery())
@@ -2065,7 +2086,8 @@ def listar_editais(
         # editais não têm Match). Ver _condicoes_edital_comuns -- mesma
         # função usada em _query_editais_filtrada, não duplicada mais.
         for cond in _condicoes_edital_comuns(uf, plataforma, modalidade, tipo, valor_min,
-                                             valor_max, data_de, data_ate, hoje, hoje_data):
+                                             valor_max, data_de, data_ate, data_fim_de,
+                                             data_fim_ate, hoje, hoje_data):
             q_sem_match = q_sem_match.where(cond)
         # total ANTES do limit(20) -- pedido do usuário (achado do agente
         # code-reviewer): sem isso, uma busca genérica ("papel") que achasse
