@@ -979,33 +979,27 @@
        relação ao botão "Filtros" bem acima dele. */
     #t-editais.filtros-colapsados .filtros-lateral{flex-basis:0;opacity:0;pointer-events:none;margin-right:-20px;padding:0}
     #t-editais.filtros-colapsados .filtros-btn-mobile{display:inline-flex}
-    /* achado real: sem "display:contents" aqui, esta div (que só existe como
-       alvo pro JS mover o campo de busca entre celular/desktop, ver
-       _reposicionarBuscaItem) vira o "containing block" do filho sticky —
-       e como ela encolhe pro tamanho exato do próprio filho (sem sobra de
-       espaço nenhuma), o position:sticky não tem onde "grudar": o campo
-       nunca fica de fato preso no topo, só rola junto com o resto da
-       página como se fosse position:static. "display:contents" remove essa
-       div do cálculo de layout (sem tirá-la do DOM — appendChild continua
-       funcionando normal), fazendo o filho contar .editais-principal (bem
-       mais alta) como containing block, do jeito que o sticky precisa. */
-    #slot-busca-desktop{display:contents}
     /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1500px, ver abaixo) + uma folga de 8px. */
-    #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px;
-      transition:max-width .26s ease;
-      /* pedido do usuário: os cards da lista passam por baixo deste campo
-         ao rolar a tela (ele é sticky, eles não) -- em vez de disfarçar
-         isso, efeito vidro fosco: fundo translúcido (--panel-vidro, só
-         este contexto) + blur do que passa atrás, pra ficar claramente
-         ilegível em vez de brigar com o texto do campo. translateZ(0)
-         evita um efeito colateral comum desse combo em Chromium/Safari
-         (borrão de sub-pixel no PRÓPRIO sticky durante o scroll, não só
-         no conteúdo atrás) -- não muda layout, só a composição. */
+    /* O sticky (e o vidro fosco) fica no próprio #slot-busca-desktop, não
+       só no campo .busca-item-destaque -- achado real (print do usuário):
+       o campo tem max-width (520/760px) e nem sempre ocupa a largura
+       toda, então um card rolando por baixo aparecia nítido nas bordas
+       fora do campo, só borrado bem no meio. #slot-busca-desktop vira uma
+       FAIXA cheia (largura toda de .editais-principal) que borra tudo que
+       passa por baixo dela inteira; o campo em si continua com seu próprio
+       fundo opaco (--panel, igual sempre foi) só pra legibilidade do texto
+       digitado, sem precisar do --panel-vidro nele. display:contents saiu
+       (só fazia sentido quando quem precisava de "espaço pra grudar" era o
+       filho; agora é o próprio #slot-busca-desktop que gruda). */
+    #slot-busca-desktop{position:sticky;top:138px;z-index:5;padding:10px 0;
+      margin:-10px 0 4px;
       background:var(--panel-vidro);
       backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
       transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden}
+    #slot-busca-desktop .busca-item-destaque{max-width:520px;margin-bottom:0;
+      transition:max-width .26s ease}
     /* com os filtros escondidos sobra bem mais espaço ao lado do campo --
        sem isso ele continuava limitado aos mesmos 520px de quando a
        lateral de filtros (400px) tá ocupando a outra metade da tela,
@@ -1020,8 +1014,8 @@
     /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
        (147px/72px, ver #topo-fixo.compacto acima) — acompanha os dois
        valores reais (medidos com Playwright), não um chute. */
-    #slot-busca-desktop .busca-item-destaque{top:155px}
-    body:has(#topo-fixo.compacto) #slot-busca-desktop .busca-item-destaque{top:78px}
+    #slot-busca-desktop{top:155px}
+    body:has(#topo-fixo.compacto) #slot-busca-desktop{top:78px}
   }
 
   /* ---- Estado vazio ---- */
