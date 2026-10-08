@@ -30,7 +30,7 @@ def _usuario(db):
 
 def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
                       data_abertura=None, data_encerramento=None, plataforma=None, uf="SP",
-                      modalidade=None):
+                      modalidade=None, score=0.5):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao="Orgao Teste",
                 objeto="Aquisicao", uf=uf, valor_estimado=valor_estimado,
                 data_abertura=data_abertura, data_encerramento=data_encerramento,
@@ -39,7 +39,7 @@ def _edital_com_match(db, usuario, id_externo, valor_estimado=None, itens=None,
     db.commit()
     for numero, descricao in enumerate(itens or [], start=1):
         db.add(ItemEdital(edital_id=ed.id, numero=numero, descricao=descricao))
-    db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=0.5, nivel="medio"))
+    db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=score, nivel="medio"))
     db.commit()
     return ed
 
@@ -387,11 +387,11 @@ def test_sem_match_continua_aparecendo_na_vista_encerrados_quando_de_fato_encerr
 
 
 def test_query_editais_filtrada_devolve_fuzzy_busca_e_sqlite_nunca_liga():
-    """Contrato de retorno (base, prazo_efetivo, fuzzy_busca) -- ver docstring
-    de _query_editais_filtrada. Achado real (auditoria de 5 agentes pedida
-    pelo usuário): a decisão de fuzzy foi movida pra dentro desta função
-    (antes vinha de uma sondagem solta, só no bloco sem_match de
-    listar_editais, ignorando todos os filtros ativos) -- fuzzy_busca
+    """Contrato de retorno (base, prazo_efetivo, fuzzy_busca, qtd_item_bate)
+    -- ver docstring de _query_editais_filtrada. Achado real (auditoria de 5
+    agentes pedida pelo usuário): a decisão de fuzzy foi movida pra dentro
+    desta função (antes vinha de uma sondagem solta, só no bloco sem_match
+    de listar_editais, ignorando todos os filtros ativos) -- fuzzy_busca
     sempre False em sqlite (só Postgres tem o operador de trigram usado
     pelo fuzzy, ver busca.py), mesmo com um termo elegível (4+ letras) e
     zero resultado estrito, condição que LIGARIA fuzzy em produção."""
@@ -400,11 +400,44 @@ def test_query_editais_filtrada_devolve_fuzzy_busca_e_sqlite_nunca_liga():
     u = _usuario(db)
     # nenhum edital no banco bate "grampeador" nem de longe -- estrito
     # devolve zero resultado, exatamente a condição que ligaria o fuzzy.
-    base, prazo_efetivo, fuzzy_busca = _query_editais_filtrada(
+    base, prazo_efetivo, fuzzy_busca, qtd_item_bate = _query_editais_filtrada(
         u, False, None, None, None, None, None, False, False, False, "todos",
         None, None, None, None, None, None, "grampeador", "ativos", db)
     assert fuzzy_busca is False
+    assert qtd_item_bate is not None   # busca_item ativo -- ver test_ordena_por_qtd_itens_bate_a_busca
     assert db.scalar(select(func.count()).select_from(base.subquery())) == 0
+
+
+def test_ordena_por_qtd_itens_bate_a_busca_nao_so_por_match_score():
+    """Achado real (usuário reportou): a busca por item só FILTRAVA (edital
+    tinha que ter pelo menos 1 item que batesse); a ordenação final
+    continuava inteiramente por Match.score (relevância do edital contra o
+    CATÁLOGO cadastrado do usuário -- sem nenhuma relação com o termo
+    digitado na busca). Um edital de "materiais de escritório diversos" com
+    1 item de caneta perdido no meio de outros 4 podia aparecer ACIMA de um
+    edital pequeno e majoritariamente sobre canetas, só por ter Match.score
+    maior por outro motivo qualquer. Monta exatamente esse cenário com os
+    scores invertidos de propósito (o diverso com score bem mais alto) --
+    se a ordenação ainda fosse só por score, o diverso apareceria primeiro;
+    com qtd_item_bate na frente (ver _query_editais_filtrada/listar_editais),
+    o focado em canetas tem que vir primeiro mesmo com score bem menor."""
+    db = _sessao()
+    u = _usuario(db)
+    diverso = _edital_com_match(db, u, "ed-diverso", score=0.9, itens=[
+        "Caneta esferográfica azul", "Papel sulfite A4", "Grampeador de mesa",
+        "Pasta plástica com elástico", "Caixa de clipes",
+    ])
+    focado = _edital_com_match(db, u, "ed-focado-caneta", score=0.1, itens=[
+        "Caneta esferográfica azul", "Caneta hidrográfica preta",
+        "Caneta marca-texto amarela", "Caneta gel vermelha",
+    ])
+
+    r = _listar(db, u, busca_item="caneta")
+
+    ids = [res["edital_id"] for res in r["resultados"]]
+    assert ids == [focado.id, diverso.id], (
+        "edital com mais itens batendo 'caneta' (4) tem que vir antes do "
+        "que só tem 1, mesmo com Match.score muito menor")
 
 
 # --------- "ativo" x "encerrado" usa o prazo EFETIVO (data_encerramento --------- #

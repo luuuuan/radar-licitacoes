@@ -1710,12 +1710,15 @@ def _query_editais_filtrada(
     demais filtros aplicados) mostraria. `plataforma` normalmente vem None
     de quem monta as OPÇÕES do próprio filtro de plataforma (não faz
     sentido filtrar pela plataforma que ainda está sendo escolhida).
-    Devolve (base, prazo_efetivo, fuzzy_busca) -- quem chama decide as
-    colunas selecionadas (via with_only_columns), ordenação e paginação.
-    fuzzy_busca: True quando a busca por item (se houver) precisou cair pra
-    modo tolerante a erro de digitação -- calculado aqui (não em quem chama)
-    pra decisão respeitar os MESMOS filtros já montados nesta função; ver
-    comentário no bloco de busca por item, mais abaixo.
+    Devolve (base, prazo_efetivo, fuzzy_busca, qtd_item_bate) -- quem chama
+    decide as colunas selecionadas (via with_only_columns), ordenação e
+    paginação. fuzzy_busca: True quando a busca por item (se houver)
+    precisou cair pra modo tolerante a erro de digitação -- calculado aqui
+    (não em quem chama) pra decisão respeitar os MESMOS filtros já montados
+    nesta função; ver comentário no bloco de busca por item, mais abaixo.
+    qtd_item_bate: subquery escalar com a contagem de itens do edital que
+    batem o termo buscado (None quando busca_item não está ativo) -- pra
+    quem chama ordenar por relevância da busca, não só por Match.score.
 
     Achado do backend-architect: um filtro novo adicionado direto numa das
     duas rotas (em vez de aqui) nunca gera erro -- só fica silenciosamente
@@ -1830,25 +1833,74 @@ def _query_editais_filtrada(
     # mostra -- o fallback nunca ligava quando mais precisava.
     eh_postgres = db.get_bind().dialect.name != "sqlite"
     fuzzy_busca = False
+    # quantos itens do edital batem o termo buscado -- só preenchido quando
+    # busca_item está ativo; devolvido pra quem chama usar na ORDENAÇÃO (ver
+    # listar_editais). Achado real (usuário reportou): a busca por item só
+    # FILTRAVA (EXISTS: "tem pelo menos 1 item que bate"), a ordenação final
+    # continuava 100% por Match.score (relevância do edital contra o
+    # CATÁLOGO cadastrado, sem nenhuma relação com o termo digitado) -- um
+    # edital de "materiais de escritório diversos" com 1 item perdido de
+    # "caneta" no meio de 200 podia aparecer acima de um edital pequeno e
+    # majoritariamente sobre canetas, só por ter Match.score mais alto por
+    # outro motivo. Contagem bruta (não proporção): o pedido do usuário foi
+    # literal -- "o edital com MAIS itens de X sobe pro topo".
+    qtd_item_bate = None
     if busca_item and busca_item.strip():
-        sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
-        for cond in _condicoes_busca_item(busca_item, eh_postgres):
-            sub_busca = sub_busca.where(cond)
+        condicoes = _condicoes_busca_item(busca_item, eh_postgres)
         if eh_postgres and _termo_elegivel_fuzzy(busca_item):
+            sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id, *condicoes)
             sem_resultado_estrito = db.scalar(
                 base.where(*filtro, sub_busca.exists())
                     .with_only_columns(Edital.id).limit(1)
             ) is None
             if sem_resultado_estrito:
                 fuzzy_busca = True
-                sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
-                for cond in _condicoes_busca_item(busca_item, eh_postgres, fuzzy_busca):
-                    sub_busca = sub_busca.where(cond)
-        filtro.append(sub_busca.exists())
+                condicoes = _condicoes_busca_item(busca_item, eh_postgres, fuzzy_busca)
+        # Quantos itens do edital batem o termo, pra ORDENAR por relevância
+        # (ver listar_editais) -- mesmas condições que o filtro de busca_item
+        # sempre usou. Histórico (EXPLAIN ANALYZE pedido pelo usuário, 6
+        # rodadas em produção -- rodadas anteriores aqui por completude, o
+        # que importa pra entender o estado atual é a última):
+        #   1ª: subquery ESCALAR CORRELACIONADA (1 count por linha do
+        #       resultado final) -- reavaliava o Bitmap Index Scan do zero
+        #       pra cada uma das ~626 linhas, 2.5s só nisso.
+        #   2ª-3ª: GROUP BY (1 varredura só), mas ainda com um EXISTS
+        #       SEPARADO (igual ao filtro de sempre) só pra achar "tem pelo
+        #       menos 1 item que bate" -- o Postgres não reaproveitava a
+        #       varredura entre os dois, escaneava o índice trigram DUAS
+        #       vezes pro MESMO termo (~730ms cada), quase dobrando o tempo.
+        #       3ª rodada também tentou restringir o GROUP BY só aos editais
+        #       do usuário via `edital_id IN (subquery)` -- não ajudou: o
+        #       Postgres optou por escanear o índice trigram inteiro de
+        #       qualquer forma e só DEPOIS filtrar via semi-join (mais caro
+        #       que não restringir nada), confirmado de novo na rodada 6.
+        #   4ª: baseline -- a query ORIGINAL (antes de qualquer mudança
+        #       deste commit, só o EXISTS de sempre) já custava ~730ms pra
+        #       este termo ("caneta" bate em ~2700 itens no sistema inteiro
+        #       -- unaccent_imutavel é uma função cara de reavaliar por
+        #       linha no recheck do índice trigram, que é lossy pra regex).
+        #       Esse custo é PRÉ-EXISTENTE, não introduzido por este fix.
+        #   5ª-6ª: removido o EXISTS separado -- INNER JOIN nesta mesma
+        #       agregação faz o papel dos dois (GROUP BY só produz linha
+        #       pra edital_id com >=1 item batendo) numa varredura só.
+        #       Restrição por edital_id (tentativa da 3ª/6ª) removida de
+        #       vez: confirmado 2x que o Postgres não aproveita, só soma
+        #       overhead de semi-join (~130ms) sem reduzir o escaneado.
+        # Resultado final: mesmo custo do EXISTS que já existia (~730ms,
+        # inerente ao termo, não a este fix), sem pagar duas vezes.
+        qtd_item_bate_sub = (
+            select(ItemEdital.edital_id.label("edital_id"),
+                   func.count(ItemEdital.id).label("qtd"))
+            .where(*condicoes)
+            .group_by(ItemEdital.edital_id)
+            .subquery()
+        )
+        base = base.join(qtd_item_bate_sub, qtd_item_bate_sub.c.edital_id == Edital.id)
+        qtd_item_bate = qtd_item_bate_sub.c.qtd
 
     for f in filtro:
         base = base.where(f)
-    return base, prazo_efetivo, fuzzy_busca
+    return base, prazo_efetivo, fuzzy_busca, qtd_item_bate
 
 
 @app.get("/api/editais/plataformas")
@@ -1893,7 +1945,7 @@ def listar_plataformas(
     sistema que batem nos demais filtros, pro usuário poder filtrar mesmo o
     que nunca deu match, já que nesse modo a listagem também mostra
     qualquer edital."""
-    base, _, _ = _query_editais_filtrada(
+    base, _, _, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, None, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -1930,7 +1982,7 @@ def listar_modalidades(
     pregão na listagem. Mesmo padrão de listar_plataformas (código-irmão
     logo acima): aceita os mesmos filtros de GET /api/editais (exceto
     modalidade/pagina), pra respeitar o que já está filtrado na tela."""
-    base, _, _ = _query_editais_filtrada(
+    base, _, _, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, None, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -1968,7 +2020,7 @@ def listar_editais(
     agora = datetime.now(BR_TZ).replace(tzinfo=None)   # idem -- ver _query_editais_filtrada
     hoje_data = agora.date()   # não date.today() -- mesmo achado, ver comentário em _query_editais_filtrada. Reusado mais abaixo no bloco de sem_match
     eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
-    base, prazo_efetivo, fuzzy_busca = _query_editais_filtrada(
+    base, prazo_efetivo, fuzzy_busca, qtd_item_bate = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -1986,6 +2038,15 @@ def listar_editais(
     else:
         ordem = (Match.score.desc(), prazo_efetivo.asc()) if vista == "ativos" \
             else (prazo_efetivo.desc(),)
+    # busca por item ativa: quantidade de itens que batem o termo vem ANTES
+    # de tudo (ver _query_editais_filtrada) -- sem isso, Match.score segue
+    # mandando mesmo quando ele não tem nenhuma relação com o que foi
+    # buscado (achado real, usuário reportou: edital com 1 item perdido
+    # subia acima de um majoritariamente sobre o termo buscado, só por
+    # Match.score mais alto). Resto da ordenação (score/prazo) continua
+    # valendo como desempate.
+    if qtd_item_bate is not None:
+        ordem = (qtd_item_bate.desc(),) + ordem
     q = base.order_by(*ordem)
     q = q.limit(por_pagina).offset((pagina - 1) * por_pagina)
 
