@@ -308,16 +308,58 @@ def _migrar_indices_novos() -> None:
             try:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
                 conn.commit()
-                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-                conn.execute(text(
-                    "CREATE INDEX IF NOT EXISTS ix_itens_edital_descricao_trgm "
-                    "ON itens_edital USING gin (lower(descricao) gin_trgm_ops)"
-                ))
-                conn.commit()
-                log.info("Migração: índice trigram de itens_edital.descricao garantido")
             except Exception as e:
                 conn.rollback()
-                log.warning("Migração do índice trigram (pg_trgm) falhou: %s", e)
+                log.warning("Migração da extensão pg_trgm falhou: %s", e)
+
+            # Achado real (medido em produção pelo usuário com EXPLAIN
+            # ANALYZE, auditoria do commit "busca tolerante"): o índice
+            # antigo era sobre lower(descricao) com ACENTO mantido -- pra
+            # casar "café"/"cafe" dos dois lados, busca.py precisava
+            # expandir CADA letra acentuável numa classe de caractere regex
+            # (ex. "caneta" virava "\m[cç][aáàâã]n[eéèê]t[aáàâã]"). O
+            # extrator de trigrama do Postgres não consegue tirar trigramas
+            # úteis de uma classe de caractere -- o índice continuava sendo
+            # USADO, só MUITO menos seletivo: mesma tabela, mesmo termo
+            # "caneta", 2.740 candidatos antes (98 removidos no recheck,
+            # 1,2s) viraram 9.113 candidatos depois (5.850 removidos no
+            # recheck, 3,7s) -- 3x mais lento. unaccent() tira o acento da
+            # COLUNA (o termo buscado já chega sem acento, normalizar() já
+            # fazia isso) -- os dois lados voltam a ser texto puro, sem
+            # classe de caractere nenhuma (ver busca.py: _rx volta a ser só
+            # re.escape). unaccent() sozinho é STABLE (depende do
+            # search_path pra achar o dicionário), não dá pra indexar uma
+            # expressão com função STABLE -- unaccent_imutavel() é o
+            # wrapper padrão da documentação do Postgres pra isso, fixando
+            # o dicionário explicitamente (fica IMMUTABLE de verdade).
+            try:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+                conn.commit()
+                conn.execute(text("""
+                    CREATE OR REPLACE FUNCTION unaccent_imutavel(text)
+                    RETURNS text AS $$
+                      SELECT public.unaccent('public.unaccent', $1)
+                    $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+                """))
+                conn.commit()
+                # índice antigo (sem unaccent) fica morto depois desta
+                # migração -- busca.py não gera mais regex pra ele casar
+                # (ver coluna_cmp em condicoes_sql). DROP por nome fixo é
+                # idempotente (IF EXISTS); só roda de fato na 1ª subida
+                # depois desta mudança, nas seguintes já não existe mais.
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text("DROP INDEX IF EXISTS ix_itens_edital_descricao_trgm"))
+                conn.commit()
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_itens_edital_descricao_unaccent_trgm "
+                    "ON itens_edital USING gin (unaccent_imutavel(lower(descricao)) gin_trgm_ops)"
+                ))
+                conn.commit()
+                log.info("Migração: índice trigram (sem acento) de itens_edital.descricao garantido")
+            except Exception as e:
+                conn.rollback()
+                log.warning("Migração do índice trigram sem acento (unaccent) falhou: %s", e)
 
 
 def get_session():

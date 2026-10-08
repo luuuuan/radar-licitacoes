@@ -184,7 +184,8 @@ def _item_declaracao(d) -> dict:
     }
 
 
-def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list[dict]:
+def montar(documentos_habilitacao: dict, documentos_usuario: list[dict],
+          verificacao_ia: list[dict] | None = None) -> list[dict]:
     """documentos_usuario: lista de dicts com pelo menos id/nome/data_validade
     (mesmo formato de GET /api/documentos, só que sempre com data_validade
     como `date`, não string). Retorna uma lista achatada, pronta pro front:
@@ -193,12 +194,37 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
 
     "declaracoes" é tratada à parte (ver _item_declaracao) — as outras 4
     categorias continuam cruzadas por nome (fuzzy) contra documentos_usuario.
-    """
+
+    verificacao_ia (opcional): itens de `verificacao_documentos_ia`
+    (analise_edital.verificar_documentos_usuario) — verificação por
+    CONTEÚDO de UM MESMO exigido, usando o texto extraído do arquivo
+    anexado, não só o nome cadastrado. Achado real (edital 155842): o
+    fuzzy por nome aqui (min(set,sort) de token ratio, ver _score) casa
+    sistematicamente exigências com documentos errados que só
+    compartilham vocabulário burocrático genérico ("certidão", "negativa",
+    "débitos", "regularidade") — ex.: "Alvará Sanitário de Funcionamento"
+    batendo com "Comprovante de inscrição... CNPJ" (score 0.53, nada a
+    ver), ou "Regularidade perante a Fazenda estadual" batendo com
+    "Certificado de Regularidade do FGTS" em vez da certidão estadual que
+    o usuário tinha cadastrada. A verificação por IA lê o CONTEÚDO de
+    verdade do arquivo (não só o nome), então quando ela existe pra um
+    exigido (mesma string exata, os dois vêm da mesma lista
+    documentos_habilitacao) ela tem a palavra final: documento
+    corretamente identificado (ou "não atende"/"não aplicável" quando é o
+    caso) substitui o palpite só-por-nome em vez de só complementar.
+    Quando ela não roda pra este exigido (usuário sem documento com
+    arquivo/texto extraído pra este edital) cai de volta no fuzzy de
+    sempre, sem mudança de comportamento."""
     hoje = date.today()
     candidatos = [
         {**d, "_norm": _normalizar_doc(d["nome"])}
         for d in documentos_usuario if d.get("ativo", True)
     ]
+    por_nome_exato = {c["nome"]: c for c in candidatos}
+    verificacao_por_exigido = {
+        v["exigido"]: v for v in (verificacao_ia or [])
+        if isinstance(v, dict) and v.get("exigido")
+    }
 
     resultado = []
     for chave, rotulo in _CATEGORIAS.items():
@@ -206,6 +232,49 @@ def montar(documentos_habilitacao: dict, documentos_usuario: list[dict]) -> list
             resultado.extend(_item_declaracao(d) for d in (documentos_habilitacao or {}).get(chave) or [])
             continue
         for exigido in (documentos_habilitacao or {}).get(chave) or []:
+            v = verificacao_por_exigido.get(exigido)
+            if v is not None and v.get("status") == "nao_aplicavel":
+                resultado.append({
+                    "categoria": rotulo, "exigido": exigido, "status": "nao_aplicavel",
+                    "documento_id": None, "nome_cadastrado": None,
+                    "data_validade": None, "dias_para_vencer": None, "relevancia": 0.0,
+                    "detalhe": str(v.get("observacao") or ""),
+                })
+                continue
+            if v is not None and v.get("status") == "nao_atendido":
+                resultado.append({
+                    "categoria": rotulo, "exigido": exigido, "status": "nao_atendido_ia",
+                    "documento_id": None, "nome_cadastrado": str(v.get("documento") or "") or None,
+                    "data_validade": None, "dias_para_vencer": None, "relevancia": 0.0,
+                    "detalhe": str(v.get("observacao") or ""),
+                })
+                continue
+            if v is not None and v.get("status") == "atendido" and v.get("documento"):
+                # acha o Documento cadastrado que a IA apontou (mesmo nome
+                # exato que foi mandado pra ela) pra herdar id/validade; sem
+                # bater, ainda mostra o nome certo (sem link de edição) em
+                # vez de voltar pro fuzzy, que é sabidamente o lado errado
+                # aqui.
+                achado = por_nome_exato.get(str(v["documento"]))
+                if achado is not None:
+                    sem_validade = achado["data_validade"] is None
+                    dias = None if sem_validade else (achado["data_validade"] - hoje).days
+                    resultado.append({
+                        "categoria": rotulo, "exigido": exigido,
+                        "status": "valido" if sem_validade else _status_validade(dias),
+                        "documento_id": achado["id"], "nome_cadastrado": achado["nome"],
+                        "data_validade": None if sem_validade else achado["data_validade"].isoformat(),
+                        "dias_para_vencer": dias, "relevancia": 1.0,
+                        "detalhe": str(v.get("observacao") or ""),
+                    })
+                else:
+                    resultado.append({
+                        "categoria": rotulo, "exigido": exigido, "status": "valido",
+                        "documento_id": None, "nome_cadastrado": str(v["documento"]),
+                        "data_validade": None, "dias_para_vencer": None, "relevancia": 1.0,
+                        "detalhe": str(v.get("observacao") or ""),
+                    })
+                continue
             alvo = _normalizar_doc(exigido)
             melhor, melhor_score = None, 0.0
             for c in candidatos:

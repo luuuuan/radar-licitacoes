@@ -100,11 +100,19 @@ def test_condicoes_busca_item_tokeniza_uma_condicao_por_palavra():
 
 
 def test_condicoes_busca_item_postgres_usa_regex_com_fronteira_so_no_inicio():
+    """Achado real (medido em produção, EXPLAIN ANALYZE): a regex não expande
+    mais cada letra acentuável numa classe de caractere (isso destruía a
+    seletividade do índice trigram -- 3x mais lento, medido). A coluna
+    comparada já vem sem acento (unaccent_imutavel, ver busca.py/database.py)
+    -- o regex volta a ser texto puro, igual antes do commit que introduziu
+    as classes de caractere."""
     condicoes = _condicoes_busca_item("caneta", eh_postgres=True)
     sql = str(condicoes[0].compile(compile_kwargs={"literal_binds": True}))
     assert "~" in sql
-    assert r"\m[cç][aáàâãä]n[eéèêë]t[aáàâãä]" in sql
+    assert "unaccent_imutavel" in sql
+    assert r"\mcaneta" in sql
     assert r"\y" not in sql   # não exige mais fronteira também no FIM da palavra
+    assert "[" not in sql.split("~")[1]   # sem classe de caractere na regex
 
 
 def test_condicoes_busca_item_sqlite_usa_substring_de_sempre():

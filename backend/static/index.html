@@ -14,6 +14,15 @@
     --forte:#22c55e; --medio:#eab308; --fraco:#64748b;
     --destructive:#ef4444; --ring:#6D28D9; --overlay:rgba(0,0,0,.6);
     --accent-claro:#A78BFA; --accent-pale:#DDD6FE;
+    /* versão translúcida de --panel, só pro campo de busca sticky da tela
+       de Editais (ver #slot-busca-desktop .busca-item-destaque) -- pedido
+       do usuário: os cards da lista passam por baixo desse campo ao rolar
+       a tela, e como --panel é opaco, backdrop-filter:blur não tem nada
+       translúcido pra borrar (blur só aparece através de transparência).
+       Opacidade alta (.88) pra continuar lendo o texto do campo sem
+       esforço, só o suficiente pra deixar o que passa atrás borrado em
+       vez de nitidamente visível. */
+    --panel-vidro:rgba(26,33,41,.88);
     /* fundo do botão "excluir" (.btn.perigo) -- valor fixo (não muda por
        tema) escolhido à parte de --destructive: achado do agente
        code-reviewer, texto branco sobre --destructive no tema escuro
@@ -31,6 +40,7 @@
     --txt:#1a2129; --muted:#5b6770; --accent:#6D28D9;
     --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
     --destructive:#dc2626; --ring:#6D28D9; --overlay:rgba(15,23,42,.45);
+    --panel-vidro:rgba(255,255,255,.88);
   }
   *{box-sizing:border-box}
   /* troca de tema (claro/escuro) suave em vez de instantânea */
@@ -984,7 +994,18 @@
        ~130px, sem o encolhimento do modo compacto — esse só existe a
        partir de 1500px, ver abaixo) + uma folga de 8px. */
     #slot-busca-desktop .busca-item-destaque{position:sticky;top:138px;z-index:5;max-width:520px;
-      transition:max-width .26s ease}
+      transition:max-width .26s ease;
+      /* pedido do usuário: os cards da lista passam por baixo deste campo
+         ao rolar a tela (ele é sticky, eles não) -- em vez de disfarçar
+         isso, efeito vidro fosco: fundo translúcido (--panel-vidro, só
+         este contexto) + blur do que passa atrás, pra ficar claramente
+         ilegível em vez de brigar com o texto do campo. translateZ(0)
+         evita um efeito colateral comum desse combo em Chromium/Safari
+         (borrão de sub-pixel no PRÓPRIO sticky durante o scroll, não só
+         no conteúdo atrás) -- não muda layout, só a composição. */
+      background:var(--panel-vidro);
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+      transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden}
     /* com os filtros escondidos sobra bem mais espaço ao lado do campo --
        sem isso ele continuava limitado aos mesmos 520px de quando a
        lateral de filtros (400px) tá ocupando a outra metade da tela,
@@ -2120,6 +2141,7 @@ function _abrirNotificacao(i){
   _fecharNotificacoes();
   if(n.tipo === 'documento'){
     tab('documentos');
+    _atualizarNotificacoesEmBreve();
     return;
   }
   if(n.tipo === 'abertura'){
@@ -2134,12 +2156,29 @@ function _abrirNotificacao(i){
     limparFiltros();
     if(n.filtro && n.filtro.nivel && $('#f-nivel')) $('#f-nivel').value = n.filtro.nivel;
     loadEditais();
+    _atualizarNotificacoesEmBreve();
     return;
   }
   // mesmo caminho já usado por outras origens que abrem um edital numa
   // aba específica (ex.: link do Telegram) -- ver comentário de
   // _abaEditalSalvaPara.
   abrirPaginaEdital(n.edital_id, n.aba || 'itens');
+  _atualizarNotificacoesEmBreve();
+}
+// Achado real (pedido do usuário): clicar numa notificação navegava pra
+// onde ela aponta, mas o badge/lista continuavam com o número de ANTES do
+// clique até o usuário abrir o sino de novo (ou o próximo poll de 30s).
+// Estas notificações são computadas AO VIVO, sem "marcar como lida"
+// individual (ver docstring de GET /api/notificacoes) -- pra prazo/
+// documento/abertura isso é por desenho (continuam valendo até "Ler
+// Todos" ou a causa sumir sozinha), mas "análise" muda de estado de
+// verdade ao clicar (POST .../interacao, disparado por abrirPaginaEdital/
+// abaEdital, atualiza analise_vista_em no servidor). Busca o estado real
+// nos dois casos -- certo pra análise (alguns ms depois, dando tempo do
+// POST fire-and-forget terminar) e inofensivo pros outros 3 tipos
+// (continuam aparecendo, porque continuam valendo de verdade).
+function _atualizarNotificacoesEmBreve(){
+  setTimeout(carregarNotificacoes, 600);
 }
 // Menu "⋮" (trocar produto/detalhes/fornecedor) da tabela de comparação da
 // Análise por IA — pedido do usuário: em vez de empilhar todos os botões
@@ -2872,7 +2911,17 @@ function fmtDataHora(iso){
 // fechar" -- só a fase resolve a ambiguidade. Parâmetro opcional (chamador
 // sem essa info ainda cai no comportamento de antes, baseado só nos dias).
 function fmtPrazoEdital(dias, statusPrazo){
-  if(statusPrazo==='recebendo') return 'recebendo proposta';
+  // "recebendo" é a janela ABERTA de propostas -- dias aqui já conta até
+  // o ENCERRAMENTO (ver _dias_restantes_edital, backend), não até a
+  // abertura. Antes disso ficava escondido atrás de um "recebendo
+  // proposta" genérico bem na fase que mais importa saber quantos dias
+  // faltam pra fechar (pedido do usuário: mostrar isso nos cards do
+  // pipeline).
+  if(statusPrazo==='recebendo'){
+    if(dias==null) return 'recebendo proposta';
+    if(dias<=0) return 'recebendo · encerra hoje';
+    return `recebendo · faltam ${dias} dia(s)`;
+  }
   if(dias<0) return 'encerrado';
   if(dias===0) return 'abre hoje';
   return `faltam ${dias} dia(s)`;
@@ -3488,11 +3537,24 @@ let _buscaCfg = {
 };
 let _buscaIdxSin = null;
 const _buscaCache = new WeakMap();
+// Achado real (revisão pedida pelo usuário): chamada sem await dentro de
+// loadProdutos() -- refeita (por HTTP, autenticado, sem cache) toda vez que
+// o catálogo é recarregado, inclusive depois de criar/editar/excluir um
+// produto só. Nos primeiros instantes após abrir a tela, a busca rodava com
+// o fallback embutido acima (_buscaCfg, só 3 grupos de sinônimo) em vez da
+// config completa (18 grupos, vinda do servidor) -- mesmo termo, resultado
+// diferente dependendo do timing. _buscaConfigPronta: a config é estática
+// (só muda reiniciando o servidor, ver busca.py/carregar_config) -- busca
+// 1 vez por sessão, não 1 vez por recarga de catálogo; falha não marca
+// como pronta, pra tentar de novo na próxima chamada em vez de ficar presa
+// no modo degradado pro resto da sessão.
+let _buscaConfigPronta = false;
 async function buscaCarregarConfig(){
+  if(_buscaConfigPronta) return;
   try{
     const c = await api('/api/busca/config');
-    if(c && Array.isArray(c.sinonimos)){ _buscaCfg = c; _buscaIdxSin = null; }
-  }catch(e){ /* mantém a configuração embutida */ }
+    if(c && Array.isArray(c.sinonimos)){ _buscaCfg = c; _buscaIdxSin = null; _buscaConfigPronta = true; }
+  }catch(e){ /* mantém a configuração embutida; tenta de novo na próxima chamada */ }
 }
 function buscaNorm(t){
   if(!t) return '';
@@ -3516,7 +3578,13 @@ function buscaRadical(p){
 }
 function _buscaTokPalavra(p){
   const r = buscaRadical(p);
-  if(r===p || r.length>=5) return {tipo:'palavra', texto:r, prefixo:true, formas:[]};
+  // espelho de _tok_palavra em busca.py -- mesmo achado real (fuzzing e
+  // revisão pedidos pelo usuário): a condição antiga (`r===p || r.length>=5`)
+  // só protegia radical curto contra virar prefixo genérico demais ("cor"
+  // batendo em "corretivo") quando a redução de plural de fato mudava a
+  // palavra; se ela já chegava curta (digitar "cor" direto), a proteção não
+  // entrava. Ver busca.py pro histórico completo.
+  if(r.length>=5) return {tipo:'palavra', texto:r, prefixo:true, formas:[]};
   return {tipo:'palavra', texto:r, prefixo:false, formas:[...new Set([p,r,r+'s',r+'es'])]};
 }
 function buscaTokenizar(termo){
@@ -3599,10 +3667,6 @@ function _buscaTokSimples(tok, palavras, fuzzy){
 function _buscaTokBate(tok, palavras, fuzzy){
   return _buscaAlternativas(tok).some((alt,i)=>alt.every(t=>_buscaTokSimples(t, palavras, fuzzy && i===0)));
 }
-function buscaTextoBate(texto, tokens, fuzzy){
-  const palavras = buscaNorm(texto).split(' ').filter(Boolean);
-  return tokens.length>0 && tokens.every(t=>_buscaTokBate(t, palavras, !!fuzzy));
-}
 // Campos do produto que a busca olha (descrição, códigos, marca, fornecedor...)
 function _buscaPalavrasProduto(p){
   let c = _buscaCache.get(p);
@@ -3619,7 +3683,15 @@ function _buscaPalavrasProduto(p){
 // digitação. Ordena por relevância (palavra inteira + começo da descrição).
 function buscaFiltrarProdutos(lista, termo){
   const tokens = buscaTokenizar(termo);
-  if(!tokens.length) return lista;
+  if(!tokens.length){
+    // termo em branco: sem filtro nenhum, mostra o catálogo inteiro (igual
+    // sempre foi). Termo com conteúdo de verdade que normaliza pra nada --
+    // só pontuação/emoji/caractere de controle/etc -- é DIFERENTE: mesmo
+    // achado do backend (ver condicoes_sql em busca.py, auditoria pedida
+    // pelo usuário) -- sem essa distinção, digitar só "???" mostrava o
+    // catálogo inteiro em vez de nenhum resultado.
+    return (termo||'').trim() ? [] : lista;
+  }
   const rodar = (fuzzy)=>lista.map((p,ordem)=>{
     const c = _buscaPalavrasProduto(p);
     if(!tokens.every(t=>_buscaTokBate(t, c.palavras, fuzzy))) return null;
@@ -3639,7 +3711,7 @@ async function loadProdutos(){
   // páginas (o endpoint já pagina de verdade, só o front nunca tinha ido
   // atrás da 2ª em diante) -- a lista renderizada continua paginada (ver
   // filtrarProdutos), só o que fica em memória no navegador que é completo.
-  buscaCarregarConfig(); 
+  await buscaCarregarConfig();
   const primeira = await api('/api/produtos?por_pagina=500&pagina=1');
   let resultados = primeira.resultados||[];
   for(let p=2; p<=(primeira.paginas||1); p++){
@@ -4654,6 +4726,8 @@ function _statusDocInfo(item){
   if(item.status==='modelo_orgao') return ['var(--forte)', 'modelo do órgão'];
   if(item.status==='modelo_proprio') return ['var(--medio)', 'elaborar modelo próprio'];
   if(item.status==='indefinido') return ['var(--muted-fg,#888)', 'verificar no edital'];
+  if(item.status==='nao_aplicavel') return ['var(--muted-fg,#888)', 'não aplicável'];
+  if(item.status==='nao_atendido_ia') return ['var(--destructive)', 'não atende (verificado por IA)'];
   return ['var(--muted-fg,#888)', 'não cadastrado'];
 }
 function _checklistDocsHTML(checklist){
@@ -4759,26 +4833,31 @@ function _rotuloLote(numero){
 // closure de _comparacaoCatalogoIAHTML pra poder ser chamada de novo
 // SOZINHA, depois que o usuário escolhe/troca o produto de um item (ver
 // _atualizarLinhaComparacaoIA), sem precisar reconstruir a tabela inteira.
-function _iaCatLinhaHTML(it){
-  const _motivoBloq = _motivoBloqueioEdicao();
-  const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
+// Acha qual candidato é realmente o produto CONFIRMADO pra este item da
+// comparação por IA -- não necessariamente candidatos[0] (a sugestão
+// ORIGINAL da IA). Fonte da verdade é sempre _paginaEditalDetalhe (reflete
+// o que foi de fato salvo em /confirmar, sempre ao vivo), nunca a ordem do
+// cache da comparação em si (AnaliseIAExtras), que não reordena sozinho
+// quando o usuário escolhe o 2º candidato ou busca um produto de fora da
+// sugestão.
+//
+// Achado real (pedido do usuário): escolher um candidato assim salvava
+// certo no backend (Match.detalhe), mas a LINHA da tabela continuava
+// mostrando candidatos[0] até sair da aba e voltar -- corrigido fazendo
+// _iaCatLinhaHTML derivar daqui. Achado real Nº2 (mesma causa, lugar
+// diferente): o modal "Ver detalhes" (abrirDetalheItemIA) nunca tinha
+// ganhado a mesma correção -- cada um fazia sua própria derivação, e só uma
+// das duas foi atualizada da vez passada. Função única agora, os dois
+// chamam a mesma coisa.
+function _iaCatPrincipalConfirmado(it){
   const itemAoVivo = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
     .find(x => String(x.numero) === String(it.numero));
   const produtoConfirmadoId = (itemAoVivo && itemAoVivo.compativel && itemAoVivo.produto)
     ? itemAoVivo.produto.id : null;
-  // Achado real (pedido do usuário): escolher um candidato que NÃO é o 1º
-  // sugerido pela IA (ou um produto de fora da sugestão, via busca) salvava
-  // certo no backend (Match.detalhe, fonte da verdade), mas esta linha
-  // sempre mostrava candidatos[0] -- o cache da comparação por IA
-  // (AnaliseIAExtras) nunca reordena sozinho. Sair da aba (ou do edital) e
-  // voltar buscava o cache de novo e voltava a mostrar a sugestão
-  // ORIGINAL da IA, como se a troca nunca tivesse acontecido. Em vez de
-  // confiar na ordem do cache, acha entre os candidatos qual bate com o
-  // produto REALMENTE confirmado (_paginaEditalDetalhe, sempre ao vivo) --
-  // index.html nunca precisa saber de reordenar nada, a linha sempre
-  // mostra o estado de verdade.
-  let principal = it.candidatos.find(c => c.produto_id === produtoConfirmadoId) || it.candidatos[0];
-  if(produtoConfirmadoId!=null && !it.candidatos.some(c => c.produto_id === produtoConfirmadoId)){
+  const candidatos = it.candidatos || [];
+  let principal = candidatos.find(c => c.produto_id === produtoConfirmadoId) || candidatos[0];
+  const sugeridoPelaIA = produtoConfirmadoId == null || candidatos.some(c => c.produto_id === produtoConfirmadoId);
+  if(produtoConfirmadoId!=null && !sugeridoPelaIA){
     // confirmado é um produto de fora dos candidatos sugeridos pela IA
     // (busca livre no modal "escolher produto") -- ela nunca opinou sobre
     // ele, então monta um "candidato" com o dado ao vivo do item.
@@ -4790,7 +4869,14 @@ function _iaCatLinhaHTML(it){
       custo_comparavel: itemAoVivo.custo_comparavel, alerta_unidade: itemAoVivo.alerta_unidade,
     };
   }
-  const produtoJaConfirmado = produtoConfirmadoId!=null && produtoConfirmadoId === principal.produto_id;
+  const produtoJaConfirmado = produtoConfirmadoId!=null && principal && produtoConfirmadoId === principal.produto_id;
+  return {principal, produtoJaConfirmado, sugeridoPelaIA: produtoJaConfirmado ? sugeridoPelaIA : true};
+}
+
+function _iaCatLinhaHTML(it){
+  const _motivoBloq = _motivoBloqueioEdicao();
+  const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
+  const {principal, produtoJaConfirmado} = _iaCatPrincipalConfirmado(it);
   const naCotacao = _cotacaoSelecionados.has(String(it.numero)) && produtoJaConfirmado;
   const p = principal.produto || {};
   const vt = principal.validacao_tecnica;
@@ -4859,15 +4945,12 @@ function _iaCatLinhaHTML(it){
 // não só o botão -- achado real (pedido do usuário): escolher o 2º
 // candidato (ou um produto de fora da sugestão da IA, via busca) confirmava
 // certo no backend, mas a tabela continuava mostrando o candidato ORIGINAL
-// (o 1º) até o usuário sair da aba e voltar. Promove o candidato escolhido
-// pra 1º da lista (_iaCatLinhaHTML sempre usa candidatos[0] como
-// "principal") e re-renderiza só essa linha, sem reconstruir a tabela
-// inteira nem ir ao servidor de novo.
+// (o 1º) até o usuário sair da aba e voltar. _iaCatLinhaHTML (via
+// _iaCatPrincipalConfirmado) já deriva sozinho qual produto mostrar a
+// partir do que está REALMENTE confirmado -- só re-renderiza esta linha.
 function _atualizarLinhaComparacaoIA(numero){
-  // _iaCatLinhaHTML já deriva sozinho qual produto mostrar a partir do que
-  // está REALMENTE confirmado (_paginaEditalDetalhe) -- não precisa mais
-  // reordenar nada aqui, só mandar redesenhar a linha com o dado fresco
-  // (chamado depois de _paginaEditalDetalhe ser recarregado).
+  // só manda redesenhar a linha com o dado fresco (chamado depois de
+  // _paginaEditalDetalhe ser recarregado).
   const it = _comparacaoCatalogoItensAtual[numero];
   const tr = document.getElementById('ia-cat-linha-'+numero);
   if(it && tr) tr.outerHTML = _iaCatLinhaHTML(it);
@@ -5107,7 +5190,7 @@ function _filtrarTrocaProdutoIA(numero){
 function abrirDetalheItemIA(numero){
   const it = _comparacaoCatalogoItensAtual[numero];
   if(!it) return;
-  const principal = (it.candidatos||[])[0];
+  const {principal, sugeridoPelaIA} = _iaCatPrincipalConfirmado(it);
   if(!principal) return;
   const p = principal.produto || {};
   const vt = principal.validacao_tecnica;
@@ -5121,7 +5204,7 @@ function abrirDetalheItemIA(numero){
         ['Valor do órgão (unit.)', it.valor_orgao!=null?fmtMoeda(it.valor_orgao):null],
         ['Quantidade pedida', it.quantidade],
       ])}
-      ${_paresHTML('Produto do catálogo (sugestão da IA)', [
+      ${_paresHTML(sugeridoPelaIA ? 'Produto do catálogo (sugestão da IA)' : 'Produto do catálogo (confirmado)', [
         ['Descrição', p.descricao],
         ['Preço de custo', p.preco_custo!=null?fmtMoeda(p.preco_custo):null],
         ['Preço de venda', p.preco_venda!=null?fmtMoeda(p.preco_venda):null],
@@ -6019,10 +6102,11 @@ function _renderResultadoAnalise(r){
     if(r.exige_amostra) flags.push('Exige amostra');
     if(r.exige_visita) flags.push('Exige visita técnica');
     if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
+    if(r.dados_orgao?.exclusivo_regional) flags.push(r.dados_orgao.regiao_exclusiva ? `Exclusivo regional (${r.dados_orgao.regiao_exclusiva})` : 'Exclusivo regional');
     if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
     else if(r.julgamento==='item') flags.push('Julgamento por item');
     const totalDocs = (r.checklist_documentos||[]).length;
-    const naoCadastrados = (r.checklist_documentos||[]).filter(i=>i.status==='nao_cadastrado').length;
+    const naoCadastrados = (r.checklist_documentos||[]).filter(i=>i.status==='nao_cadastrado'||i.status==='nao_atendido_ia').length;
     const vencidosOuPerto = (r.checklist_documentos||[]).filter(i=>i.status==='vencido'||i.status==='vence_em_breve').length;
     const orgao = r.dados_orgao || {};
     const proposta = r.dados_proposta || {};

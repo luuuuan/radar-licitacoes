@@ -245,3 +245,96 @@ def test_candidato_curto_generico_nao_bate_so_por_estar_contido():
     usuario = [_doc_sem_validade("Certidão")]
     resultado = montar(exigidos, usuario)
     assert resultado[0]["status"] == "nao_cadastrado"
+
+
+# ---------------------------------------------------------------------------
+# Achado real (edital 155842, usuário reportou "a maioria dos itens que a IA
+# deu como atendido não tem nada a ver com o que o edital pede"): o fuzzy por
+# NOME aqui bate sistematicamente com documentos errados que só compartilham
+# vocabulário burocrático genérico ("certidão", "negativa", "débitos",
+# "regularidade", "comprovante", "inscrição") -- "Alvará Sanitário de
+# Funcionamento" batendo com um simples "Comprovante de inscrição... CNPJ"
+# (nada a ver), "Regularidade perante a Fazenda estadual" batendo com o
+# "Certificado de Regularidade do FGTS" em vez da certidão estadual de
+# verdade que o usuário tinha cadastrada. A verificação por IA
+# (verificar_documentos_usuario, em analise_edital.py) já lê o CONTEÚDO real
+# do arquivo pra responder a mesma pergunta -- agora ela tem a palavra final
+# quando existe pra este exigido, em vez de só o fuzzy por nome.
+# ---------------------------------------------------------------------------
+
+def test_verificacao_ia_corrige_match_errado_do_fuzzy():
+    exigidos = {"juridica": [], "tecnica": [],
+               "fiscal_trabalhista": ["Regularidade perante a Fazenda estadual do domicílio ou sede do licitante"],
+               "economico_financeira": [], "declaracoes": []}
+    usuario = [
+        _doc("Certificado de Regularidade do FGTS - CRF", dias_para_vencer=5),
+        _doc("CERTIDÃO NEGATIVA DE DÉBITOS TRIBUTARIOS E DE DIVIDA ATIVA ESTADUAL", dias_para_vencer=52),
+    ]
+    # sem a verificação por IA, o fuzzy ainda bate errado (confirma que o
+    # cenário de teste reproduz o bug relatado antes da correção)
+    sem_ia = montar(exigidos, usuario)
+    assert sem_ia[0]["nome_cadastrado"] == "Certificado de Regularidade do FGTS - CRF"
+
+    verificacao_ia = [{
+        "exigido": "Regularidade perante a Fazenda estadual do domicílio ou sede do licitante",
+        "status": "atendido", "atendido": True,
+        "documento": "CERTIDÃO NEGATIVA DE DÉBITOS TRIBUTARIOS E DE DIVIDA ATIVA ESTADUAL",
+        "observacao": "Certidão emitida pelo Estado, domicílio do licitante.",
+    }]
+    com_ia = montar(exigidos, usuario, verificacao_ia=verificacao_ia)
+    assert com_ia[0]["nome_cadastrado"] == "CERTIDÃO NEGATIVA DE DÉBITOS TRIBUTARIOS E DE DIVIDA ATIVA ESTADUAL"
+    assert com_ia[0]["documento_id"] == usuario[1]["id"]
+    assert com_ia[0]["status"] == "valido"
+
+
+def test_verificacao_ia_derruba_falso_positivo_do_fuzzy():
+    """"Alvará Sanitário de Funcionamento" batia (fuzzy) com um simples
+    comprovante de CNPJ -- documento sem nada a ver. A verificação por IA
+    leu o conteúdo e não achou alvará nenhum: tem que virar "não atende",
+    nunca continuar mostrando o CNPJ como se bastasse."""
+    exigidos = {"juridica": [], "tecnica": ["Alvará Sanitário de Funcionamento vigente, emitido pela autoridade competente"],
+               "fiscal_trabalhista": [], "economico_financeira": [], "declaracoes": []}
+    usuario = [_doc("Comprovante de inscrição e de situação cadastral ativa no Cadastro Nacional da Pessoa Jurídica (CNPJ)")]
+    verificacao_ia = [{
+        "exigido": "Alvará Sanitário de Funcionamento vigente, emitido pela autoridade competente",
+        "status": "nao_atendido", "atendido": False, "documento": "",
+        "observacao": "Nenhum alvará sanitário foi apresentado.",
+    }]
+    resultado = montar(exigidos, usuario, verificacao_ia=verificacao_ia)
+    assert resultado[0]["status"] == "nao_atendido_ia"
+    assert resultado[0]["nome_cadastrado"] != \
+        "Comprovante de inscrição e de situação cadastral ativa no Cadastro Nacional da Pessoa Jurídica (CNPJ)"
+
+
+def test_verificacao_ia_marca_nao_aplicavel_em_vez_de_cruzar_por_nome():
+    """Exigência de sociedade empresária (contrato social) não se aplica a
+    um fornecedor MEI -- a verificação por IA sabe disso pelo conteúdo dos
+    documentos; o checklist tem que respeitar "não aplicável" em vez de
+    tentar achar um documento cadastrado qualquer pra ela."""
+    exigidos = {"juridica": ["Estatuto ou Contrato Social em vigor, devidamente registrado"],
+               "fiscal_trabalhista": [], "tecnica": [], "economico_financeira": [], "declaracoes": []}
+    usuario = [_doc("Comprovante de inscrição e de situação cadastral ativa no Cadastro Nacional da Pessoa Jurídica (CNPJ)")]
+    verificacao_ia = [{
+        "exigido": "Estatuto ou Contrato Social em vigor, devidamente registrado",
+        "status": "nao_aplicavel", "atendido": False, "documento": "",
+        "observacao": "Não aplicável, pois o fornecedor é registrado como Empresário Individual (MEI).",
+    }]
+    resultado = montar(exigidos, usuario, verificacao_ia=verificacao_ia)
+    assert resultado[0]["status"] == "nao_aplicavel"
+    assert resultado[0]["detalhe"] == "Não aplicável, pois o fornecedor é registrado como Empresário Individual (MEI)."
+
+
+def test_verificacao_ia_sem_entrada_pro_exigido_cai_no_fuzzy_de_sempre():
+    """Quando a verificação por IA não roda pra este exigido específico
+    (ex.: lista verificacao_ia vazia/None, ou só cobre outros itens), o
+    comportamento tem que ficar IDÊNTICO ao fuzzy de sempre -- zero mudança
+    pra quem não tem documento com arquivo anexado."""
+    exigidos = {"juridica": [], "fiscal_trabalhista": ["CNDT"], "tecnica": [], "economico_financeira": [], "declaracoes": []}
+    usuario = [_doc("Certidão Negativa de Débitos Trabalhistas")]
+    sem_lista = montar(exigidos, usuario, verificacao_ia=None)
+    lista_vazia = montar(exigidos, usuario, verificacao_ia=[])
+    lista_outro_exigido = montar(exigidos, usuario, verificacao_ia=[
+        {"exigido": "Outra exigência qualquer", "status": "atendido", "atendido": True, "documento": "X"}])
+    for resultado in (sem_lista, lista_vazia, lista_outro_exigido):
+        assert resultado[0]["status"] == "valido"
+        assert resultado[0]["nome_cadastrado"] == "Certidão Negativa de Débitos Trabalhistas"

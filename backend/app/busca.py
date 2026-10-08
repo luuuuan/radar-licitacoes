@@ -11,6 +11,11 @@ Regras (mesmas no front -- ver buscaFiltrar em static/index.html):
   são ignoradas
 - sinônimos/abreviações vêm de busca_sinonimos.json (cx == caixa ...)
 - fuzzy (erro de digitação) só é usado quando a busca estrita não acha nada
+
+Módulo tem uma segunda responsabilidade além de texto puro: condicoes_sql()
+constrói predicados SQLAlchemy (dialeto-específico via `eh_postgres`) pra
+quem faz a consulta (app/main.py) não precisar conhecer regex/trigram/
+unaccent -- por isso importa sqlalchemy aqui embaixo, não só stdlib.
 """
 import json
 import re
@@ -18,6 +23,8 @@ import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+from sqlalchemy import and_, or_, literal, false, func as _func
 
 _CFG_PATH = Path(__file__).with_name("busca_sinonimos.json")
 
@@ -70,9 +77,17 @@ def radical(p: str) -> str:
 
 def _tok_palavra(p: str) -> Tok:
     r = radical(p)
-    if r == p or len(r) >= 5:
+    if len(r) >= 5:
         return Tok("palavra", r, prefixo=True)
-    # radical curto ("cor"): evita casar "corretivo" -- só as formas exatas
+    # radical curto (<5 letras, ex. "cor", "c", "lap"): evita virar prefixo
+    # genérico demais (bateria em "corretivo", "lapis", qualquer coisa que
+    # comece com a letra) -- só as formas exatas. Achado real (fuzzing e
+    # revisão pedidos pelo usuário): a condição antiga (`r == p or len(r) >=
+    # 5`) só protegia esse caso quando o radical nascia de uma REDUÇÃO de
+    # plural ("cores"->"cor", r != p) -- se a palavra já chegava curta por
+    # si só (digitar "cor" direto, ou "c" -- inclusive um acento isolado
+    # tipo "ç", que normaliza pra "c" sozinho), r == p e a proteção não
+    # entrava, exatamente o cenário que o comentário original dizia evitar.
     return Tok("palavra", r, prefixo=False, formas=tuple({p, r, r + "s", r + "es"}))
 
 
@@ -206,12 +221,20 @@ def texto_bate(texto: str | None, tokens: list[Tok], fuzzy: bool = False) -> boo
 # ---------------------------------------------------------------------------
 # Condições SQL (itens de edital)
 # ---------------------------------------------------------------------------
-_ACENTOS = {"a": "[aáàâãä]", "e": "[eéèêë]", "i": "[iíìîï]",
-            "o": "[oóòôõö]", "u": "[uúùûü]", "c": "[cç]"}
-
-
+# Achado real (medido em produção, EXPLAIN ANALYZE): a versão anterior
+# mantinha o acento na COLUNA e expandia cada letra acentuável do termo
+# buscado numa classe de caractere regex (ex. "caneta" -> r"\m[cç][aáàâã]
+# n[eéèê]t[aáàâã]") pra casar os dois lados. O extrator de trigrama do
+# Postgres não tira trigramas úteis de dentro de uma classe de caractere --
+# o índice continuava sendo usado, só MUITO menos seletivo (mesma tabela,
+# mesmo termo "caneta": 2.740 candidatos virando 9.113, 98 linhas removidas
+# no recheck virando 5.850 -- 3x mais lento). Em vez disso, a COLUNA agora é
+# comparada já SEM ACENTO (unaccent_imutavel(lower(descricao)), ver índice
+# em database.py) -- o termo buscado já chegava sem acento (normalizar(),
+# acima, já tira), então os dois lados voltam a ser texto puro, sem classe
+# de caractere nenhuma.
 def _rx(p: str) -> str:
-    return "".join(_ACENTOS.get(ch, re.escape(ch)) for ch in p)
+    return re.escape(p)
 
 
 def _rx_numero(n: str) -> str:
@@ -234,22 +257,46 @@ def _regex_tok(tok: Tok) -> str:
 
 def condicoes_sql(termo: str, coluna, eh_postgres: bool, fuzzy: bool = False) -> list:
     """Uma condição por token (todas precisam valer). `coluna` = lower(descricao)."""
-    from sqlalchemy import and_, or_, literal
+    toks = tokenizar(termo)
+    # unaccent_imutavel (Postgres only, ver database.py): compara contra o
+    # texto JÁ sem acento -- mesma função usada no índice GIN trigram, pra
+    # esta condição realmente conseguir usá-lo de forma seletiva (ver
+    # comentário grande acima de _rx).
+    coluna_cmp = _func.unaccent_imutavel(coluna) if eh_postgres else coluna
+    if not toks:
+        # termo normalizou pra nada (só pontuação/emoji/caractere de
+        # controle/etc) -- achado real (fuzzing pedido pelo usuário): sem
+        # isso, devolver [] fazia o loop de quem chama (_condicoes_busca_item
+        # em main.py) não acrescentar NENHUM WHERE na subquery, e um
+        # `.exists()` sem filtro nenhum vira "este edital tem QUALQUER item"
+        # -- buscar "???"/emoji/cirílico trazia todos os editais em vez de
+        # zero. texto_bate() (caminho Python, logo acima) já lida com isso
+        # certo (`bool(tokens) and ...` -- lista vazia já dá False); aqui
+        # precisa do equivalente em SQL: uma condição sempre falsa.
+        return [false()]
     conds = []
-    for tok in tokenizar(termo):
+    for tok in toks:
         alts = []
         for alt in alternativas(tok):
             partes = []
             for t in alt:
-                if t.tipo == "palavra" and not eh_postgres:
-                    partes.append(coluna.like(f"%{t.texto}%"))
-                elif t.tipo != "palavra" and not eh_postgres:
-                    partes.append(coluna.like(f"%{t.texto}%"))
+                if not eh_postgres:
+                    if t.tipo == "medida":
+                        # achado real (revisão pedida pelo usuário): usava só
+                        # t.texto (o número), descartando t.unidade -- "75 g"
+                        # virava `LIKE '%75%'`, batendo em "75 kg", "1750" etc.
+                        # Ainda é um LIKE solto (sqlite não tem o regex do
+                        # Postgres, aceitável só em dev/teste -- produção
+                        # sempre roda Postgres), mas agora exige as DUAS
+                        # substrings, não só o número sozinho.
+                        partes.append(and_(coluna.like(f"%{t.texto}%"), coluna.like(f"%{t.unidade}%")))
+                    else:
+                        partes.append(coluna.like(f"%{t.texto}%"))
                 else:
-                    partes.append(coluna.op("~")(_regex_tok(t)))
+                    partes.append(coluna_cmp.op("~")(_regex_tok(t)))
             alts.append(and_(*partes) if len(partes) > 1 else partes[0])
         if fuzzy and eh_postgres and tok.tipo == "palavra" and tolerancia(len(tok.texto)):
             # pg_trgm: "palavra <% texto" usa o índice GIN trigram existente
-            alts.append(literal(tok.texto).op("<%")(coluna))
+            alts.append(literal(tok.texto).op("<%")(coluna_cmp))
         conds.append(or_(*alts) if len(alts) > 1 else alts[0])
     return conds

@@ -7,7 +7,7 @@ Rode com:  cd backend && pytest
 """
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.main import listar_editais
@@ -384,6 +384,27 @@ def test_sem_match_continua_aparecendo_na_vista_encerrados_quando_de_fato_encerr
     r = _listar(db, u, busca_item="grampeador", vista="encerrados")
 
     assert len(r["sem_match"]) == 1
+
+
+def test_query_editais_filtrada_devolve_fuzzy_busca_e_sqlite_nunca_liga():
+    """Contrato de retorno (base, prazo_efetivo, fuzzy_busca) -- ver docstring
+    de _query_editais_filtrada. Achado real (auditoria de 5 agentes pedida
+    pelo usuário): a decisão de fuzzy foi movida pra dentro desta função
+    (antes vinha de uma sondagem solta, só no bloco sem_match de
+    listar_editais, ignorando todos os filtros ativos) -- fuzzy_busca
+    sempre False em sqlite (só Postgres tem o operador de trigram usado
+    pelo fuzzy, ver busca.py), mesmo com um termo elegível (4+ letras) e
+    zero resultado estrito, condição que LIGARIA fuzzy em produção."""
+    from app.main import _query_editais_filtrada
+    db = _sessao()
+    u = _usuario(db)
+    # nenhum edital no banco bate "grampeador" nem de longe -- estrito
+    # devolve zero resultado, exatamente a condição que ligaria o fuzzy.
+    base, prazo_efetivo, fuzzy_busca = _query_editais_filtrada(
+        u, False, None, None, None, None, None, False, False, False, "todos",
+        None, None, None, None, None, None, "grampeador", "ativos", db)
+    assert fuzzy_busca is False
+    assert db.scalar(select(func.count()).select_from(base.subquery())) == 0
 
 
 # --------- "ativo" x "encerrado" usa o prazo EFETIVO (data_encerramento --------- #

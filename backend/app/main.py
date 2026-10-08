@@ -1039,11 +1039,6 @@ def _produto_dict(p: Produto) -> dict:
         "fornecedor_site": p.fornecedor_site, "fornecedor_id": p.fornecedor_id,
     }
 
-@app.get("/api/busca/config")
-def busca_config(user: Usuario = Depends(_auth.get_current_user)):
-    """Sinônimos/stopwords da busca (mesmo JSON que o backend usa)."""
-    return _busca.carregar_config()
-
 @app.get("/api/produtos")
 def listar_produtos(
     pagina: int = Query(1, ge=1),
@@ -1443,6 +1438,17 @@ def remover_produtos_varios(dados: ProdutosIdsIn,
 
 
 # --------------------------- Editais / Matches ------------------------ #
+@app.get("/api/busca/config")
+def busca_config(user: Usuario = Depends(_auth.get_current_user)):
+    """Sinônimos/stopwords da busca (mesmo JSON que o backend usa, ver
+    app/busca.py) -- o front carrega isso pra aplicar a MESMA regra no
+    filtro do catálogo (buscaFiltrarProdutos) sem duplicar o JSON à mão.
+    Organização (achado real, revisão pedida pelo usuário): morava solto
+    no meio da seção de produtos; fica junto do resto do código de busca
+    agora."""
+    return _busca.carregar_config()
+
+
 # Busca por item (busca_item, GET /api/editais): achados reais reportados
 # pelo usuário —
 #   1) buscar "papel a4" não achava itens como "PAPEL SULFITE A4 75G"
@@ -1475,23 +1481,21 @@ def _condicoes_busca_item(termo: str, eh_postgres: bool, fuzzy: bool = False) ->
     return _busca.condicoes_sql(termo, func.lower(ItemEdital.descricao), eh_postgres, fuzzy)
 
 
-def _busca_item_modo_fuzzy(db: Session, termo: str, eh_postgres: bool) -> bool:
-    """True quando a busca estrita não acha NENHUM item e dá pra tentar com
-    tolerância a erro de digitação (palavra com 4+ letras)."""
-    if not eh_postgres or not termo or not termo.strip():
-        return False
+def _termo_elegivel_fuzzy(termo: str) -> bool:
+    """True quando o termo tem ao menos 1 palavra longa o bastante (4+
+    letras) pra tolerar erro de digitação -- checagem pura em texto (sem ir
+    ao banco), usada como porteiro barato antes de sondar se vale a pena
+    ligar o fuzzy (ver _query_editais_filtrada)."""
     toks = _busca.tokenizar(termo)
-    if not any(t.tipo == "palavra" and _busca.tolerancia(len(t.texto)) for t in toks):
-        return False
-    achou = db.scalar(
-        select(ItemEdital.id).where(*_condicoes_busca_item(termo, eh_postgres)).limit(1)
-    )
-    return achou is None
+    return any(t.tipo == "palavra" and _busca.tolerancia(len(t.texto)) for t in toks)
 
 
 def _item_bate_busca(descricao: str | None, palavras, fuzzy: bool = False) -> bool:
     """Mesma regra de _condicoes_busca_item, em Python. `palavras`: lista de
-    tokens (busca.tokenizar) ou de strings."""
+    tokens (busca.tokenizar) ou de strings (conveniência usada pelos testes
+    em test_busca_item_palavras.py -- NÃO é código morto, apesar de nenhum
+    call-site em produção usar o ramo de strings; checar os dois antes de
+    mexer aqui de novo)."""
     if palavras and isinstance(palavras[0], str):
         palavras = _busca.tokenizar(" ".join(palavras))
     return _busca.texto_bate(descricao, palavras, fuzzy)
@@ -1706,8 +1710,12 @@ def _query_editais_filtrada(
     demais filtros aplicados) mostraria. `plataforma` normalmente vem None
     de quem monta as OPÇÕES do próprio filtro de plataforma (não faz
     sentido filtrar pela plataforma que ainda está sendo escolhida).
-    Devolve (base, prazo_efetivo) -- quem chama decide as colunas
-    selecionadas (via with_only_columns), ordenação e paginação.
+    Devolve (base, prazo_efetivo, fuzzy_busca) -- quem chama decide as
+    colunas selecionadas (via with_only_columns), ordenação e paginação.
+    fuzzy_busca: True quando a busca por item (se houver) precisou cair pra
+    modo tolerante a erro de digitação -- calculado aqui (não em quem chama)
+    pra decisão respeitar os MESMOS filtros já montados nesta função; ver
+    comentário no bloco de busca por item, mais abaixo.
 
     Achado do backend-architect: um filtro novo adicionado direto numa das
     duas rotas (em vez de aqui) nunca gera erro -- só fica silenciosamente
@@ -1785,18 +1793,6 @@ def _query_editais_filtrada(
         filtro.append(Match.lido.is_(None) | (Match.lido == False))  # noqa: E712
     if apenas_interessantes:
         filtro.append(Match.interessante == True)  # noqa: E712
-    # busca por item: só editais que tenham pelo menos um item cujo texto
-    # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
-    # que pedem isso, em vez de precisar abrir cada um pra conferir. Ver
-    # _condicoes_busca_item logo acima sobre tokenização por palavra +
-    # fronteira de palavra (Postgres).
-    eh_postgres = db.get_bind().dialect.name != "sqlite"
-    if busca_item and busca_item.strip():
-        sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
-        for cond in _condicoes_busca_item(busca_item, eh_postgres):
-            sub_busca = sub_busca.where(cond)
-        filtro.append(sub_busca.exists())
-
     # "prazo efetivo": data_encerramento (fim do recebimento de propostas no
     # PNCP) quando existe, senão cai pra data_abertura -- achado real
     # (edital 127082): um edital com data_abertura passada pode ter
@@ -1816,9 +1812,43 @@ def _query_editais_filtrada(
         # "ativos"/"todos", que não dependem de status nenhum.
         filtro.append(encerrado_cond)
         filtro.append(Match.status.in_(["proposta_enviada", "ganho", "perdido"]))
+
+    # busca por item: só editais que tenham pelo menos um item cujo texto
+    # contenha o termo — ex.: usuário digita "grampeador" e só vê os editais
+    # que pedem isso, em vez de precisar abrir cada um pra conferir. Ver
+    # _condicoes_busca_item logo acima sobre tokenização por palavra +
+    # fronteira de palavra (Postgres). Montada DEPOIS de todo o resto de
+    # `filtro` (uf/plataforma/modalidade/tipo/valor/data/nivel/status/
+    # lidos/interessantes/vista) de propósito: a sondagem de fuzzy logo
+    # abaixo precisa conferir "a busca estrita não achou nada" dentro do
+    # MESMO recorte que esta tela realmente mostra -- achado real (auditoria
+    # pedida pelo usuário): a versão antiga (_busca_item_modo_fuzzy, já
+    # removida) sondava solta contra ItemEdital inteiro, sem usuário/UF/
+    # vista/modalidade/valor/data nenhum. Um item de OUTRO usuário, de outro
+    # estado, ou de um edital fora do prazo filtrado podia bater estrito e
+    # desligar o fuzzy, mesmo com zero resultado pro que esta tela de fato
+    # mostra -- o fallback nunca ligava quando mais precisava.
+    eh_postgres = db.get_bind().dialect.name != "sqlite"
+    fuzzy_busca = False
+    if busca_item and busca_item.strip():
+        sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
+        for cond in _condicoes_busca_item(busca_item, eh_postgres):
+            sub_busca = sub_busca.where(cond)
+        if eh_postgres and _termo_elegivel_fuzzy(busca_item):
+            sem_resultado_estrito = db.scalar(
+                base.where(*filtro, sub_busca.exists())
+                    .with_only_columns(Edital.id).limit(1)
+            ) is None
+            if sem_resultado_estrito:
+                fuzzy_busca = True
+                sub_busca = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
+                for cond in _condicoes_busca_item(busca_item, eh_postgres, fuzzy_busca):
+                    sub_busca = sub_busca.where(cond)
+        filtro.append(sub_busca.exists())
+
     for f in filtro:
         base = base.where(f)
-    return base, prazo_efetivo
+    return base, prazo_efetivo, fuzzy_busca
 
 
 @app.get("/api/editais/plataformas")
@@ -1838,7 +1868,7 @@ def listar_plataformas(
     data_ate: date | None = Query(None),
     data_fim_de: date | None = Query(None),
     data_fim_ate: date | None = Query(None),
-    busca_item: str | None = Query(None),
+    busca_item: str | None = Query(None, max_length=200),
     todos_editais: bool = Query(False),
     user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
@@ -1863,7 +1893,7 @@ def listar_plataformas(
     sistema que batem nos demais filtros, pro usuário poder filtrar mesmo o
     que nunca deu match, já que nesse modo a listagem também mostra
     qualquer edital."""
-    base, _ = _query_editais_filtrada(
+    base, _, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, None, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -1890,7 +1920,7 @@ def listar_modalidades(
     data_ate: date | None = Query(None),
     data_fim_de: date | None = Query(None),
     data_fim_ate: date | None = Query(None),
-    busca_item: str | None = Query(None),
+    busca_item: str | None = Query(None, max_length=200),
     todos_editais: bool = Query(False),
     user: Usuario = Depends(_auth.get_current_user),
     db: Session = Depends(get_session),
@@ -1900,7 +1930,7 @@ def listar_modalidades(
     pregão na listagem. Mesmo padrão de listar_plataformas (código-irmão
     logo acima): aceita os mesmos filtros de GET /api/editais (exceto
     modalidade/pagina), pra respeitar o que já está filtrado na tela."""
-    base, _ = _query_editais_filtrada(
+    base, _, _ = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, None, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -1928,7 +1958,7 @@ def listar_editais(
     data_ate: date | None = Query(None),
     data_fim_de: date | None = Query(None),   # idem, por data_encerramento (fim de recebimento de propostas)
     data_fim_ate: date | None = Query(None),
-    busca_item: str | None = Query(None),
+    busca_item: str | None = Query(None, max_length=200),
     todos_editais: bool = Query(False),
     pagina: int = Query(1, ge=1),
     por_pagina: int = Query(50, ge=1, le=200),
@@ -1938,7 +1968,7 @@ def listar_editais(
     agora = datetime.now(BR_TZ).replace(tzinfo=None)   # idem -- ver _query_editais_filtrada
     hoje_data = agora.date()   # não date.today() -- mesmo achado, ver comentário em _query_editais_filtrada. Reusado mais abaixo no bloco de sem_match
     eh_postgres = db.get_bind().dialect.name != "sqlite"   # idem
-    base, prazo_efetivo = _query_editais_filtrada(
+    base, prazo_efetivo, fuzzy_busca = _query_editais_filtrada(
         user, todos_editais, nivel, uf, plataforma, modalidade, status, apenas_nao_lidos,
         apenas_interessantes, hoje, tipo, valor_min, valor_max, data_de,
         data_ate, data_fim_de, data_fim_ate, busca_item, vista, db)
@@ -2063,12 +2093,14 @@ def listar_editais(
     sem_match_total = 0
     if not todos_editais and busca_item and busca_item.strip():
         palavras_busca = _busca.tokenizar(busca_item)
-        fuzzy_busca = _busca_item_modo_fuzzy(db, busca_item, eh_postgres)
+        # fuzzy_busca: MESMA decisão já calculada por _query_editais_filtrada
+        # pra lista principal (ver docstring de lá) -- reaproveitada aqui em
+        # vez de sondar de novo, pra busca tolerante a erro de digitação se
+        # comportar igual nos dois blocos desta mesma tela.
         sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
         sub_itens_sm = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
-        fuzzy_busca = _busca_item_modo_fuzzy(db, busca_item, eh_postgres)
         for cond in _condicoes_busca_item(busca_item, eh_postgres, fuzzy_busca):
-            sub_busca = sub_busca.where(cond)
+            sub_itens_sm = sub_itens_sm.where(cond)
         q_sem_match = (
             select(Edital)
             .where(~Edital.id.in_(sub_com_match))
@@ -3481,10 +3513,12 @@ def _anexar_checklist_documentos(resultado: dict, user: Usuario, db: Session) ->
         select(Documento).where(Documento.usuario_id == user.id, Documento.ativo == True)  # noqa: E712
     ).scalars().all()
     from . import checklist_habilitacao
+    verificacao = resultado.get("verificacao_documentos_ia") or {}
     resultado["checklist_documentos"] = checklist_habilitacao.montar(
         resultado.get("documentos_habilitacao") or {},
         [{"id": d.id, "nome": d.nome, "data_validade": d.data_validade, "ativo": d.ativo}
          for d in docs_usuario],
+        verificacao_ia=verificacao.get("itens") if verificacao.get("status") == "ok" else None,
     )
     return resultado
 
