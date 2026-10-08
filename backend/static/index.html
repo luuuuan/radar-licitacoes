@@ -979,22 +979,27 @@
        relação ao botão "Filtros" bem acima dele. */
     #t-editais.filtros-colapsados .filtros-lateral{flex-basis:0;opacity:0;pointer-events:none;margin-right:-20px;padding:0}
     #t-editais.filtros-colapsados .filtros-btn-mobile{display:inline-flex}
-    /* limiar calibrado com a altura real do cabeçalho nesta faixa (sticky,
-       ~130px, sem o encolhimento do modo compacto — esse só existe a
-       partir de 1500px, ver abaixo) + uma folga de 8px. */
+    /* "top" encostado na altura REAL do cabeçalho nesta faixa (medida com
+       Playwright: header.getBoundingClientRect().bottom = 123px, sem o
+       encolhimento do modo compacto — esse só existe a partir de 1500px,
+       ver abaixo) -- SEM folga nenhuma de propósito (achado real, 2º print
+       do usuário: a folga de 8px usada antes virava uma faixa de ~15px
+       onde o card passava por baixo nítido, sem blur nenhum, entre o fim
+       do cabeçalho e o começo do campo de busca). */
     /* O sticky (e o vidro fosco) fica no próprio #slot-busca-desktop, não
-       só no campo .busca-item-destaque -- achado real (print do usuário):
-       o campo tem max-width (520/760px) e nem sempre ocupa a largura
-       toda, então um card rolando por baixo aparecia nítido nas bordas
-       fora do campo, só borrado bem no meio. #slot-busca-desktop vira uma
-       FAIXA cheia (largura toda de .editais-principal) que borra tudo que
-       passa por baixo dela inteira; o campo em si continua com seu próprio
-       fundo opaco (--panel, igual sempre foi) só pra legibilidade do texto
-       digitado, sem precisar do --panel-vidro nele. display:contents saiu
-       (só fazia sentido quando quem precisava de "espaço pra grudar" era o
-       filho; agora é o próprio #slot-busca-desktop que gruda). */
-    #slot-busca-desktop{position:sticky;top:138px;z-index:5;padding:10px 0;
-      margin:-10px 0 4px;
+       só no campo .busca-item-destaque -- achado real (1º print do
+       usuário): o campo tem max-width (520/760px) e nem sempre ocupa a
+       largura toda, então um card rolando por baixo aparecia nítido nas
+       bordas fora do campo, só borrado bem no meio. #slot-busca-desktop
+       vira uma FAIXA cheia (largura toda de .editais-principal, encostada
+       no cabeçalho) que borra tudo que passa por baixo dela inteira; o
+       campo em si continua com seu próprio fundo opaco (--panel, igual
+       sempre foi) só pra legibilidade do texto digitado, sem precisar do
+       --panel-vidro nele. display:contents saiu (só fazia sentido quando
+       quem precisava de "espaço pra grudar" era o filho; agora é o próprio
+       #slot-busca-desktop que gruda). */
+    #slot-busca-desktop{position:sticky;top:123px;z-index:5;padding:10px 0;
+      margin:0 0 4px;
       background:var(--panel-vidro);
       backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
       transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden}
@@ -1011,11 +1016,13 @@
     #slot-busca-desktop .busca-item-destaque{transition:none}
   }
   @media (min-width:1500px){
-    /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto
-       (147px/72px, ver #topo-fixo.compacto acima) — acompanha os dois
-       valores reais (medidos com Playwright), não um chute. */
-    #slot-busca-desktop{top:155px}
-    body:has(#topo-fixo.compacto) #slot-busca-desktop{top:78px}
+    /* aqui o cabeçalho vira fixed e a altura muda com o modo compacto —
+       acompanha os dois valores reais (header.getBoundingClientRect().
+       bottom, medido com Playwright: 141px expandido / 67px compacto),
+       sem folga, pelo mesmo motivo do breakpoint de cima: qualquer folga
+       aqui vira faixa sem blur entre o cabeçalho e o campo de busca. */
+    #slot-busca-desktop{top:141px}
+    body:has(#topo-fixo.compacto) #slot-busca-desktop{top:67px}
   }
 
   /* ---- Estado vazio ---- */
