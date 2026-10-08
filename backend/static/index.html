@@ -2163,8 +2163,21 @@ function _abrirNotificacao(i){
   // mesmo caminho já usado por outras origens que abrem um edital numa
   // aba específica (ex.: link do Telegram) -- ver comentário de
   // _abaEditalSalvaPara.
-  abrirPaginaEdital(n.edital_id, n.aba || 'itens');
-  _atualizarNotificacoesEmBreve();
+  const aba = n.aba || 'itens';
+  abrirPaginaEdital(n.edital_id, aba);
+  // Achado real (usuário reportou DE NOVO depois do fix anterior): é esta
+  // chamada (POST .../interacao?aba=analise) que marca analise_vista_em no
+  // servidor (ver registrar_interacao) -- é ela que precisa TERMINAR antes
+  // de recarregar o badge, não um delay chutado. _atualizarNotificacoesEm
+  // Breve (setTimeout 600ms) supunha que /detalhe + abaEdital(aba) sempre
+  // terminavam a tempo -- em produção, com latência de rede de verdade,
+  // 600ms nem sempre bastava, e o sino continuava mostrando a notificação
+  // de análise já vista. Chamando o MESMO endpoint aqui direto (idempotente
+  // -- abaEdital já vai chamar de novo quando /detalhe terminar, harmless)
+  // e recarregando só depois dele responder tira a corrida de vez.
+  api(`/api/editais/${n.edital_id}/interacao?aba=${encodeURIComponent(aba)}`, {method:'POST'})
+    .catch(()=>{})
+    .then(carregarNotificacoes);
 }
 // Achado real (pedido do usuário): clicar numa notificação navegava pra
 // onde ela aponta, mas o badge/lista continuavam com o número de ANTES do
