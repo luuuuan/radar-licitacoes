@@ -5314,16 +5314,32 @@ function _radarCarregandoHTML(texto, extra){
 // tempo, não só escondido.
 let _scrollAoAbrirEdital = 0;
 
+// Aba em que o usuário estava ANTES de entrar no edital -- sem isso,
+// "Voltar" sempre mandava pra "Editais encontrados" mesmo quando o usuário
+// tinha chegado de outra tela (Pipeline, Favoritos, Início/recentes etc.),
+// porque _fecharPaginaEdital() tinha esse destino fixo. 'editais' como
+// padrão cobre quem chega direto numa URL /edital/{id} (sem aba nenhuma
+// visível antes).
+let _abaAoAbrirEdital = 'editais';
+function _abaAtualVisivel(){
+  for(const t of ['inicio','editais','pipeline','encerrados','favoritos','catalogo','fornecedores','precos','regras','documentos','config','perfil','logs']){
+    if(!$('#t-'+t).classList.contains('hidden')) return t;
+  }
+  return 'editais';
+}
+
 function abrirPaginaEdital(editalId, aba='itens'){
   _scrollAoAbrirEdital = window.scrollY;
+  _abaAoAbrirEdital = _abaAtualVisivel();
   history.pushState({view:'edital', editalId}, '', '/edital/'+editalId);
   _renderPaginaEdital(editalId, aba);
 }
 
 // NÃO usa history.back(): depender do histórico do navegador é frágil (se o
 // usuário chegou colando a URL direto ou vindo de outro site, back() pode
-// sair do app ou não fazer nada). Navega direto e explicitamente pro
-// dashboard, sempre.
+// sair do app ou não fazer nada). Navega direto e explicitamente pra aba
+// em que o usuário estava antes de abrir o edital (ver _abaAoAbrirEdital),
+// nunca via history.back().
 async function voltarDoEdital(){
   history.pushState({view:'dashboard'}, '', '/');
   // achado real (usuário reportou): mesmo com o requestAnimationFrame
@@ -5370,18 +5386,20 @@ async function voltarDoEdital(){
 }
 function _fecharPaginaEdital(){
   $('#t-edital').classList.add('hidden');
-  tab('editais');
+  tab(_abaAoAbrirEdital);
   // achado real (usuário reportou): mudar status (ou lido/interessante) na
   // página do edital não refletia na lista ao voltar -- ela só é
   // renderizada com o HTML de quando foi carregada da última vez, e tab()
-  // só troca qual aba fica visível, não busca dados de novo. Sem isso, o
-  // card continuava mostrando o status ANTERIOR à mudança até o usuário
-  // dar um F5 ou mudar algum filtro (o que dispara loadEditais() de novo).
-  // resetPagina=false: mantém a página em que o usuário já estava, só
-  // atualiza o conteúdo dela. Devolve a promise (ver voltarDoEdital, que
-  // espera ela terminar antes de restaurar o scroll) -- popstate (abaixo)
-  // continua chamando isso sem esperar, de propósito: não mexe em scroll.
-  return loadEditais(false);
+  // só troca qual aba fica visível, não busca dados de novo. Pras outras
+  // abas (Pipeline, Favoritos, Catálogo...) tab() já dispara o load de cada
+  // uma sozinho (ver tab(), acima) -- só "editais" não tem esse caso aí
+  // dentro (ela é o estado inicial do app, sem um "entrar" próprio), por
+  // isso o loadEditais(false) manual aqui. resetPagina=false: mantém a
+  // página em que o usuário já estava, só atualiza o conteúdo dela. Devolve
+  // a promise (ver voltarDoEdital, que espera ela terminar antes de
+  // restaurar o scroll) -- popstate (abaixo) continua chamando isso sem
+  // esperar, de propósito: não mexe em scroll.
+  if(_abaAoAbrirEdital==='editais') return loadEditais(false);
 }
 // Sub-aba lembrada (ver abaEdital()) só reaproveitada quando é do MESMO
 // edital -- o valor salvo é {id, aba}, não só o nome, porque tanto o F5
