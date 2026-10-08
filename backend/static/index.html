@@ -3475,6 +3475,163 @@ async function importarPlanilha(input){
 }
 
 let _produtos=[];
+
+// ===== Busca tolerante (espelha backend/app/busca.py) =====
+// Palavras em qualquer ordem, sem acento, plural, "75g"=="75 g", cx==caixa
+// (sinônimos vêm de /api/busca/config = busca_sinonimos.json), erro de
+// digitação só quando a busca estrita não acha nada.
+let _buscaCfg = {
+  stopwords:['a','o','as','os','e','de','da','do','das','dos','com','c','para','p','pra','em','um','uma','por'],
+  unidades_contagem:['un','und','unid','unidade','unidades','pc','pcs','peca','pecas'],
+  unidades_medida:['g','gr','kg','mg','ml','l','lt','lts','mm','cm','m','mt','mts','w','v','gb','mb','tb'],
+  sinonimos:[['cx','caixa','caixas'],['pct','pacote','pacotes'],['un','und','unid','unidade','unidades']]
+};
+let _buscaIdxSin = null;
+const _buscaCache = new WeakMap();
+async function buscaCarregarConfig(){
+  try{
+    const c = await api('/api/busca/config');
+    if(c && Array.isArray(c.sinonimos)){ _buscaCfg = c; _buscaIdxSin = null; }
+  }catch(e){ /* mantém a configuração embutida */ }
+}
+function buscaNorm(t){
+  if(!t) return '';
+  return String(t).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/(?<=\d)[.,](?=\d)/g,'.')
+    .replace(/\b([a-z])-(?=\d)/g,'$1')
+    .replace(/(\d)([a-z])/g,'$1 $2')
+    .replace(/[^a-z0-9.\s]/g,' ')
+    .replace(/(?<!\d)\.|\.(?!\d)/g,' ')
+    .replace(/\s+/g,' ').trim();
+}
+const _BUSCA_NUM = /^\d+(\.\d+)*$/;
+function buscaRadical(p){
+  if(p.length<=3 || _BUSCA_NUM.test(p)) return p;
+  for(const [suf,rep] of [['oes','ao'],['aes','ao'],['eis','el'],['ais','al'],['uis','ul'],['ois','ol']]){
+    if(p.endsWith(suf) && p.length>suf.length+1) return p.slice(0,-suf.length)+rep;
+  }
+  if((p.endsWith('res')||p.endsWith('zes')) && p.length>4) return p.slice(0,-2);
+  if(p.endsWith('s') && !/(ss|is|us)$/.test(p)) return p.slice(0,-1);
+  return p;
+}
+function _buscaTokPalavra(p){
+  const r = buscaRadical(p);
+  if(r===p || r.length>=5) return {tipo:'palavra', texto:r, prefixo:true, formas:[]};
+  return {tipo:'palavra', texto:r, prefixo:false, formas:[...new Set([p,r,r+'s',r+'es'])]};
+}
+function buscaTokenizar(termo){
+  const stop = new Set(_buscaCfg.stopwords), cont = new Set(_buscaCfg.unidades_contagem),
+        med = new Set(_buscaCfg.unidades_medida);
+  const ws = buscaNorm(termo).split(' ').filter(Boolean);
+  const temNum = ws.some(w=>_BUSCA_NUM.test(w));
+  const toks = [];
+  for(let i=0;i<ws.length;i++){
+    const w = ws[i];
+    if(_BUSCA_NUM.test(w)){
+      if(i+1<ws.length && med.has(ws[i+1])){ toks.push({tipo:'medida', texto:w, unidade:ws[i+1]}); i++; continue; }
+      toks.push({tipo:'numero', texto:w});
+    } else if(stop.has(w) || (temNum && cont.has(w))){ /* ignora */ }
+    else toks.push(_buscaTokPalavra(w));
+  }
+  if(!toks.length && ws.length) return ws.map(_buscaTokPalavra);
+  return toks;
+}
+function _buscaIndiceSin(){
+  if(_buscaIdxSin) return _buscaIdxSin;
+  const idx = new Map();
+  for(const grupo of _buscaCfg.sinonimos){
+    const membros = grupo.map(m=>buscaNorm(m).split(' ').filter(Boolean));
+    for(const m of membros){
+      if(m.length!==1) continue;
+      for(const chave of new Set([m[0], buscaRadical(m[0])])){
+        if(!idx.has(chave)) idx.set(chave, []);
+        const lista = idx.get(chave);
+        for(const alt of membros) if(!lista.some(x=>x.join(' ')===alt.join(' '))) lista.push(alt);
+      }
+    }
+  }
+  return (_buscaIdxSin = idx);
+}
+function _buscaAlternativas(tok){
+  if(tok.tipo!=='palavra') return [[tok]];
+  const alts = [[tok]];
+  const chaves = new Set([tok.texto, ...tok.formas]);
+  const vistos = new Set();
+  for(const ch of chaves){
+    for(const alt of (_buscaIndiceSin().get(ch)||[])){
+      const k = alt.join(' ');
+      if(vistos.has(k) || (alt.length===1 && chaves.has(alt[0]))) continue;
+      vistos.add(k);
+      const nova = alt.map(w=>_BUSCA_NUM.test(w) ? {tipo:'numero', texto:w} : _buscaTokPalavra(w));
+      if(!alts.some(a=>JSON.stringify(a)===JSON.stringify(nova))) alts.push(nova);
+    }
+  }
+  return alts;
+}
+function _buscaTolerancia(n){ return n<4 ? 0 : (n<=7 ? 1 : 2); }
+function _buscaDist(a,b,k){   // Damerau-Levenshtein limitado a k
+  if(Math.abs(a.length-b.length)>k) return k+1;
+  let prev2=null, prev=Array.from({length:b.length+1},(_,j)=>j);
+  for(let i=1;i<=a.length;i++){
+    const cur=[i];
+    for(let j=1;j<=b.length;j++){
+      const c = a[i-1]===b[j-1] ? 0 : 1;
+      let v = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+c);
+      if(prev2 && i>1 && j>1 && a[i-1]===b[j-2] && a[i-2]===b[j-1]) v = Math.min(v, prev2[j-2]+1);
+      cur[j]=v;
+    }
+    prev2=prev; prev=cur;
+    if(Math.min(...cur)>k) return k+1;
+  }
+  return prev[prev.length-1];
+}
+function _buscaTokSimples(tok, palavras, fuzzy){
+  if(tok.tipo==='numero') return palavras.includes(tok.texto);
+  if(tok.tipo==='medida') return palavras.some((w,i)=>w===tok.texto && palavras[i+1]===tok.unidade);
+  if(tok.prefixo ? palavras.some(w=>w.startsWith(tok.texto)) : palavras.some(w=>tok.formas.includes(w))) return true;
+  const k = _buscaTolerancia(tok.texto.length);
+  if(fuzzy && k && !_BUSCA_NUM.test(tok.texto)){
+    const n = tok.texto.length;
+    return palavras.some(w=>_buscaDist(tok.texto, w.slice(0,n), k)<=k || _buscaDist(tok.texto, w, k)<=k);
+  }
+  return false;
+}
+function _buscaTokBate(tok, palavras, fuzzy){
+  return _buscaAlternativas(tok).some((alt,i)=>alt.every(t=>_buscaTokSimples(t, palavras, fuzzy && i===0)));
+}
+function buscaTextoBate(texto, tokens, fuzzy){
+  const palavras = buscaNorm(texto).split(' ').filter(Boolean);
+  return tokens.length>0 && tokens.every(t=>_buscaTokBate(t, palavras, !!fuzzy));
+}
+// Campos do produto que a busca olha (descrição, códigos, marca, fornecedor...)
+function _buscaPalavrasProduto(p){
+  let c = _buscaCache.get(p);
+  if(!c){
+    const codigos = [p.ncm,p.catmat,p.catser,p.ean].filter(Boolean).map(x=>String(x).replace(/\D/g,''));
+    const texto = [p.descricao,p.palavras_chave,p.ncm,p.catmat,p.catser,p.ean,p.marca,p.modelo,
+                   p.fabricante,p.fornecedor_nome].filter(Boolean).join(' ') + ' ' + codigos.join(' ');
+    c = {palavras: buscaNorm(texto).split(' ').filter(Boolean), inicio: buscaNorm(p.descricao||'').split(' ')[0]||''};
+    _buscaCache.set(p, c);
+  }
+  return c;
+}
+// Filtra o catálogo: estrita primeiro; se não achar nada, tenta com erro de
+// digitação. Ordena por relevância (palavra inteira + começo da descrição).
+function buscaFiltrarProdutos(lista, termo){
+  const tokens = buscaTokenizar(termo);
+  if(!tokens.length) return lista;
+  const rodar = (fuzzy)=>lista.map((p,ordem)=>{
+    const c = _buscaPalavrasProduto(p);
+    if(!tokens.every(t=>_buscaTokBate(t, c.palavras, fuzzy))) return null;
+    let score = tokens.reduce((s,t)=>s+(c.palavras.includes(t.texto)?1:0), 0);
+    if(tokens[0].tipo==='palavra' && c.inicio.startsWith(tokens[0].texto)) score += 2;
+    return {p, score, ordem};
+  }).filter(Boolean).sort((a,b)=>b.score-a.score || a.ordem-b.ordem).map(x=>x.p);
+  const estrito = rodar(false);
+  if(estrito.length || !tokens.some(t=>t.tipo==='palavra' && _buscaTolerancia(t.texto.length))) return estrito;
+  return rodar(true);
+}
+
 async function loadProdutos(){
   // achado real: um único ?por_pagina=500 truncava o catálogo em silêncio
   // pra quem tem mais de 500 produtos -- "selecionar todos" só selecionava
@@ -3482,6 +3639,7 @@ async function loadProdutos(){
   // páginas (o endpoint já pagina de verdade, só o front nunca tinha ido
   // atrás da 2ª em diante) -- a lista renderizada continua paginada (ver
   // filtrarProdutos), só o que fica em memória no navegador que é completo.
+  buscaCarregarConfig(); 
   const primeira = await api('/api/produtos?por_pagina=500&pagina=1');
   let resultados = primeira.resultados||[];
   for(let p=2; p<=(primeira.paginas||1); p++){
@@ -3515,11 +3673,11 @@ let _produtosSelecionados = new Set();
 let _paginaProdutosAtual = 1;
 const TAM_PAGINA_PRODUTOS = 100;
 function filtrarProdutos(){
-  const q=($('#busca-produto')?.value||'').toLowerCase().trim();
+  const q=($('#busca-produto')?.value||'').trim();
   const forn=$('#filtro-fornecedor')?.value||'';
   let ps=_produtos;
   if(forn) ps=ps.filter(p=>(p.fornecedor_nome||'')===forn);
-  if(q) ps=ps.filter(p=>[p.descricao,p.ncm,p.catmat,p.catser,p.palavras_chave].filter(Boolean).join(' ').toLowerCase().includes(q));
+  if(q) ps=buscaFiltrarProdutos(ps,q);
   _produtosVisiveis = ps;   // todos os que batem no filtro (não só a página) -- "selecionar todos" usa esta lista
   const totalPaginas = Math.max(1, Math.ceil(ps.length / TAM_PAGINA_PRODUTOS));
   if(_paginaProdutosAtual > totalPaginas) _paginaProdutosAtual = totalPaginas;
@@ -4928,11 +5086,10 @@ function _filtrarTrocaProdutoIA(numero){
   const lista = $('#ia-troca-lista');
   const campo = $('#ia-troca-busca');
   if(!lista || !campo) return;
-  const termo = campo.value.trim().toLowerCase();
+  const termo = campo.value.trim();
   if(!termo){ lista.innerHTML = '<p class="muted" style="font-size:11px">Digite para buscar no seu catálogo.</p>'; return; }
   const jaMostrados = new Set(((_comparacaoCatalogoItensAtual[numero]||{}).candidatos||[]).map(c=>c.produto_id));
-  const achados = (_produtos||[])
-    .filter(p => !jaMostrados.has(p.id) && (p.descricao||'').toLowerCase().includes(termo))
+  const achados = buscaFiltrarProdutos((_produtos||[]).filter(p => !jaMostrados.has(p.id)), termo)
     .slice(0, 25);   // catálogo pode ser grande -- não trava a tela
   if(!achados.length){ lista.innerHTML = '<p class="muted" style="font-size:11px">Nenhum produto encontrado.</p>'; return; }
   lista.innerHTML = achados.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">

@@ -103,7 +103,7 @@ def test_condicoes_busca_item_postgres_usa_regex_com_fronteira_so_no_inicio():
     condicoes = _condicoes_busca_item("caneta", eh_postgres=True)
     sql = str(condicoes[0].compile(compile_kwargs={"literal_binds": True}))
     assert "~" in sql
-    assert r"\mcaneta" in sql
+    assert r"\m[cç][aáàâãä]n[eéèêë]t[aáàâãä]" in sql
     assert r"\y" not in sql   # não exige mais fronteira também no FIM da palavra
 
 

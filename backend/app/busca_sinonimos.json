@@ -1,0 +1,25 @@
+{
+  "stopwords": ["a", "o", "as", "os", "e", "de", "da", "do", "das", "dos", "com", "c", "para", "p", "pra", "em", "um", "uma", "por"],
+  "unidades_contagem": ["un", "und", "unid", "unidade", "unidades", "pc", "pcs", "peca", "pecas"],
+  "unidades_medida": ["g", "gr", "kg", "mg", "ml", "l", "lt", "lts", "mm", "cm", "m", "mt", "mts", "w", "v", "gb", "mb", "tb"],
+  "sinonimos": [
+    ["cx", "caixa", "caixas"],
+    ["pct", "pacote", "pacotes"],
+    ["un", "und", "unid", "unidade", "unidades"],
+    ["rs", "resma", "resmas"],
+    ["fl", "fls", "folha", "folhas"],
+    ["mt", "mts", "metro", "metros"],
+    ["kg", "quilo", "quilos", "kilo", "kilos"],
+    ["lt", "lts", "litro", "litros"],
+    ["rl", "rolo", "rolos"],
+    ["fr", "frasco", "frascos"],
+    ["gl", "galao", "galoes"],
+    ["bd", "bandeja", "bandejas"],
+    ["pc", "pcs", "peca", "pecas"],
+    ["sulfite", "papel a4"],
+    ["hidrocor", "hidrografica"],
+    ["clips", "clipe"],
+    ["durex", "fita adesiva"],
+    ["grampeador", "grampeadora"]
+  ]
+}

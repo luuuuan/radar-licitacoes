@@ -44,6 +44,7 @@ from .database import get_session, init_db, SessionLocal
 from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco
 from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
+from . import busca as _busca
 
 
 _SECRET_KEY_PADRAO = "troque-isto-em-producao-please-32+chars-aleatorios"
@@ -1038,6 +1039,10 @@ def _produto_dict(p: Produto) -> dict:
         "fornecedor_site": p.fornecedor_site, "fornecedor_id": p.fornecedor_id,
     }
 
+@app.get("/api/busca/config")
+def busca_config(user: Usuario = Depends(_auth.get_current_user)):
+    """Sinônimos/stopwords da busca (mesmo JSON que o backend usa)."""
+    return _busca.carregar_config()
 
 @app.get("/api/produtos")
 def listar_produtos(
@@ -1463,29 +1468,34 @@ def remover_produtos_varios(dados: ProdutosIdsIn,
 # nativo sem registrar uma função customizada por conexão — cai pro
 # substring de sempre, mais largo ainda; aceitável porque é só ambiente de
 # desenvolvimento, produção roda Postgres.
-def _condicoes_busca_item(termo: str, eh_postgres: bool) -> list:
-    palavras = [p for p in termo.strip().lower().split() if p]
-    condicoes = []
-    for p in palavras:
-        col = func.lower(ItemEdital.descricao)
-        if eh_postgres:
-            condicoes.append(col.op("~")(r"\m" + re.escape(p)))
-        else:
-            condicoes.append(col.like(f"%{p}%"))
-    return condicoes
 
 
-def _item_bate_busca(descricao: str | None, palavras: list[str]) -> bool:
-    """Mesma regra de _condicoes_busca_item (caminho Postgres: fronteira só
-    no INÍCIO da palavra, aceita sufixo/variação depois -- ver comentário
-    lá em cima), mas em Python (usada pra escolher QUAIS trechos de item
-    mostrar como motivo no card "sem análise automática" — precisa bater
-    com o mesmo critério que decidiu incluir aquele edital, senão o card
-    aparece sem nenhum item destacado)."""
-    texto = (descricao or "").lower()
-    return all(re.search(r"\b" + re.escape(p), texto) for p in palavras)
+def _condicoes_busca_item(termo: str, eh_postgres: bool, fuzzy: bool = False) -> list:
+    """Condições SQL da busca por item (regras em app/busca.py)."""
+    return _busca.condicoes_sql(termo, func.lower(ItemEdital.descricao), eh_postgres, fuzzy)
 
 
+def _busca_item_modo_fuzzy(db: Session, termo: str, eh_postgres: bool) -> bool:
+    """True quando a busca estrita não acha NENHUM item e dá pra tentar com
+    tolerância a erro de digitação (palavra com 4+ letras)."""
+    if not eh_postgres or not termo or not termo.strip():
+        return False
+    toks = _busca.tokenizar(termo)
+    if not any(t.tipo == "palavra" and _busca.tolerancia(len(t.texto)) for t in toks):
+        return False
+    achou = db.scalar(
+        select(ItemEdital.id).where(*_condicoes_busca_item(termo, eh_postgres)).limit(1)
+    )
+    return achou is None
+
+
+def _item_bate_busca(descricao: str | None, palavras, fuzzy: bool = False) -> bool:
+    """Mesma regra de _condicoes_busca_item, em Python. `palavras`: lista de
+    tokens (busca.tokenizar) ou de strings."""
+    if palavras and isinstance(palavras[0], str):
+        palavras = _busca.tokenizar(" ".join(palavras))
+    return _busca.texto_bate(descricao, palavras, fuzzy)
+    
 def _dias_restantes_edital(ed: Edital) -> int | None:
     """Dias pro badge/ordenação "faltam X dias" / "Encerrado" dos cards.
 
@@ -2052,11 +2062,13 @@ def listar_editais(
     sem_match: list[dict] = []
     sem_match_total = 0
     if not todos_editais and busca_item and busca_item.strip():
-        palavras_busca = [p for p in busca_item.strip().lower().split() if p]
+        palavras_busca = _busca.tokenizar(busca_item)
+        fuzzy_busca = _busca_item_modo_fuzzy(db, busca_item, eh_postgres)
         sub_com_match = select(Match.edital_id).where(Match.usuario_id == user.id)
         sub_itens_sm = select(ItemEdital.edital_id).where(ItemEdital.edital_id == Edital.id)
-        for cond in _condicoes_busca_item(busca_item, eh_postgres):
-            sub_itens_sm = sub_itens_sm.where(cond)
+        fuzzy_busca = _busca_item_modo_fuzzy(db, busca_item, eh_postgres)
+        for cond in _condicoes_busca_item(busca_item, eh_postgres, fuzzy_busca):
+            sub_busca = sub_busca.where(cond)
         q_sem_match = (
             select(Edital)
             .where(~Edital.id.in_(sub_com_match))
@@ -2105,7 +2117,7 @@ def listar_editais(
         for ed in db.execute(q_sem_match).scalars().all():
             dias = _dias_restantes_edital(ed)
             itens_batem = [it.descricao for it in ed.itens
-                          if _item_bate_busca(it.descricao, palavras_busca)][:3]
+                          if _item_bate_busca(it.descricao, palavras_busca, fuzzy_busca)][:3]
             sem_match.append({
                 "edital_id": ed.id, "orgao": ed.orgao, "objeto": ed.objeto, "uf": ed.uf,
                 "municipio": ed.municipio, "modalidade": ed.modalidade,
