@@ -2136,13 +2136,36 @@ function _fecharNotificacoes(){
   const btn = document.getElementById('btn-notificacoes');
   if(btn) btn.setAttribute('aria-expanded', 'false');
 }
+// Tira a notificação do _notifCache e atualiza o badge NA HORA, antes de
+// qualquer resposta do servidor -- pedido do usuário: o badge/lista só
+// atualizavam depois do POST .../interacao confirmar (ver comentário
+// abaixo, sobre a corrida com /detalhe), o que dá uma sensação de atraso
+// mesmo quando está certo. Clicar já é a intenção clara de "lidar com
+// isso" -- sumir na hora é só UI otimista (estado local desta aba aberta);
+// pra prazo/documento/abertura, que não têm "marcar como visto" nenhum no
+// servidor (continuam valendo de propósito, ver GET /api/notificacoes),
+// ela volta sozinha no próximo poll de 30s ou na próxima vez que abrir o
+// sino, se a causa continuar valendo -- exatamente como já era antes
+// desta mudança, só que sem o sumiço instantâneo.
+function _removerNotificacaoLocal(n){
+  const idx = _notifCache.indexOf(n);
+  if(idx === -1) return;
+  _notifCache.splice(idx, 1);
+  const badge = $('#notif-badge');
+  if(_notifCache.length){
+    badge.style.display = 'flex';
+    badge.textContent = _notifCache.length > 9 ? '9+' : _notifCache.length;
+  } else {
+    badge.style.display = 'none';
+  }
+}
 function _abrirNotificacao(i){
   const n = _notifCache[i];
   if(!n) return;
   _fecharNotificacoes();
+  _removerNotificacaoLocal(n);
   if(n.tipo === 'documento'){
     tab('documentos');
-    _atualizarNotificacoesEmBreve();
     return;
   }
   if(n.tipo === 'abertura'){
@@ -2157,7 +2180,6 @@ function _abrirNotificacao(i){
     limparFiltros();
     if(n.filtro && n.filtro.nivel && $('#f-nivel')) $('#f-nivel').value = n.filtro.nivel;
     loadEditais();
-    _atualizarNotificacoesEmBreve();
     return;
   }
   // mesmo caminho já usado por outras origens que abrem um edital numa
@@ -2165,34 +2187,15 @@ function _abrirNotificacao(i){
   // _abaEditalSalvaPara.
   const aba = n.aba || 'itens';
   abrirPaginaEdital(n.edital_id, aba);
-  // Achado real (usuário reportou DE NOVO depois do fix anterior): é esta
-  // chamada (POST .../interacao?aba=analise) que marca analise_vista_em no
-  // servidor (ver registrar_interacao) -- é ela que precisa TERMINAR antes
-  // de recarregar o badge, não um delay chutado. _atualizarNotificacoesEm
-  // Breve (setTimeout 600ms) supunha que /detalhe + abaEdital(aba) sempre
-  // terminavam a tempo -- em produção, com latência de rede de verdade,
-  // 600ms nem sempre bastava, e o sino continuava mostrando a notificação
-  // de análise já vista. Chamando o MESMO endpoint aqui direto (idempotente
-  // -- abaEdital já vai chamar de novo quando /detalhe terminar, harmless)
-  // e recarregando só depois dele responder tira a corrida de vez.
-  api(`/api/editais/${n.edital_id}/interacao?aba=${encodeURIComponent(aba)}`, {method:'POST'})
-    .catch(()=>{})
-    .then(carregarNotificacoes);
-}
-// Achado real (pedido do usuário): clicar numa notificação navegava pra
-// onde ela aponta, mas o badge/lista continuavam com o número de ANTES do
-// clique até o usuário abrir o sino de novo (ou o próximo poll de 30s).
-// Estas notificações são computadas AO VIVO, sem "marcar como lida"
-// individual (ver docstring de GET /api/notificacoes) -- pra prazo/
-// documento/abertura isso é por desenho (continuam valendo até "Ler
-// Todos" ou a causa sumir sozinha), mas "análise" muda de estado de
-// verdade ao clicar (POST .../interacao, disparado por abrirPaginaEdital/
-// abaEdital, atualiza analise_vista_em no servidor). Busca o estado real
-// nos dois casos -- certo pra análise (alguns ms depois, dando tempo do
-// POST fire-and-forget terminar) e inofensivo pros outros 3 tipos
-// (continuam aparecendo, porque continuam valendo de verdade).
-function _atualizarNotificacoesEmBreve(){
-  setTimeout(carregarNotificacoes, 600);
+  // Achado real (usuário reportou DE NOVO depois do fix anterior): esta
+  // chamada (POST .../interacao?aba=analise) marca analise_vista_em no
+  // servidor (ver registrar_interacao) -- precisa continuar acontecendo
+  // (senão a notificação "análise concluída" volta no próximo F5/poll),
+  // mas o badge já sumiu na hora acima (_removerNotificacaoLocal) -- não
+  // precisa mais esperar esta resposta pra atualizar a UI, só confirmar o
+  // estado no servidor em segundo plano. abaEdital chama o mesmo endpoint
+  // de novo quando /detalhe terminar (idempotente, inofensivo).
+  api(`/api/editais/${n.edital_id}/interacao?aba=${encodeURIComponent(aba)}`, {method:'POST'}).catch(()=>{});
 }
 // Menu "⋮" (trocar produto/detalhes/fornecedor) da tabela de comparação da
 // Análise por IA — pedido do usuário: em vez de empilhar todos os botões
