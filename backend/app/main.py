@@ -1481,6 +1481,50 @@ def _condicoes_busca_item(termo: str, eh_postgres: bool, fuzzy: bool = False) ->
     return _busca.condicoes_sql(termo, func.lower(ItemEdital.descricao), eh_postgres, fuzzy)
 
 
+def _condicao_nao_excluido_sem_match(user_id: int, db: Session, eh_postgres: bool):
+    """Condição SQL: True quando o edital NÃO bate em nenhum termo de
+    exclusão ATIVO do usuário (RegraExclusao tipo="termo") -- mesma lógica
+    de aplicar_regras_exclusao (matching/engine.py: substring, sem acento,
+    objeto OU descrição de algum item), usada até agora só na hora de criar/
+    recalcular Match (service.py).
+
+    Achado real (usuário pediu auditoria em produção): um edital que o
+    motor corretamente NUNCA transforma em Match, por bater numa regra de
+    exclusão, continuava aparecendo normalmente na listagem geral (modo
+    "todos os editais" e no bloco "sem_match" da busca por item) -- essas
+    duas consultas nunca conheciam as regras de exclusão, só o motor de
+    matching conhecia. Usada SÓ pra edital SEM Match: um edital que já virou
+    Match antes da regra existir continua aparecendo até o usuário rodar um
+    recálculo completo (fora do escopo desta função -- ver comentário em
+    service.py sobre `if existente and not recalcular_todos: continue`).
+
+    Só considera regras tipo "termo" (categoria_pncp nunca é preenchido em
+    nenhum fluxo hoje, ver aplicar_regras_exclusao -- não tem o que
+    comparar). None quando o usuário não tem termo ativo nenhum (nada a
+    filtrar, evita opcionalmente anexar uma condição à toa)."""
+    from .matching.engine import normalizar
+    termos = db.execute(
+        select(RegraExclusao.valor).where(RegraExclusao.usuario_id == user_id)
+        .where(RegraExclusao.ativo == True)    # noqa: E712
+        .where(RegraExclusao.tipo == "termo")
+    ).scalars().all()
+    termos_norm = sorted({t for t in (normalizar(v) for v in termos) if t})
+    if not termos_norm:
+        return None
+    objeto_cmp = func.lower(func.coalesce(Edital.objeto, ""))
+    item_cmp = func.lower(ItemEdital.descricao)
+    if eh_postgres:
+        objeto_cmp = func.unaccent_imutavel(objeto_cmp)
+        item_cmp = func.unaccent_imutavel(item_cmp)
+    objeto_bate = or_(*[objeto_cmp.like(f"%{t}%") for t in termos_norm])
+    sub_item_bate = (
+        select(ItemEdital.edital_id)
+        .where(ItemEdital.edital_id == Edital.id)
+        .where(or_(*[item_cmp.like(f"%{t}%") for t in termos_norm]))
+    )
+    return ~objeto_bate & ~sub_item_bate.exists()
+
+
 def _termo_elegivel_fuzzy(termo: str) -> bool:
     """True quando o termo tem ao menos 1 palavra longa o bastante (4+
     letras) pra tolerar erro de digitação -- checagem pura em texto (sem ir
@@ -1760,6 +1804,15 @@ def _query_editais_filtrada(
         base = select(Match, Edital).select_from(Edital).outerjoin(
             Match, (Match.edital_id == Edital.id) & (Match.usuario_id == user.id))
         filtro = []
+        # pedido do usuário: edital SEM Match que bate numa regra de
+        # exclusão não deve aparecer aqui (ver _condicao_nao_excluido_sem_
+        # match) -- só se aplica quando Match.id é nulo; um edital que já
+        # tem Match continua aparecendo igual (limpar esse caso é o
+        # recálculo completo, não esta listagem).
+        eh_postgres_excl = db.get_bind().dialect.name != "sqlite"
+        nao_excluido = _condicao_nao_excluido_sem_match(user.id, db, eh_postgres_excl)
+        if nao_excluido is not None:
+            filtro.append(Match.id.is_not(None) | nao_excluido)
     else:
         base = select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
         filtro = [Match.usuario_id == user.id]
@@ -2167,6 +2220,11 @@ def listar_editais(
             .where(~Edital.id.in_(sub_com_match))
             .where(sub_itens_sm.exists())
         )
+        # pedido do usuário: mesmo filtro de regras de exclusão aplicado no
+        # bloco "todos_editais" acima -- ver _condicao_nao_excluido_sem_match.
+        nao_excluido_sm = _condicao_nao_excluido_sem_match(user.id, db, eh_postgres)
+        if nao_excluido_sm is not None:
+            q_sem_match = q_sem_match.where(nao_excluido_sm)
         if vista == "ativos":
             ativo_cond_sm, _ = _condicoes_prazo_editais(agora, hoje_data)
             q_sem_match = q_sem_match.where(ativo_cond_sm)
