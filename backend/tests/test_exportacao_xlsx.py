@@ -12,7 +12,10 @@ import openpyxl
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.main import cotacao_edital, cotacao_fornecedor_edital, exportar_produtos
+from app.main import (
+    cotacao_edital, cotacao_fornecedor_edital, exportar_produtos,
+    definir_embalagem_item, EmbalagemItemIn,
+)
 from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto, Proposta, CotacaoPreco
 
 
@@ -66,6 +69,57 @@ def test_cotacao_xlsx_formata_colunas_de_valor_como_moeda():
     # nº do processo, link de volta pro app, linha em branco, cabeçalho)
     for col in ("D", "E", "F", "G"):
         assert ws[f"{col}6"].number_format == "R$ #,##0.00", f"coluna {col} sem formatação de moeda"
+
+
+def test_cotacao_xlsx_valor_minimo_divide_pela_embalagem_igual_a_itens_margem():
+    """Pedido do usuário: VALOR MÍNIMO UNI. (coluna F) tem que refletir a
+    mesma conversão de embalagem que a aba Itens/margem já aplica (ver
+    _custo_comparavel_produto) -- antes, a planilha usava Produto.preco_custo
+    cru, então um produto vendido em caixa de 500 saía com o custo da CAIXA
+    inteira, mesmo o item pedindo só 1 folha."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=25.0, itens_por_unidade=500)
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10, valor_unitario=0.1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+
+    response = cotacao_edital(ed.id, itens=None, fretes=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    assert ws["F6"].value == 25.0 / 500
+
+
+def test_cotacao_xlsx_valor_minimo_respeita_override_de_nao_dividir_embalagem():
+    """Checkbox "preço do órgão já é da embalagem inteira" (aba Itens/
+    margem) tem que valer aqui também -- o mesmo achado real do edital
+    156310 item 9, só que refletido na planilha de cotação."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=25.0, itens_por_unidade=500)
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10, valor_unitario=24.50))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+    definir_embalagem_item(ed.id, 1, EmbalagemItemIn(sem_divisao=True), user=u, db=db)
+
+    response = cotacao_edital(ed.id, itens=None, fretes=None, user=u, db=db)
+    wb = openpyxl.load_workbook(io.BytesIO(_drenar(response)))
+    ws = wb.active
+
+    assert ws["F6"].value == 25.0
 
 
 # --------- rastreabilidade: link de volta pro edital dentro do app --------- #

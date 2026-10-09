@@ -13,7 +13,7 @@ cd backend && pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import _proposta_payload
+from app.main import _proposta_payload, definir_embalagem_item, EmbalagemItemIn
 from app.models import Base, Usuario, Edital, ItemEdital, Match, Produto, Proposta
 
 
@@ -206,3 +206,56 @@ def test_custo_unit_sem_produto_confirmado_mantem_valor_salvo():
 
     payload = _proposta_payload(ed, prop, u, db)
     assert payload["itens"][0]["custo_unit"] == 7.5
+
+
+def test_custo_unit_divide_pela_embalagem_igual_a_itens_margem():
+    """Pedido do usuário: custo_unit tem que refletir a mesma conversão de
+    embalagem que a aba Itens/margem já aplica (ver _custo_comparavel_produto)
+    -- antes, a Proposta usava Produto.preco_custo cru, então um produto
+    vendido em caixa de 500 aparecia com o custo da CAIXA inteira, mesmo o
+    item pedindo só 1 folha."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=25.0, itens_por_unidade=500)
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Papel A4 75g", "quantidade": 10, "custo_unit": 0, "preco_unit": 0.1},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+
+    assert payload["itens"][0]["custo_unit"] == 25.0 / 500
+
+
+def test_custo_unit_respeita_override_de_nao_dividir_embalagem():
+    """Checkbox "preço do órgão já é da embalagem inteira" (aba Itens/
+    margem) tem que valer aqui também -- o mesmo achado real do edital
+    156310 item 9, só que refletido na Proposta em vez da margem."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = Edital(fonte="PNCP", id_externo="ed1", orgao="Orgao Teste", objeto="Aquisicao", uf="SP")
+    db.add(ed)
+    db.commit()
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=25.0, itens_por_unidade=500)
+    db.add(prod)
+    db.commit()
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Papel A4 75g", quantidade=10))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte",
+                detalhe={"itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta"}]}))
+    db.commit()
+    definir_embalagem_item(ed.id, 1, EmbalagemItemIn(sem_divisao=True), user=u, db=db)
+    prop = Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "Papel A4 75g", "quantidade": 10, "custo_unit": 0, "preco_unit": 24.50},
+    ])
+
+    payload = _proposta_payload(ed, prop, u, db)
+
+    assert payload["itens"][0]["custo_unit"] == 25.0

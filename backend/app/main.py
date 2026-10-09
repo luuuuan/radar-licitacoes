@@ -2472,6 +2472,50 @@ def _qtd_embalagem_descricao(descricao: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _custo_comparavel_produto(produto: Produto, unidade_medida_item: str | None = None,
+                              descricao_item: str | None = None,
+                              sem_divisao_confirmada: bool = False) -> tuple[float | None, bool, bool]:
+    """Custo do produto convertido pra mesma base de embalagem do item do
+    edital -- a mesma lógica de detecção/override que _custo_e_margem usa,
+    fatorada pra fora porque CUSTO sozinho (sem comparar com valor_unitario)
+    também é usado fora da margem: na planilha de cotação (cotacao.xlsx,
+    coluna "VALOR MÍNIMO UNI.") e na Proposta (custo_unit) -- antes essas
+    duas usavam Produto.preco_custo cru, sem nenhuma conversão de embalagem
+    nem respeito ao override manual (checkbox "preço já é da embalagem
+    inteira"), então um produto vendido em caixa de 500 aparecia na Cotação/
+    Proposta com o custo da CAIXA inteira mesmo quando o item pede por
+    unidade avulsa (pedido do usuário: valor do checkbox refletir nas duas
+    abas, não só em Itens/margem).
+
+    Retorna (custo_comparavel, embalagem_incompativel, embalagem_nao_confirmada)
+    -- None quando não há preco_custo cadastrado."""
+    if produto.preco_custo is None:
+        return None, False, False
+    por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
+    embalagem_incompativel = False
+    embalagem_nao_confirmada = False
+    if sem_divisao_confirmada:
+        custo_comparavel = round(produto.preco_custo, 4)
+    else:
+        qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
+        if qtd_embalagem_item is None:
+            qtd_embalagem_item = _qtd_embalagem_descricao(descricao_item)
+        if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
+            # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
+            custo_comparavel = round(produto.preco_custo, 4)
+        elif por_unid > 1 and qtd_embalagem_item is None and _e_unidade_embalagem_pncp(unidade_medida_item):
+            custo_comparavel = round(produto.preco_custo, 4)
+            embalagem_nao_confirmada = True
+        else:
+            if por_unid > 1 and qtd_embalagem_item is not None:
+                # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
+                # produto vendido em pacote de 24) — não dá pra comparar direto
+                # com confiança nenhuma das duas formas.
+                embalagem_incompativel = True
+            custo_comparavel = round(produto.preco_custo / por_unid, 4)
+    return custo_comparavel, embalagem_incompativel, embalagem_nao_confirmada
+
+
 def _custo_e_margem(valor_unitario: float | None, produto: Produto,
                     unidade_medida_item: str | None = None,
                     descricao_item: str | None = None,
@@ -2520,28 +2564,8 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
     if valor_unitario is None or produto.preco_custo is None:
         return {"margem": None, "margem_pct": None, "custo_comparavel": None,
                 "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
-    por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
-    embalagem_incompativel = False
-    embalagem_nao_confirmada = False
-    if sem_divisao_confirmada:
-        custo_comparavel = round(produto.preco_custo, 4)
-    else:
-        qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
-        if qtd_embalagem_item is None:
-            qtd_embalagem_item = _qtd_embalagem_descricao(descricao_item)
-        if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
-            # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
-            custo_comparavel = round(produto.preco_custo, 4)
-        elif por_unid > 1 and qtd_embalagem_item is None and _e_unidade_embalagem_pncp(unidade_medida_item):
-            custo_comparavel = round(produto.preco_custo, 4)
-            embalagem_nao_confirmada = True
-        else:
-            if por_unid > 1 and qtd_embalagem_item is not None:
-                # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
-                # produto vendido em pacote de 24) — não dá pra comparar direto
-                # com confiança nenhuma das duas formas.
-                embalagem_incompativel = True
-            custo_comparavel = round(produto.preco_custo / por_unid, 4)
+    custo_comparavel, embalagem_incompativel, embalagem_nao_confirmada = _custo_comparavel_produto(
+        produto, unidade_medida_item, descricao_item, sem_divisao_confirmada)
     margem = round(valor_unitario - custo_comparavel, 4)
     margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
     alerta_embalagem = embalagem_incompativel or embalagem_nao_confirmada
@@ -4514,6 +4538,11 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
     # ver _preco_cotacao_por_numero). Item que nunca teve esse valor
     # definido cai pro valor do órgão, igual sempre foi.
     precos_venda = _preco_cotacao_por_numero(edital_id, user, db)
+    # pedido do usuário: o checkbox "preço já é da embalagem inteira" (aba
+    # Itens/margem) tem que valer aqui também -- sem isso, VALOR MÍNIMO
+    # continuava mostrando o custo da CAIXA inteira (ver _custo_comparavel_produto)
+    # mesmo pro item que o usuário já confirmou que não deve dividir.
+    embalagem_override = _embalagem_override_por_numero(edital_id, user, db)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -4553,7 +4582,9 @@ def cotacao_edital(edital_id: int, itens: str | None = Query(None),
         qtd = it.quantidade or 0.0
         frete_item = fretes_por_item.get(it.numero, {})
         frete_unit = ((frete_item.get("entrada", 0.0) + frete_item.get("saida", 0.0)) / qtd) if qtd else 0.0
-        custo_com_frete = round((prod.preco_custo or 0.0) + frete_unit, 4)
+        custo_base, _, _ = _custo_comparavel_produto(
+            prod, it.unidade_medida, it.descricao, embalagem_override.get(it.numero, False))
+        custo_com_frete = round((custo_base or 0.0) + frete_unit, 4)
         # link do ITEM no fornecedor — campo "Site do fornecedor / página do
         # item" do Catálogo (Produto.fornecedor_site), não o link do edital
         # no PNCP: cada item pode ter vindo de um fornecedor diferente.
@@ -5133,6 +5164,12 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
     unidades_atuais = {it.numero: it.unidade_medida for it in ed.itens if it.numero is not None}
     produtos_atuais = (_produtos_confirmados_por_numero(ed.id, user, db)
                       if (user is not None and db is not None) else {})
+    # pedido do usuário: o checkbox "preço já é da embalagem inteira" (aba
+    # Itens/margem) tem que valer aqui também -- sem isso, custo_unit
+    # continuava vindo do preço da CAIXA inteira (ver _custo_comparavel_produto)
+    # mesmo pro item que o usuário já confirmou que não deve dividir.
+    embalagem_override = (_embalagem_override_por_numero(ed.id, user, db)
+                          if (user is not None and db is not None) else {})
 
     def _com_dados_atuais(i: dict) -> dict:
         # "numero" vem de Proposta.itens, uma coluna JSON sem validação de
@@ -5150,12 +5187,17 @@ def _proposta_payload(ed: Edital, prop: Proposta | None,
         except (TypeError, ValueError):
             numero = None
         prod = produtos_atuais.get(numero) if numero is not None else None
+        custo_unit = i.get("custo_unit")
+        if prod and prod.preco_custo is not None:
+            custo_unit, _, _ = _custo_comparavel_produto(
+                prod, unidades_atuais.get(numero), descricoes_atuais.get(numero),
+                embalagem_override.get(numero, False))
         return {**i, "descricao": descricoes_atuais.get(numero, i.get("descricao")),
                "unidade_medida": unidades_atuais.get(numero, i.get("unidade_medida")),
                "fabricante": prod.fabricante if prod else i.get("fabricante"),
                "marca": prod.marca if prod else i.get("marca"),
                "modelo": prod.modelo if prod else i.get("modelo"),
-               "custo_unit": prod.preco_custo if (prod and prod.preco_custo is not None) else i.get("custo_unit")}
+               "custo_unit": custo_unit}
     itens = [_com_dados_atuais(i) for i in itens]
     # Pedido do usuário: a ordem dos itens (tela e PDF) segue o número do
     # item no edital, não a ordem em que foram adicionados à cotação/
