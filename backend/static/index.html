@@ -215,6 +215,21 @@
     background:rgba(239,68,68,.14);border-radius:999px;padding:2px 8px;white-space:nowrap}
   .widget .sub{font-size:11px;color:var(--muted);margin-top:2px}
 
+  /* Skeleton (barra cinza "pulsando") do painel Início -- pedido do
+     usuário: os 5 blocos (hero/kpis, agenda, recentes, documentos, ganhos)
+     ficavam em branco enquanto Promise.all (atualizarPainel) não resolvia,
+     sem nenhum sinal de que algo estava carregando. Cor via --line/--panel2
+     (fundo neutro dos widgets/kpis) -- o hero tem fundo roxo escuro, usa a
+     mesma classe mas com .sk-claro sobrescrevendo pra um par translúcido
+     branco (ver _skBarra em vez de repetir o gradiente inline ali). */
+  .sk-linha{border-radius:6px;background-image:linear-gradient(100deg,
+      var(--line) 20%, var(--panel2) 50%, var(--line) 80%);
+    background-size:200% 100%;animation:sk-shimmer 1.3s linear infinite}
+  .sk-linha.sk-claro{background-image:linear-gradient(100deg,
+      rgba(255,255,255,.22) 20%, rgba(255,255,255,.4) 50%, rgba(255,255,255,.22) 80%)}
+  @keyframes sk-shimmer{to{background-position:-135% 0}}
+  @media (prefers-reduced-motion: reduce){ .sk-linha{animation:none} }
+
   /* Pipeline (kanban por status) -- colunas roláveis na horizontal (uma
      tela pode ter mais colunas do que cabe de largura, mesmo em desktop),
      cada coluna rolando na vertical por conta própria (o cabeçalho da
@@ -2881,11 +2896,51 @@ function _marcarPainelAtualizado(){
   const lbl = $('#painel-atualizado');
   if(lbl) lbl.textContent = `Atualizado às ${String(agora.getHours()).padStart(2,'0')}:${String(agora.getMinutes()).padStart(2,'0')}`;
 }
+
+// Uma barra de skeleton -- largura em %, altura em px, claro=true pro
+// fundo roxo do hero (ver .sk-claro no CSS).
+function _skBarra(largura, altura, claro){
+  return `<div class="sk-linha${claro?' sk-claro':''}" style="width:${largura}%;height:${altura}px"></div>`;
+}
+// Placeholder de um widget (agenda/recentes/documentos): 1 título + 3
+// linhas de largura variada, imitando o formato real de uma lista.
+function _skWidget(){
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    ${_skBarra(45,14)}
+    ${[70,55,80].map(w=>_skBarra(w,11)).join('')}
+  </div>`;
+}
+// Preenche os 5 blocos do painel Início com skeleton -- pedido do usuário:
+// sem isso, os blocos ficavam em branco (sem nenhum sinal de carregamento)
+// do momento em que a aba abre até o Promise.all de atualizarPainel
+// resolver. Mesma estrutura (.hero/.kpis-prop/.kpi, .widget, .card-ganhos)
+// do conteúdo real, pra não dar salto de layout quando o dado de verdade
+// substitui a barra cinza.
+function _skeletonPainel(){
+  $('#painel-hero').innerHTML = `
+    <div class="hero" style="cursor:default">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${_skBarra(45,12,true)}
+        ${_skBarra(30,34,true)}
+      </div>
+      <div class="breakdown">${[1,2,3].map(()=>_skBarra(30,28,true)).join('')}</div>
+    </div>
+    <div class="kpis-prop">${[1,2,3].map(()=>`<div class="kpi" style="display:flex;flex-direction:column;gap:8px">
+      ${_skBarra(35,22)}${_skBarra(75,11)}
+    </div>`).join('')}</div>`;
+  $('#painel-agenda').innerHTML = _skWidget();
+  $('#painel-recentes').innerHTML = _skWidget();
+  $('#painel-docs').innerHTML = _skWidget();
+  $('#painel-ganhos').innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    ${_skBarra(30,14)}${_skBarra(85,11)}${_skBarra(60,11)}
+  </div>`;
+}
 // botão "Atualizar" do painel: reconsulta os 5 pedaços (KPIs, agenda na
 // semana em exibição, documentos, editais analisados recentemente, editais
 // ganhos no mês em exibição) de uma vez, sem precisar dar F5 na página inteira.
 async function atualizarPainel(btn){
   if(btn){ btn.disabled = true; btn.classList.remove('girando'); void btn.offsetWidth; btn.classList.add('girando'); }
+  else _skeletonPainel();   // só na 1ª carga (sem botão) -- um refresh manual mantém o conteúdo atual até o novo chegar, só o ícone já avisa que está atualizando
   try{
     await Promise.all([loadResumo(), loadAgenda(_agendaOffset), loadDocumentosResumo(), loadEditaisRecentes(), loadGanhos()]);
     _marcarPainelAtualizado();
