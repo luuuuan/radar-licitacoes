@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco, ItemEmbalagemOverride
 from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
 from . import busca as _busca
@@ -2474,10 +2474,20 @@ def _qtd_embalagem_descricao(descricao: str | None) -> int | None:
 
 def _custo_e_margem(valor_unitario: float | None, produto: Produto,
                     unidade_medida_item: str | None = None,
-                    descricao_item: str | None = None) -> dict:
+                    descricao_item: str | None = None,
+                    sem_divisao_confirmada: bool = False) -> dict:
     """Custo/margem de UM produto contra o valor unitário que o órgão paga
     por um item — mesmo cálculo usado em /detalhe, reaproveitado onde quer
     que a gente precise comparar preço (ex.: sugestão da IA de catálogo).
+
+    sem_divisao_confirmada: override manual do usuário (checkbox "preço do
+    órgão já é da embalagem inteira" na aba Itens/margem, ver
+    ItemEmbalagemOverride/_embalagem_override_por_numero) pros casos em que
+    a detecção automática abaixo (unidadeMedida do PNCP / texto da
+    descrição) não reconhece nenhum sinal de embalagem e divide em
+    silêncio, sem alertar nada pro usuário conferir (achado real, edital
+    156310 item 9). Quando True, pula toda a detecção e trata como se a
+    embalagem já tivesse sido confirmada igual — sem alerta.
 
     Achado real (edital de papel A4): o órgão às vezes já cota o preço na
     MESMA embalagem que o produto do catálogo usa (ex.: R$24,50 por RESMA
@@ -2511,24 +2521,27 @@ def _custo_e_margem(valor_unitario: float | None, produto: Produto,
         return {"margem": None, "margem_pct": None, "custo_comparavel": None,
                 "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
     por_unid = produto.itens_por_unidade if (produto.itens_por_unidade or 0) > 0 else 1
-    qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
-    if qtd_embalagem_item is None:
-        qtd_embalagem_item = _qtd_embalagem_descricao(descricao_item)
     embalagem_incompativel = False
     embalagem_nao_confirmada = False
-    if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
-        # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
+    if sem_divisao_confirmada:
         custo_comparavel = round(produto.preco_custo, 4)
-    elif por_unid > 1 and qtd_embalagem_item is None and _e_unidade_embalagem_pncp(unidade_medida_item):
-        custo_comparavel = round(produto.preco_custo, 4)
-        embalagem_nao_confirmada = True
     else:
-        if por_unid > 1 and qtd_embalagem_item is not None:
-            # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
-            # produto vendido em pacote de 24) — não dá pra comparar direto
-            # com confiança nenhuma das duas formas.
-            embalagem_incompativel = True
-        custo_comparavel = round(produto.preco_custo / por_unid, 4)
+        qtd_embalagem_item = _qtd_embalagem_pncp(unidade_medida_item)
+        if qtd_embalagem_item is None:
+            qtd_embalagem_item = _qtd_embalagem_descricao(descricao_item)
+        if por_unid > 1 and qtd_embalagem_item is not None and qtd_embalagem_item == por_unid:
+            # órgão já cota por embalagem igual à do produto — mesma base, sem conversão
+            custo_comparavel = round(produto.preco_custo, 4)
+        elif por_unid > 1 and qtd_embalagem_item is None and _e_unidade_embalagem_pncp(unidade_medida_item):
+            custo_comparavel = round(produto.preco_custo, 4)
+            embalagem_nao_confirmada = True
+        else:
+            if por_unid > 1 and qtd_embalagem_item is not None:
+                # embalagens de tamanhos DIFERENTES (ex.: item em caixa de 12,
+                # produto vendido em pacote de 24) — não dá pra comparar direto
+                # com confiança nenhuma das duas formas.
+                embalagem_incompativel = True
+            custo_comparavel = round(produto.preco_custo / por_unid, 4)
     margem = round(valor_unitario - custo_comparavel, 4)
     margem_pct = round(margem / valor_unitario * 100, 1) if valor_unitario else None
     alerta_embalagem = embalagem_incompativel or embalagem_nao_confirmada
@@ -2606,6 +2619,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
 
     precos_cotacao = _preco_cotacao_por_numero(edital_id, user, db)
+    embalagem_override = _embalagem_override_por_numero(edital_id, user, db)
     itens = []
     for it in ed.itens:
         d = itens_match.get(it.numero) or {}
@@ -2622,8 +2636,10 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None,
                         "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
         validacao_tecnica = None
+        sem_divisao_embalagem = bool(embalagem_override.get(it.numero))
         if compativel:
-            margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida, it.descricao)
+            margem_dados = _custo_e_margem(it.valor_unitario, prod, it.unidade_medida, it.descricao,
+                                           sem_divisao_confirmada=sem_divisao_embalagem)
             # só reporta validação técnica quando havia um score por item
             # disponível — senão fica sem opinião, em vez de inventar um
             # "Atende" sem nenhuma checagem por trás (_validacao_tecnica_json
@@ -2653,6 +2669,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "produto": _produto_json(prod) if (prod and compativel) else None,
             "sugestoes": sugestoes,
             "preco_cotacao": precos_cotacao.get(it.numero),
+            "sem_divisao_embalagem": sem_divisao_embalagem,
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
 
@@ -2824,6 +2841,48 @@ def definir_preco_cotacao(edital_id: int, numero: int, body: PrecoCotacaoIn,
     else:
         db.add(CotacaoPreco(usuario_id=user.id, edital_id=edital_id,
                             numero_item=numero, valor=body.valor))
+    db.commit()
+    return {"ok": True}
+
+
+class EmbalagemItemIn(BaseModel):
+    sem_divisao: bool
+
+
+@app.post("/api/editais/{edital_id}/itens/{numero}/embalagem")
+def definir_embalagem_item(edital_id: int, numero: int, body: EmbalagemItemIn,
+                           user: Usuario = Depends(_auth.get_current_user),
+                           db: Session = Depends(get_session)):
+    """Checkbox "preço do órgão já é da embalagem inteira" na aba Itens/
+    margem -- confirma manualmente que NÃO deve dividir o custo do produto
+    por itens_por_unidade pra este item, pros casos em que a detecção
+    automática (_custo_e_margem) não reconhece nenhum sinal de embalagem no
+    unidadeMedida/descrição do PNCP e divide em silêncio (achado real,
+    edital 156310 item 9). Tabela própria (ItemEmbalagemOverride), mesmo
+    motivo de preco-cotacao acima: sobrevive a recálculos sem precisar
+    entrar na lista fixa de _mesclar_confirmacoes_manuais."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    match = db.execute(select(Match).where(Match.edital_id == edital_id)
+                       .where(Match.usuario_id == user.id)).scalar_one_or_none()
+    motivo_bloqueio = _bloqueio_edicao_edital(ed, match, user, db)
+    if motivo_bloqueio:
+        raise HTTPException(403, motivo_bloqueio)
+    existe = db.execute(select(ItemEdital.id).where(
+        ItemEdital.edital_id == edital_id, ItemEdital.numero == numero)).scalar_one_or_none()
+    if existe is None:
+        raise HTTPException(404, "Item não encontrado neste edital")
+
+    o = db.execute(select(ItemEmbalagemOverride)
+                   .where(ItemEmbalagemOverride.edital_id == edital_id)
+                   .where(ItemEmbalagemOverride.usuario_id == user.id)
+                   .where(ItemEmbalagemOverride.numero_item == numero)).scalar_one_or_none()
+    if o:
+        o.sem_divisao = body.sem_divisao
+    else:
+        db.add(ItemEmbalagemOverride(usuario_id=user.id, edital_id=edital_id,
+                                     numero_item=numero, sem_divisao=body.sem_divisao))
     db.commit()
     return {"ok": True}
 
@@ -4354,6 +4413,19 @@ def _preco_cotacao_por_numero(edital_id: int, user: Usuario, db: Session) -> dic
         if novos:
             db.commit()
     return preco_cotacao
+
+
+def _embalagem_override_por_numero(edital_id: int, user: Usuario, db: Session) -> dict[int, bool]:
+    """Overrides manuais de "preço do órgão já é da embalagem inteira, não
+    dividir" por item (ver ItemEmbalagemOverride, checkbox na aba
+    Itens/margem) -- mesmo padrão de _preco_cotacao_por_numero acima:
+    tabela própria pra sobreviver a recálculos sem precisar entrar na lista
+    fixa de campos que _mesclar_confirmacoes_manuais preserva."""
+    return dict(db.execute(
+        select(ItemEmbalagemOverride.numero_item, ItemEmbalagemOverride.sem_divisao)
+        .where(ItemEmbalagemOverride.edital_id == edital_id)
+        .where(ItemEmbalagemOverride.usuario_id == user.id)
+    ).all())
 
 
 def _linhas_cotacao(edital_id: int, itens: str | None, user: Usuario, db: Session) -> list[tuple[ItemEdital, Produto]]:

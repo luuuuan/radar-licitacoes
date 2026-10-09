@@ -351,6 +351,29 @@ class CotacaoPreco(Base):
     valor: Mapped[float] = mapped_column(Float)
 
 
+class ItemEmbalagemOverride(Base):
+    """Confirma manualmente que o preço do órgão pra este item já está na
+    MESMA embalagem do produto do catálogo, então o custo NÃO deve ser
+    dividido por itens_por_unidade (ver _custo_e_margem em main.py) --
+    pro caso em que a detecção automática (unidadeMedida do PNCP / texto da
+    descrição do item) não reconhece nenhum sinal de embalagem (achado real,
+    edital 156310 item 9: nem a unidade nem a descrição diziam nada sobre
+    embalagem, então o app dividia em silêncio, sem alertar nada pro usuário
+    conferir -- diferente dos casos de alerta_embalagem, que pelo menos
+    avisam). Tabela própria, não Match.detalhe: mesmo motivo de CotacaoPreco
+    acima (Match é reconstruído a cada recálculo por
+    _mesclar_confirmacoes_manuais, que só preserva uma lista fixa de campos)."""
+    __tablename__ = "itens_embalagem_override"
+    __table_args__ = (UniqueConstraint("usuario_id", "edital_id", "numero_item",
+                                        name="uq_embalagem_override_user_edital_item"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
+    numero_item: Mapped[int] = mapped_column(Integer)
+    sem_divisao: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class AnaliseIAExtras(Base):
     """Cache por (edital, usuário) das duas checagens extras da Análise por
     IA — comparação de catálogo e verificação de documentos de habilitação —

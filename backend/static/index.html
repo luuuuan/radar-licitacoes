@@ -3776,7 +3776,7 @@ function filtrarProdutos(){
   $('#lista-produtos').innerHTML = pagina.length
     ? pagina.map(p=>`<tr>
     <td><input type="checkbox" class="chk-produto" onchange="toggleProdutoSelecionado(${p.id},this.checked)" ${_produtosSelecionados.has(p.id)?'checked':''}></td>
-    <td>${esc(p.descricao)}${p.link_produto?` <a href="${esc(p.link_produto)}" target="_blank" rel="noopener" title="Abrir produto no site do fornecedor" onclick="event.stopPropagation()">↗</a>`:''}</td><td>${esc(p.ncm||'—')}</td>
+    <td>${esc(p.descricao)}${p.link_produto?` <a href="${esc(p.link_produto)}" target="_blank" rel="noopener" title="Abrir produto no site do fornecedor" onclick="event.stopPropagation()">${ICN.externo}</a>`:''}</td><td>${esc(p.ncm||'—')}</td>
     <td>${esc(p.catmat||'')} ${esc(p.catser||'')}</td><td class="muted">${esc(p.palavras_chave||'')}</td>
     <td style="white-space:nowrap">
       <button class="btn ghost" onclick="editarProduto(${p.id})">editar</button>
@@ -5864,10 +5864,14 @@ function _corpoItensEdital(d){
         </div>
         ${it.alerta_embalagem?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ As unidades podem não bater. Defina a "unidade de venda" e os "itens por unidade" do produto no Catálogo para a margem ficar correta.</div>`
           :(it.alerta_margem_extrema?`<div class="muted" style="margin-top:6px;font-size:12px;color:var(--medio)">⚠ Margem muito fora do normal. Confira se o preço de custo cadastrado deste produto está certo — ou pode ser que este item realmente não valha a pena disputar.</div>`:'')}
+        ${temConv?`<label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--medio);cursor:pointer">
+          <input type="checkbox" ${it.sem_divisao_embalagem?'checked':''} onchange="_toggleSemDivisaoEmbalagem('${esc(it.numero)}', this)">
+          Preço do órgão já é da embalagem inteira (não dividir pelos ${esc(f.itens_por_unidade)} ${esc(f.unidade_venda||'itens')} por unidade)
+        </label>`:''}
         <div class="muted" style="margin-top:6px;font-size:12px">Produto: ${esc(f.descricao)}${f.preco_venda!=null?` · meu preço de venda: ${fmtMoeda(f.preco_venda)}`:''}${it.quantidade?` · qtd pedida: ${esc(it.quantidade)}`:''}${it.unidade_medida?` · unidade: ${esc(it.unidade_medida)}`:''}</div>`;
       if(f.fornecedor_nome||f.fornecedor_contato||f.fornecedor_site){
         const siteForn = linkSeguro(f.fornecedor_site);
-        bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` <a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:6px;padding:2px 8px;font-size:11px">abrir página do item ↗</a>`:''}</div>`;
+        bloco+=`<div class="forn">${ICN.fornecedor} ${esc(f.fornecedor_nome||'Fornecedor')}${f.fornecedor_contato?' · '+esc(f.fornecedor_contato):''}${siteForn?` <a class="btn ghost" href="${esc(siteForn)}" target="_blank" style="margin-left:6px;padding:2px 8px;font-size:11px">abrir página do item ${ICN.externo}</a>`:''}</div>`;
       } else {
         bloco+=`<div class="forn muted">Sem fornecedor cadastrado para este produto. Edite-o na aba Catálogo.</div>`;
       }
@@ -6261,7 +6265,7 @@ async function _corpoCotacaoEdital(id){
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
       <td><input type="number" step="0.01" class="cot-frete-saida-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloSaida)}"></td>
-      <td>${linkItem ? `<a href="${esc(linkItem)}" target="_blank" rel="noopener">Abrir</a>` : '<span class="muted">—</span>'}</td>
+      <td>${linkItem ? `<a href="${esc(linkItem)}" target="_blank" rel="noopener">Abrir ${ICN.externo}</a>` : '<span class="muted">—</span>'}</td>
       <td><button class="btn perigo" style="padding:3px 8px;font-size:12px" onclick="_excluirItemCotacao('${it.numero}', this)">excluir</button></td>
     </tr>`;
   }).join('');
@@ -6500,6 +6504,34 @@ async function _atualizarPrecoCotacao(numero, valorStr){
     _resincronizarBloqueioEdicao();
   }catch(e){
     if(_paginaEditalId === id) toast('Não foi possível salvar esse valor agora.', 'erro');
+  }
+}
+
+// Checkbox "Preço do órgão já é da embalagem inteira (não dividir)" na aba
+// Itens/margem -- achado real (edital 156310, item 9): a detecção
+// automática de embalagem (unidadeMedida/descrição do PNCP, ver
+// _custo_e_margem no backend) nem sempre reconhece que o preço do órgão já
+// está na mesma base da embalagem do catálogo, e divide o custo em
+// silêncio (sem nenhum alerta pro usuário perceber). Precisa recarregar o
+// detalhe (não só marcar a checkbox) porque custo/margem são recalculados
+// no servidor a partir desse override.
+async function _toggleSemDivisaoEmbalagem(numero, checkbox){
+  const marcado = checkbox.checked;
+  const id = _paginaEditalId;
+  checkbox.disabled = true;
+  try{
+    const r = await fetch(`/api/editais/${id}/itens/${numero}/embalagem`, {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sem_divisao: marcado})});
+    if(_paginaEditalId !== id) return;   // usuário trocou de edital enquanto o POST estava em voo
+    if(!r.ok){ checkbox.checked = !marcado; toast('Não foi possível salvar essa opção agora.', 'erro'); return; }
+    _paginaEditalDetalhe = await api(`/api/editais/${id}/detalhe`);
+    if(_paginaEditalId !== id) return;
+    if(_abaEditalAtual === 'itens') $('#edital-conteudo').innerHTML = _corpoItensEdital(_paginaEditalDetalhe);
+  }catch(e){
+    if(_paginaEditalId === id){ checkbox.checked = !marcado; toast('Não foi possível salvar essa opção agora.', 'erro'); }
+  }finally{
+    checkbox.disabled = false;
   }
 }
 

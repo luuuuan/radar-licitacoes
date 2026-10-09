@@ -119,6 +119,28 @@ def test_custo_e_margem_unidade_embalagem_sem_numero_nao_divide_mas_alerta():
     assert r["alerta_unidade"] is True
 
 
+def test_custo_e_margem_sem_divisao_confirmada_ignora_deteccao_automatica():
+    """Checkbox "preço do órgão já é da embalagem inteira" (achado real,
+    edital 156310 item 9): a detecção automática não achou nenhum sinal de
+    embalagem nem na unidadeMedida nem na descrição e dividiu o custo em
+    silêncio, sem alertar nada -- com o override manual, para de dividir e
+    não alerta, mesmo sem nenhum dos sinais que a detecção automática
+    normalmente exige."""
+    p = _produto(preco_custo=25.0, itens_por_unidade=500)
+    r = _custo_e_margem(24.50, p, unidade_medida_item="UN", descricao_item="Papel sulfite branco",
+                        sem_divisao_confirmada=True)
+    assert r["custo_comparavel"] == 25.0
+    assert r["margem"] == pytest.approx(24.50 - 25.0, abs=1e-2)
+    assert r["alerta_embalagem"] is False
+    assert r["alerta_unidade"] is False
+
+
+def test_custo_e_margem_sem_divisao_confirmada_falso_mantem_comportamento_anterior():
+    p = _produto(preco_custo=25.0, itens_por_unidade=500)
+    r = _custo_e_margem(0.10, p, sem_divisao_confirmada=False)
+    assert r["custo_comparavel"] == 0.05
+
+
 def test_custo_e_margem_unidade_sem_relacao_com_embalagem_continua_dividindo():
     """Unidade que não é nem número nem abreviação de embalagem conhecida
     (ex.: campo ausente, ou algo fora do vocabulário) — mantém o
