@@ -2328,13 +2328,22 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
 
     Escopo: só os status em _STATUS_ORDEM_PIPELINE (ver comentário ali) --
     de resto, exclui Match.oculto_pipeline (botão "excluir" do card, ver
-    pipeline_remover_card)."""
+    pipeline_remover_card).
+
+    Pedido do usuário: ordena cada coluna por dias_restantes (prazo pra
+    mandar a proposta, ver _dias_restantes_edital -- data_encerramento
+    quando existe, senão data_abertura) em vez da data de abertura bruta,
+    pra quem tem menos tempo aparecer primeiro e chamar mais atenção.
+    dias_restantes é calculado em Python (não é uma coluna simples pra
+    ORDER BY no SQL -- mistura data_encerramento/data_abertura conforme o
+    caso), então a ordenação acontece depois de buscar as linhas. Edital
+    sem nenhuma das duas datas (dias_restantes None) vai pro fim da coluna,
+    não pro topo."""
     linhas = db.execute(
         select(Match, Edital).join(Edital, Match.edital_id == Edital.id)
         .where(Match.usuario_id == user.id)
         .where(Match.status.in_(_STATUS_ORDEM_PIPELINE))
         .where(Match.oculto_pipeline.isnot(True))
-        .order_by(Edital.data_abertura.asc().nulls_last())
     ).all()
     colunas: dict[str, list] = {s: [] for s in _STATUS_ORDEM_PIPELINE}
     for match, ed in linhas:
@@ -2346,6 +2355,8 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
             "status_prazo": _status_prazo_edital(ed),
             "nivel": match.nivel, "score": match.score, "link": ed.link,
         })
+    for itens in colunas.values():
+        itens.sort(key=lambda c: (c["dias_restantes"] is None, c["dias_restantes"] or 0))
     return {"colunas": colunas, "ordem": _STATUS_ORDEM_PIPELINE}
 
 

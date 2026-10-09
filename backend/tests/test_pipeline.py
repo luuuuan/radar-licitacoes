@@ -3,6 +3,8 @@ GET /api/pipeline -- editais do usuário organizados por Match.status, pra
 visão de funil (aba Pipeline, pedido do usuário). Banco sqlite em memória,
 sem HTTP. Rode com:  cd backend && pytest
 """
+from datetime import datetime, timedelta
+
 from fastapi import HTTPException
 import pytest
 from sqlalchemy import create_engine
@@ -103,6 +105,38 @@ def test_pipeline_card_traz_campos_para_o_kanban():
     assert card["nivel"] == "forte"
     assert card["score"] == 0.9
     assert "dias_restantes" in card and "status_prazo" in card
+
+
+def test_pipeline_ordena_coluna_por_dias_restantes_pra_mandar_proposta():
+    """Pedido do usuário: dentro de cada coluna, quem tem menos tempo pra
+    mandar a proposta (dias_restantes menor) aparece primeiro -- antes a
+    ordem era pela data de abertura bruta, que não reflete o prazo final
+    (data_encerramento) quando ela existe."""
+    db = _sessao()
+    u = _usuario(db)
+    agora = datetime.now()
+    ed_longe = _match(db, u, "ed-longe", status="vou_participar",
+                      data_encerramento=agora + timedelta(days=10))
+    ed_perto = _match(db, u, "ed-perto", status="vou_participar",
+                      data_encerramento=agora + timedelta(days=1))
+    ed_meio = _match(db, u, "ed-meio", status="vou_participar",
+                     data_encerramento=agora + timedelta(days=5))
+
+    r = pipeline(user=u, db=db)
+
+    assert [c["edital_id"] for c in r["colunas"]["vou_participar"]] == [ed_perto.id, ed_meio.id, ed_longe.id]
+
+
+def test_pipeline_item_sem_prazo_vai_pro_fim_da_coluna():
+    db = _sessao()
+    u = _usuario(db)
+    ed_sem_prazo = _match(db, u, "ed-sem-prazo", status="vou_participar")
+    ed_com_prazo = _match(db, u, "ed-com-prazo", status="vou_participar",
+                          data_encerramento=datetime.now() + timedelta(days=3))
+
+    r = pipeline(user=u, db=db)
+
+    assert [c["edital_id"] for c in r["colunas"]["vou_participar"]] == [ed_com_prazo.id, ed_sem_prazo.id]
 
 
 def test_pipeline_remover_card_some_da_pipeline_sem_mexer_no_resto():
