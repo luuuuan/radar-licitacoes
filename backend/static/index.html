@@ -2968,7 +2968,11 @@ function motivoAmigavel(motivo){
   return m;
 }
 function fmtMoeda(v){ if(v==null) return '—';
-  return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}); }
+  // minimumFractionDigits sozinho deixa o toLocaleString mostrar até 3 casas
+  // quando o float tem ruído além de 2 decimais (ex.: margem = total - custo
+  // calculada em cima de outros floats) -- achado real: "Margem R$316,132"
+  // em vez de "R$316,13" na aba Proposta. maximumFractionDigits trava em 2.
+  return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
 // data_abertura/data_encerramento agora vêm com hora (isoformat completo,
 // "AAAA-MM-DDTHH:MM:SS") -- pedido do usuário: mostrar a hora de início/fim
