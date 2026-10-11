@@ -455,6 +455,27 @@
     border:1.5px solid var(--forte);border-radius:999px;padding:3px 11px}
   .acoes{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
   table{width:100%;border-collapse:collapse}
+  /* sombra nas bordas de tabela que rola na horizontal (Cotação, Proposta,
+     comparação por IA, Agenda completa) -- achado real (auditoria de
+     responsividade): a tabela rolava certinho no mobile, mas sem nenhuma
+     pista visual disso, então ficava parecendo cortada/quebrada antes do
+     usuário descobrir que dava pra arrastar. Truque: dois "tampões" sólidos
+     (mesma cor do painel) grudados no INÍCIO/FIM do conteúdo (attachment
+     local) cobrem a sombra enquanto você está na ponta; ao rolar, o tampão
+     sai de vista e a sombra (presa na borda do container, attachment
+     scroll) aparece -- sem JS, não precisa recalcular em resize/dado novo. */
+  .tabela-scroll{
+    overflow-x:auto;-webkit-overflow-scrolling:touch;
+    background-color:var(--panel);background-repeat:no-repeat;
+    background-image:
+      linear-gradient(to right,var(--panel),var(--panel)),
+      linear-gradient(to left,var(--panel),var(--panel)),
+      linear-gradient(to right,rgba(0,0,0,.28),rgba(0,0,0,0)),
+      linear-gradient(to left,rgba(0,0,0,.28),rgba(0,0,0,0));
+    background-position:left center,right center,left center,right center;
+    background-size:20px 100%,20px 100%,10px 100%,10px 100%;
+    background-attachment:local,local,scroll,scroll;
+  }
   th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--muted);font-weight:600}
   .muted{color:var(--muted)}
@@ -786,7 +807,20 @@
        linha gigante. As colunas curtas (nº, data, valor) já marcam
        white-space:nowrap individualmente onde precisam -- não precisa
        forçar isso globalmente. */
-    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+    /* mesma sombra de borda do .tabela-scroll (ver comentário lá) --
+       duplicada em vez de reaproveitada via classe porque esse "table"
+       bruto é gerado em dezenas de lugares diferentes do app, sem wrapper
+       nenhum pra marcar com a classe. */
+    section table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;
+      background-color:var(--panel);background-repeat:no-repeat;
+      background-image:
+        linear-gradient(to right,var(--panel),var(--panel)),
+        linear-gradient(to left,var(--panel),var(--panel)),
+        linear-gradient(to right,rgba(0,0,0,.28),rgba(0,0,0,0)),
+        linear-gradient(to left,rgba(0,0,0,.28),rgba(0,0,0,0));
+      background-position:left center,right center,left center,right center;
+      background-size:20px 100%,20px 100%,10px 100%,10px 100%;
+      background-attachment:local,local,scroll,scroll}
     .modal{padding:14px 8px}
     .modal-card{padding:16px;max-width:100%}
     .acoes .btn,.acoes .status-sel{flex:1 1 auto}
@@ -2626,7 +2660,7 @@ function abrirAgendaCompleta(){
       <button class="close-x" onclick="fecharModal()">×</button>
       <h2>Agenda completa</h2>
       <p class="muted" style="font-size:12px;margin-top:4px">${d1} ${m1} – ${d2} ${m2}</p>
-      ${linhas?`<div style="overflow-x:auto;max-height:420px;overflow-y:auto;margin-top:10px"><table>
+      ${linhas?`<div class="tabela-scroll" style="max-height:420px;overflow-y:auto;margin-top:10px"><table>
         <thead><tr><th>Data</th><th>Órgão</th><th>Objeto</th><th>Local</th><th>Valor</th><th></th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>`:'<p class="muted" style="margin-top:10px">Nenhuma abertura de propostas nesta semana.</p>'}
@@ -5088,7 +5122,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   // sem precisar de outra chamada ao servidor (ver escolherProdutoIA).
   _comparacaoCatalogoItensAtual = {};
   c.itens.forEach(it => _comparacaoCatalogoItensAtual[it.numero] = it);   // detalhes/troca precisam achar item excluído também
-  const tabelaHTML = (itens)=>`<div style="overflow-x:auto"><table>
+  const tabelaHTML = (itens)=>`<div class="tabela-scroll"><table>
       <thead><tr><th>Item</th><th>Descrição</th><th>Unidade</th><th>Produto sugerido</th><th>Margem</th><th>Justificativa</th><th></th></tr></thead>
       <tbody>${itens.map(_iaCatLinhaHTML).join('')}</tbody>
     </table></div>`;
@@ -6339,7 +6373,7 @@ async function _corpoCotacaoEdital(id){
     </tr>`;
   }).join('');
   return `<p class="muted" style="margin-top:0">Itens adicionados à cotação na aba "Itens / margem" — fabricante/marca/modelo e valor mínimo (seu custo cadastrado) já vêm preenchidos. Desmarcar (ou clicar em "excluir") remove o item da cotação (mesmo efeito de clicar em "remover" na aba Itens / margem).</p>
-    <div style="overflow-x:auto"><table>
+    <div class="tabela-scroll"><table>
       <thead><tr>
         <th><input type="checkbox" id="chk-cotacao-todos" checked onchange="toggleTodosCotacao(this)" title="Selecionar todos"></th>
         <th>Item</th><th>Descrição</th><th>Qtd. pedida</th><th>Unidade</th><th>Valor unit. (órgão)</th>
@@ -6843,7 +6877,7 @@ function renderProposta(){
     </tr>`;
   }).join('');
   const margem=tv-tc, pct=tv?(margem/tv*100):0;
-  $('#prop-tabela').innerHTML=`<div style="overflow-x:auto"><table>
+  $('#prop-tabela').innerHTML=`<div class="tabela-scroll"><table>
     <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th>Preço un.</th><th>Total</th><th>Margem</th><th></th></tr></thead>
     <tbody>${linhas||'<tr><td colspan="7" class="muted">Sem itens. Adicione um abaixo.</td></tr>'}</tbody>
   </table></div>
@@ -6883,7 +6917,7 @@ function propAbrirModalAdd(){
       <button class="close-x" onclick="fecharModal()">×</button>
       <h2>Adicionar item do edital</h2>
       ${disponiveis.length ? `
-      <div style="overflow-x:auto;max-height:400px;overflow-y:auto;margin-top:10px"><table>
+      <div class="tabela-scroll" style="max-height:400px;overflow-y:auto;margin-top:10px"><table>
         <thead><tr><th>Nº</th><th>Item</th><th>Qtd</th><th></th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>` : `<p class="muted" style="margin-top:10px">Todos os itens do edital já estão na proposta.</p>`}
