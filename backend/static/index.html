@@ -612,7 +612,12 @@
     transform:scale(.94) translateY(-4px);transform-origin:top right;
     transition:opacity .16s ease,transform .16s ease}
   .acoes-ia.aberto .menu{opacity:1;visibility:visible;pointer-events:auto;transform:scale(1) translateY(0)}
-  .acoes-ia .menu .btn{justify-content:flex-start;width:100%;text-align:left;border:none;background:none;padding:6px 8px}
+  /* achado real (usuário reportou print): zera background/border do .btn
+     normal aqui, mas não o color:#fff que .btn também fixa -- no tema
+     claro, --panel2 (fundo do menu) é quase branco, então o texto branco
+     ficava quase invisível (ícone junto, que usa stroke="currentColor").
+     --txt já é o par certo de --panel2 nos dois temas. */
+  .acoes-ia .menu .btn{justify-content:flex-start;width:100%;text-align:left;border:none;background:none;padding:6px 8px;color:var(--txt)}
   .acoes-ia .menu .btn:hover{background:var(--panel)}
   /* Central de notificações (sininho no header) -- pedido do usuário:
      editais "Vou participar" com prazo fechando, documentos vencendo,
@@ -6377,7 +6382,7 @@ async function _corpoCotacaoEdital(id){
       <td style="white-space:nowrap">${esc(it.quantidade??'—')}</td>
       <td style="white-space:nowrap" class="muted">${esc(it.unidade_medida||'—')}</td>
       <td style="white-space:nowrap">${it.valor_orgao!=null?fmtMoeda(it.valor_orgao):'—'}</td>
-      <td><input type="number" step="0.01" class="cot-valor-venda-item campo-valor" data-numero="${it.numero}" style="width:100px" value="${precosVenda[it.numero]!=null?precosVenda[it.numero]:(it.valor_orgao??'')}" onchange="_atualizarPrecoCotacao('${it.numero}',this.value)" ${_motivoBloqCot?'disabled':''} title="${_motivoBloqCot?esc(_motivoBloqCot):'Valor pra você acompanhar o pregão (até quanto dá pra ofertar) -- independente do valor que você define na aba Proposta.'}"></td>
+      <td><input type="number" step="0.01" class="cot-valor-venda-item campo-valor" data-numero="${it.numero}" style="width:100px" value="${precosVenda[it.numero]!=null?precosVenda[it.numero]:(it.custo_comparavel??it.valor_orgao??'')}" onchange="_atualizarPrecoCotacao('${it.numero}',this.value)" ${_motivoBloqCot?'disabled':''} title="${_motivoBloqCot?esc(_motivoBloqCot):'Valor pra você acompanhar o pregão (até quanto dá pra ofertar) -- independente do valor que você define na aba Proposta.'}"></td>
       <td style="white-space:nowrap;font-weight:600">${totalItem!=null?fmtMoeda(totalItem):'—'}</td>
       <td class="muted" style="font-size:12px">${esc(it.produto ? it.produto.descricao : '')}</td>
       <td><input type="number" step="0.01" class="cot-frete-entrada-item campo-valor" data-numero="${it.numero}" style="width:90px" placeholder="0,00" title="${esc(tituloEntrada)}"></td>
@@ -6552,8 +6557,24 @@ async function _sincronizarItemNaProposta(numero){
     const jaTem = itens.some(i => i.numero!=null ? String(i.numero)===String(numero)
       : (i.descricao||'').trim().toLowerCase()===descItem);
     if(jaTem) return;
+    // achado real (usuário reportou: "Valor unit. (venda)" na Cotação
+    // parecia estar pegando o valor do órgão em vez do valor do MEU item):
+    // custo_unit:0 (sempre, não só quando o produto não tinha custo
+    // cadastrado) fazia a margem da Proposta nascer falsa (~100%, preço -
+    // zero), E o preco_unit = valor do órgão virava o "ponto de partida"
+    // que _preco_cotacao_por_numero (main.py) depois herda de propósito pra
+    // continuidade -- o fallback foi pensado pra herdar um preço que o
+    // usuário realmente escolheu na Proposta antes, não ESTE placeholder
+    // recém-inventado. item.custo_comparavel já é o custo por unidade do
+    // SEU produto no catálogo (mesmo número que a aba Itens/margem mostra,
+    // já considerando embalagem/itens_por_unidade) -- usa ele nos dois
+    // campos quando existe (preço = custo = margem 0%, ponto de partida
+    // honesto pro usuário subir), só cai pro valor do órgão quando o item
+    // não tem produto compatível (não tem custo nenhum pra sugerir).
+    const custoSugerido = item.custo_comparavel ?? 0;
     itens = [...itens, {numero: item.numero, descricao: item.descricao || '',
-      quantidade: item.quantidade || 0, custo_unit: 0, preco_unit: item.valor_orgao || 0}];
+      quantidade: item.quantidade || 0, custo_unit: custoSugerido,
+      preco_unit: custoSugerido || item.valor_orgao || 0}];
     _ordenarPropItensPorNumero(itens);
     const r = await fetch(`/api/editais/${id}/proposta`, {method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -6813,10 +6834,18 @@ async function _montarPropostaEdital(id, ativo){
   // na Cotação (preco_cotacao), com o valor do órgão como último recurso --
   // é uma CÓPIA de ponto de partida, não um vínculo (a partir daqui, editar
   // a Cotação não muda mais este valor, e vice-versa).
+  // mesmo achado de _sincronizarItemNaProposta acima: custo_unit:0 fixo e
+  // preco_unit vindo do valor do órgão (via preco_cotacao, que por sua vez
+  // pode ter herdado o valor do órgão do MESMO jeito) escondiam o custo
+  // real do produto -- usa item.custo_comparavel (já considera embalagem)
+  // nos dois campos quando existe.
   const itensIniciais = p.existe ? p.itens : itensDetalhe
     .filter(it => it.compativel && _cotacaoSelecionados.has(String(it.numero)))
-    .map(it => ({numero: it.numero, descricao: it.descricao || '', quantidade: it.quantidade || 0,
-                 custo_unit: 0, preco_unit: (it.preco_cotacao ?? it.valor_orgao) || 0}));
+    .map(it => {
+      const custoSugerido = it.custo_comparavel ?? 0;
+      return {numero: it.numero, descricao: it.descricao || '', quantidade: it.quantidade || 0,
+              custo_unit: custoSugerido, preco_unit: custoSugerido || (it.preco_cotacao ?? it.valor_orgao) || 0};
+    });
   window._propItens = (itensIniciais||[]).map(i=>({
     numero: i.numero, descricao:i.descricao||'', quantidade:+i.quantidade||0,
     custo_unit:+i.custo_unit||0, preco_unit:+i.preco_unit||0}));
