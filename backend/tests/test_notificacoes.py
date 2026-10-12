@@ -8,12 +8,12 @@ tabela de eventos nova. Rode com:  cd backend && pytest
 """
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.main import notificacoes, STATUS_PARTICIPACAO
-from app.models import Base, Usuario, Edital, Match, Documento, AnaliseIAExtras
+from app.models import Base, Usuario, Edital, Match, Documento, AnaliseIAExtras, NotificacaoDispensada
 
 
 def _sessao():
@@ -637,6 +637,135 @@ def test_registrar_interacao_analise_vista_em_usa_mesmo_fuso_que_analise_em(monk
     r = notificacoes(user=u, db=db)
 
     assert any(i["tipo"] == "analise" and i["edital_id"] == ed.id for i in r["itens"])
+
+
+
+# --------- dispensa individual (achado real: usuário clicou numa --------- #
+# --------- notificação de prazo e ela voltou ao reabrir o sino) ---------- #
+
+def test_dispensar_prazo_some_so_esse_edital():
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    ed1 = _edital(db, id_externo="ed1", data_encerramento=date.today() + timedelta(days=1))
+    ed2 = _edital(db, id_externo="ed2", data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed1.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.add(Match(usuario_id=u.id, edital_id=ed2.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.commit()
+    assert len([i for i in notificacoes(user=u, db=db)["itens"] if i["tipo"] == "prazo"]) == 2
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave=str(ed1.id)), user=u, db=db)
+
+    r = notificacoes(user=u, db=db)
+    itens_prazo = [i for i in r["itens"] if i["tipo"] == "prazo"]
+    assert len(itens_prazo) == 1
+    assert itens_prazo[0]["edital_id"] == ed2.id
+
+
+def test_dispensar_documento_some_so_esse_documento():
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    d1 = Documento(usuario_id=u.id, nome="CND Federal", data_validade=date.today() + timedelta(days=1), ativo=True)
+    d2 = Documento(usuario_id=u.id, nome="FGTS", data_validade=date.today() + timedelta(days=1), ativo=True)
+    db.add_all([d1, d2])
+    db.commit()
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="documento", chave=str(d1.id)), user=u, db=db)
+
+    itens_doc = [i for i in notificacoes(user=u, db=db)["itens"] if i["tipo"] == "documento"]
+    assert len(itens_doc) == 1
+    assert itens_doc[0]["nome"] == "FGTS"
+
+
+def test_dispensar_abertura():
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db)
+    ed.data_abertura = date.today() + timedelta(days=1)
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte"))
+    db.commit()
+    assert any(i["tipo"] == "abertura" for i in notificacoes(user=u, db=db)["itens"])
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="abertura", chave="agregado"), user=u, db=db)
+
+    assert not any(i["tipo"] == "abertura" for i in notificacoes(user=u, db=db)["itens"])
+
+
+def test_dispensar_volta_no_dia_seguinte_se_a_causa_continuar_valendo():
+    """Mesmo princípio do 'Ler Todos' (ver teste equivalente acima) -- a
+    dispensa individual também é só "pelo resto do dia", não permanente."""
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.commit()
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave=str(ed.id)), user=u, db=db)
+    assert not any(i["tipo"] == "prazo" for i in notificacoes(user=u, db=db)["itens"])
+
+    row = db.execute(select(NotificacaoDispensada).where(NotificacaoDispensada.usuario_id == u.id)).scalar_one()
+    row.dispensada_em = date.today() - timedelta(days=1)   # simula "ontem"
+    db.commit()
+
+    assert any(i["tipo"] == "prazo" for i in notificacoes(user=u, db=db)["itens"])
+
+
+def test_dispensar_e_idempotente_mesmo_item_mesmo_dia():
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital(db, data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.commit()
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave=str(ed.id)), user=u, db=db)
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave=str(ed.id)), user=u, db=db)   # clicou de novo
+
+    total = db.execute(select(func.count(NotificacaoDispensada.id))
+                       .where(NotificacaoDispensada.usuario_id == u.id)).scalar_one()
+    assert total == 1
+
+
+def test_dispensar_limpa_linhas_de_dias_anteriores_deste_usuario():
+    """A dispensa de item individual não tem um mecanismo próprio pra
+    envelhecer sozinha (ao contrário de notificacoes_lidas_em, um campo só
+    que é sobrescrito) -- sem limpar, a tabela cresce uma linha por item
+    clicado pra sempre. dispensar_notificacao faz essa faxina (só do
+    próprio usuário) a cada chamada."""
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u = _usuario(db)
+    db.add(NotificacaoDispensada(usuario_id=u.id, tipo="prazo", chave="999",
+                                 dispensada_em=date.today() - timedelta(days=3)))
+    db.commit()
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave="1"), user=u, db=db)
+
+    restantes = db.execute(select(NotificacaoDispensada)
+                           .where(NotificacaoDispensada.usuario_id == u.id)).scalars().all()
+    assert len(restantes) == 1
+    assert restantes[0].chave == "1"
+
+
+def test_dispensar_nao_vaza_entre_usuarios():
+    from app.main import dispensar_notificacao, NotificacaoDispensarIn
+    db = _sessao()
+    u1 = _usuario(db)
+    u2 = Usuario(nome="Outro", email="outro3@t.com", senha_hash="x")
+    db.add(u2)
+    db.commit()
+    ed = _edital(db, data_encerramento=date.today() + timedelta(days=1))
+    db.add(Match(usuario_id=u1.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.add(Match(usuario_id=u2.id, edital_id=ed.id, score=0.5, nivel="medio", status=STATUS_PARTICIPACAO))
+    db.commit()
+
+    dispensar_notificacao(NotificacaoDispensarIn(tipo="prazo", chave=str(ed.id)), user=u1, db=db)
+
+    assert not any(i["tipo"] == "prazo" for i in notificacoes(user=u1, db=db)["itens"])
+    assert any(i["tipo"] == "prazo" for i in notificacoes(user=u2, db=db)["itens"])   # intocado
 
 
 def test_ler_todas_grava_notificacoes_lidas_em_e_analise_vista_em_em_fuso_de_brasilia(monkeypatch):

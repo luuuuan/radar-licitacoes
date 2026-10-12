@@ -2218,12 +2218,24 @@ function _removerNotificacaoLocal(n){
     badge.style.display = 'none';
   }
 }
+// Dispensa individual no servidor pelo resto do dia (ver POST .../dispensar
+// e NotificacaoDispensada) -- achado real (usuário reportou: clicou numa
+// notificação de prazo e ela voltou ao reabrir o sino): _removerNotificacaoLocal
+// só mexe no estado local desta aba; sem isto, o próximo poll de 30s ou a
+// próxima vez que o sino reabrir busca de novo do servidor (nada mudou lá)
+// e a notificação simplesmente reaparece. Não chamado pra tipo "analise",
+// que já tem seu próprio mecanismo (ver chamada a /interacao mais abaixo).
+function _dispensarNotificacao(tipo, chave){
+  api('/api/notificacoes/dispensar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({tipo, chave: String(chave)})}).catch(()=>{});
+}
 function _abrirNotificacao(i){
   const n = _notifCache[i];
   if(!n) return;
   _fecharNotificacoes();
   _removerNotificacaoLocal(n);
   if(n.tipo === 'documento'){
+    _dispensarNotificacao('documento', n.documento_id);
     tab('documentos');
     return;
   }
@@ -2235,12 +2247,14 @@ function _abrirNotificacao(i){
     // OUTRO filtro que já estivesse ligado (UF, busca por item, faixa de
     // valor...) combinado em cima -- podia render 0 resultados sem
     // nenhuma pista de por quê. limparFiltros() zera tudo antes.
+    _dispensarNotificacao('abertura', 'agregado');   // precisa bater com _CHAVE_ABERTURA no backend
     tab('editais');
     limparFiltros();
     if(n.filtro && n.filtro.nivel && $('#f-nivel')) $('#f-nivel').value = n.filtro.nivel;
     loadEditais();
     return;
   }
+  if(n.tipo === 'prazo') _dispensarNotificacao('prazo', n.edital_id);
   // mesmo caminho já usado por outras origens que abrem um edital numa
   // aba específica (ex.: link do Telegram) -- ver comentário de
   // _abaEditalSalvaPara.
@@ -6410,7 +6424,14 @@ function _corpoCotacaoAcoes(analisado){
   // data_sessao) -- fica disponível sempre, nos 3 estados.
   const btnFornecedor = `<button class="btn ghost" onclick="baixarCotacaoFornecedor()">${ICN.baixar||''} Planilha fornecedor (.xlsx)</button>`;
   if(analisado){
-    return `<button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button> ${btnFornecedor}`;
+    // achado real (usuário reportou print): só este estado não usava
+    // .toolbar como os outros dois abaixo -- os 2 botões empilhavam cada
+    // um ocupando a linha inteira no mobile, em vez de dividir a linha
+    // como o resto do app faz pra pares de botão (ver .toolbar no CSS).
+    return `<div class="toolbar">
+      <button class="btn" onclick="baixarCotacao()">${ICN.baixar||''} Baixar cotação (.xlsx)</button>
+      ${btnFornecedor}
+    </div>`;
   }
   if(_analiseEmAndamento && _analiseEmAndamentoId === _paginaEditalId){
     return `<div class="pill medio" style="display:inline-block;margin-bottom:6px">Análise por IA em andamento — acompanhe na aba "Análise por IA"</div>

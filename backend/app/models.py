@@ -374,6 +374,30 @@ class ItemEmbalagemOverride(Base):
     sem_divisao: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class NotificacaoDispensada(Base):
+    """Dispensa individual de UM item da central de notificações (sino) --
+    achado real (usuário reportou: clicou numa notificação de prazo e ela
+    voltou da próxima vez que abriu o sino). Diferente do botão "Ler Todos"
+    (marca Usuario.notificacoes_lidas_em, dispensa TUDO de uma vez), isto
+    aqui dispensa só o item clicado. Mesma duração "até o fim do dia" do
+    Ler Todos -- guarda a DATA (não datetime, mesmo tipo de
+    notificacoes_lidas_em) de quando foi dispensada, comparada contra
+    `hoje` do jeito que notificacoes() já calcula (BR_TZ), pra não reabrir
+    o mesmo desalinhamento de fuso que o achado real lá já corrigiu.
+    `chave` identifica o item dentro do tipo (edital_id pra prazo,
+    documento_id pra documento, uma constante fixa pra abertura, que é
+    agregada e não tem um item específico)."""
+    __tablename__ = "notificacoes_dispensadas"
+    __table_args__ = (UniqueConstraint("usuario_id", "tipo", "chave",
+                                        name="uq_notif_dispensada_user_tipo_chave"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    tipo: Mapped[str] = mapped_column(String(20))
+    chave: Mapped[str] = mapped_column(String(50))
+    dispensada_em: Mapped[date] = mapped_column(Date)
+
+
 class AnaliseIAExtras(Base):
     """Cache por (edital, usuário) das duas checagens extras da Análise por
     IA — comparação de catálogo e verificação de documentos de habilitação —

@@ -36,12 +36,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_, and_, update
+from sqlalchemy import select, func, or_, and_, update, delete
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco, ItemEmbalagemOverride
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco, ItemEmbalagemOverride, NotificacaoDispensada
 from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
 from . import busca as _busca
@@ -5492,6 +5492,7 @@ def listar_documentos(user: Usuario = Depends(_auth.get_current_user),
 
 
 _LIMITE_ITENS_NOTIFICACAO = 30  # teto por categoria -- sem isso o payload cresce sem fim com a idade da conta
+_CHAVE_ABERTURA = "agregado"  # tipo "abertura" não tem um item específico pra dispensar (ver NotificacaoDispensada)
 
 
 def _query_analise_pendente(usuario_id: int):
@@ -5615,6 +5616,19 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
     hoje = agora.date()
     itens = []
 
+    # dispensa individual (ver NotificacaoDispensada) -- achado real:
+    # clicar numa notificação de prazo/documento/abertura voltava a
+    # aparecer no próximo poll de 30s ou na próxima vez que o sino abria,
+    # porque só "Ler Todos" (notificacoes_lidas_em acima) tinha efeito
+    # persistido; um clique individual não mudava nada no servidor, só o
+    # estado local otimista desta aba (ver _abrirNotificacao no index.html).
+    dispensadas = {
+        (tipo, chave) for tipo, chave in db.execute(
+            select(NotificacaoDispensada.tipo, NotificacaoDispensada.chave)
+            .where(NotificacaoDispensada.usuario_id == user.id)
+            .where(NotificacaoDispensada.dispensada_em == hoje)).all()
+    }
+
     if user.notificacoes_lidas_em != hoje:
         q_prazo = (select(Edital.id, Edital.orgao, Edital.data_encerramento)
                   .join(Match, Match.edital_id == Edital.id)
@@ -5630,6 +5644,8 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                             Match.interessante.is_(True), Match.nivel == "forte"))
                   .limit(_LIMITE_ITENS_NOTIFICACAO))
         for edital_id, orgao, data_encerramento in db.execute(q_prazo).all():
+            if ("prazo", str(edital_id)) in dispensadas:
+                continue
             # .date(): esta contagem é em DIAS ("faltam X dias"), não precisa
             # da hora exata -- data_encerramento (datetime) - hoje (date)
             # quebraria com TypeError (não dá pra subtrair datetime de date).
@@ -5651,7 +5667,7 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                          # ver mesmo achado no q_prazo acima
                          .where(Edital.data_abertura < hoje + timedelta(days=janela + 1)))
             total_abrindo = db.execute(q_abertura).scalar_one()
-            if total_abrindo:
+            if total_abrindo and ("abertura", _CHAVE_ABERTURA) not in dispensadas:
                 itens.append({
                     "tipo": "abertura",
                     "detalhe": (f"{total_abrindo} editais de alta compatibilidade vão abrir em breve"
@@ -5669,6 +5685,8 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
                  .where(Documento.data_validade <= hoje + timedelta(days=settings.LEMBRETE_DOC_DIAS))
                  .limit(_LIMITE_ITENS_NOTIFICACAO))
         for doc_id, nome, data_validade in db.execute(q_docs).all():
+            if ("documento", str(doc_id)) in dispensadas:
+                continue
             dias = (data_validade - hoje).days
             if dias < 0:
                 detalhe = f"vencido há {abs(dias)} dia(s)"
@@ -5689,6 +5707,43 @@ def notificacoes(user: Usuario = Depends(_auth.get_current_user),
         })
 
     return {"total": len(itens), "itens": itens}
+
+
+class NotificacaoDispensarIn(BaseModel):
+    tipo: str
+    chave: str
+
+
+@app.post("/api/notificacoes/dispensar")
+def dispensar_notificacao(body: NotificacaoDispensarIn,
+                          user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    """Dispensa UM item específico da central de notificações pelo resto do
+    dia (ver NotificacaoDispensada) -- chamado ao clicar num item de tipo
+    prazo/documento/abertura (não "analise", que já tem seu próprio
+    mecanismo em analise_vista_em e não precisa deste). Idempotente: clicar
+    de novo no mesmo item no mesmo dia só atualiza a data, não duplica.
+
+    Aproveita a chamada pra limpar dispensas de dias anteriores deste
+    usuário -- sem isso a tabela só cresce (uma linha por item clicado,
+    pra sempre), já que nada mais limpa essas linhas depois que o dia
+    passa e elas somem do filtro de notificacoes() sozinhas."""
+    agora_brt = datetime.now(BR_TZ).replace(tzinfo=None)
+    hoje = agora_brt.date()
+    db.execute(delete(NotificacaoDispensada)
+              .where(NotificacaoDispensada.usuario_id == user.id)
+              .where(NotificacaoDispensada.dispensada_em != hoje))
+    existente = db.execute(select(NotificacaoDispensada)
+                           .where(NotificacaoDispensada.usuario_id == user.id)
+                           .where(NotificacaoDispensada.tipo == body.tipo)
+                           .where(NotificacaoDispensada.chave == body.chave)).scalar_one_or_none()
+    if existente:
+        existente.dispensada_em = hoje
+    else:
+        db.add(NotificacaoDispensada(usuario_id=user.id, tipo=body.tipo,
+                                     chave=body.chave, dispensada_em=hoje))
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/notificacoes/ler-todas")
