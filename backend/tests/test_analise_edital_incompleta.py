@@ -54,7 +54,14 @@ def test_413_do_gemini_retenta_truncando_pro_teto_seguro(monkeypatch):
     from app.analise_edital import _MAX_TOTAL_SEGURO_413
 
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
-    texto_grande = "x" * (_MAX_TOTAL_SEGURO_413 + 50000)
+    # maior que _MAX_TOTAL_SEGURO_413 (pra retentativa truncar de verdade),
+    # mas MENOR que MAX_TOTAL (80000) -- acima disso, v16 aciona a
+    # recuperação por embeddings (ver _selecionar_trechos_relevantes_analise)
+    # antes de chegar aqui, que é um caminho à parte, já coberto em
+    # test_analise_edital_recuperacao_embeddings.py. Este teste é
+    # especificamente sobre o retry de 413 dentro de UMA chamada já no
+    # orçamento -- não precisa (nem deve) cruzar esse outro limiar.
+    texto_grande = "x" * (_MAX_TOTAL_SEGURO_413 + 20000)
     monkeypatch.setattr("app.analise_edital._baixar_texto_pdf",
                         lambda *a, **k: (texto_grande, False))
 

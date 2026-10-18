@@ -13,11 +13,20 @@ from unittest.mock import patch, MagicMock
 from app.analise_edital import analisar, _prioridade_arquivo
 
 
-def _texto_enviado_a_ia(chamada_post_kwargs) -> str:
+def _texto_enviado_a_ia(chamadas_post_kwargs) -> str:
     # _chamar_modelo manda o corpo via data= (bytes), não json= -- ver
-    # ensure_ascii=False em _post_com_retry.
-    corpo = json.loads(chamada_post_kwargs["data"].decode("utf-8"))
-    return corpo["contents"][0]["parts"][0]["text"]
+    # ensure_ascii=False em _post_com_retry. Aceita a LISTA inteira de
+    # chamadas (não só uma) e acha a do Gemini por essa diferença -- desde
+    # v16, texto grande o bastante pode disparar uma chamada de embeddings
+    # (DeepInfra, via json=) ANTES da chamada de verdade pro Gemini, então o
+    # índice da chamada certa não é mais previsível/fixo.
+    if isinstance(chamadas_post_kwargs, dict):
+        chamadas_post_kwargs = [chamadas_post_kwargs]
+    for kw in chamadas_post_kwargs:
+        if "data" in kw:
+            corpo = json.loads(kw["data"].decode("utf-8"))
+            return corpo["contents"][0]["parts"][0]["text"]
+    raise AssertionError("nenhuma chamada com corpo 'data=' (Gemini) encontrada")
 
 
 def test_prioridade_arquivo_prioriza_retificacao_antes_do_edital():
@@ -136,13 +145,25 @@ def test_analisar_nao_deixa_1o_documento_gigante_engolir_o_2o():
         chamadas.append(kw)
         return _resposta_gemini('{"objeto": "teste"}')
 
+    # texto combinado (~91000 chars) passa de MAX_TOTAL -- v16 tentaria
+    # embeddings_deepinfra antes do Gemini (ver _selecionar_trechos_
+    # relevantes_analise). Mocka embeddings_deepinfra DIRETO (não via
+    # requests.post) e não embeddings_deepinfra: evita depender do estado
+    # GLOBAL do circuit-breaker de app.matching.embeddings (_pausar/cache,
+    # compartilhado entre testes na mesma sessão do pytest -- uma pausa
+    # disparada por outro teste faria este "pular" a chamada real sem
+    # avisar) -- simula "embeddings indisponíveis" direto, cenário que este
+    # teste especificamente quer exercitar (o fallback de divisão justa
+    # entre documentos, não a recuperação por similaridade em si).
     with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
-         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+         patch("app.analise_edital.requests.post", side_effect=_fake_post), \
+         patch("app.analise_edital.embeddings_deepinfra", return_value=[None, None]):
         resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "ok"
-    assert len(chamadas) == 1
-    assert "MARCADOR-ESPECIFICACOES" in _texto_enviado_a_ia(chamadas[0])
+    assert len(chamadas) == 1   # só o Gemini -- embeddings foi mockado direto, sem passar por requests.post
+    assert "MARCADOR-ESPECIFICACOES" in _texto_enviado_a_ia(chamadas)
+    assert resultado["analise_incompleta"] is True   # embeddings indisponíveis -- confiança baixa (achado v16)
 
 
 def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
@@ -161,12 +182,15 @@ def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
         chamadas.append(kw)
         return _resposta_gemini('{"objeto": "teste"}')
 
+    # mesmo motivo do teste acima: mocka embeddings_deepinfra direto, não
+    # via requests.post, pra não depender do circuit-breaker global.
     with patch("app.analise_edital._baixar_texto_pdf", side_effect=_fake_baixar), \
-         patch("app.analise_edital.requests.post", side_effect=_fake_post):
+         patch("app.analise_edital.requests.post", side_effect=_fake_post), \
+         patch("app.analise_edital.embeddings_deepinfra", return_value=[None]):
         resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "ok"
-    texto_enviado = _texto_enviado_a_ia(chamadas[0])
+    texto_enviado = _texto_enviado_a_ia(chamadas)
     # não foi cortado pela metade (40000) -- usou perto do teto cheio (80000)
     assert texto_enviado.count("A") > 70000
 

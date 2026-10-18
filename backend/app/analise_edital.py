@@ -31,6 +31,7 @@ from datetime import date
 import requests
 
 from .config import settings
+from .matching.embeddings import embeddings_deepinfra, cosseno
 
 log = logging.getLogger("ia.edital")
 
@@ -58,7 +59,28 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # raciocínio de _MAX_TOTAL_SEGURO_413) -- sem ele, nunca dava pra provar
 # cobertura completa em edital sem lote, e "analise_incompleta" ficava
 # sempre false por autorrelato mesmo com texto cortado.
-VERSAO_PROMPT = 15
+# v16 = achado real (edital 155685, UFFS 90013/2026): o corte bruto nos
+# primeiros MAX_TOTAL caracteres só cobria o Edital inteiro (78645 chars) +
+# ~1300 chars do Termo de Referência (354635 chars, 181 páginas) -- a IA
+# nunca chegou a ver a seção real de "Qualificação técnica da Contratada"
+# (pág. 101), que dizia explicitamente NÃO exigir atestado de capacidade
+# técnica, e inventou essa exigência (plausível pra esse tipo de objeto,
+# mas inexistente NESTE edital) pra preencher a lacuna. Troca o corte cego
+# por recuperação via embeddings (_selecionar_trechos_relevantes_analise)
+# quando o texto combinado excede MAX_TOTAL: acha os trechos mais parecidos
+# com cada categoria padrão da Lei 14.133 (habilitação jurídica/fiscal/
+# técnica/econômico-financeira, garantia, amostra, visita, declarações,
+# julgamento) em vez de pegar só o início do documento -- testado contra a
+# API real (BGE-M3/DeepInfra): top-2 por categoria recupera a seção da pág.
+# 101 ocupando só ~72000 dos 80000 chars disponíveis, uma chamada só, mesmo
+# custo de hoje. "analise_incompleta" ganha uma 3ª fonte (além do
+# autorrelato da IA e da cobertura de lotes×total_itens de v14/v15): a
+# PIOR similaridade entre as 9 consultas padrão e seu melhor trecho --
+# baixa demais sinaliza que aquela categoria pode não ter sido bem
+# recuperada, mesmo sem a IA perceber (pedido do usuário: prefere
+# "analise_incompleta" de sobra, barato de conferir, a um requisito
+# inventado com confiança).
+VERSAO_PROMPT = 16
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1289,137 +1311,164 @@ _MAX_TOTAL_SEGURO_413 = 40000
 # que nunca passa pelo bloco onde essa constante era definida localmente.
 MAX_TOTAL = 80000
 
+# Baixa o(s) documento(s) inteiro(s) antes de decidir o que entra no prompt
+# (em vez de truncar cada um em MAX_TOTAL na hora do download, como antes do
+# achado v16) -- mesmo teto de itens_pdf.MAX_BRUTO, mesmo motivo: só depois
+# de ver o documento INTEIRO dá pra escolher os trechos certos por
+# similaridade em vez de pegar cego só o início.
+_MAX_BRUTO_ANALISE = 400000
 
-def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
-            texto_pronto: dict | None = None, total_itens: int | None = None) -> dict:
-    """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
-    api_key: chave Gemini do próprio usuário (obrigatória, cai para a global).
+# Tamanho de cada pedaço pra recuperação por embeddings -- mesmo valor de
+# itens_pdf._CHUNK_TAM (~1 página de edital).
+_CHUNK_TAM_ANALISE = 2500
 
-    texto_pronto: opcional, {"texto": str, "fonte": str|None} já extraído
-    numa chamada anterior (ver _texto_pronto_cache em main.py) -- pula o
-    download/extração de PDF inteiramente quando fornecido. Achado real:
-    reabrir a aba ou tentar de novo (depois de uma falha na chamada de IA,
-    não na busca) baixava o PDF de novo à toa. Quando None (padrão), extrai
-    normalmente e devolve o texto usado em resultado["_texto_extraido"]/
-    ["_fonte_extraida"] -- só quando a EXTRAÇÃO deu certo, mesmo que a
-    chamada de IA em si falhe depois -- pra quem chama poder cachear.
+# Nº de pedaços mais parecidos considerados por consulta (+ vizinhos, pra
+# cobrir o caso de a seção cruzar a borda de um pedaço). Achado real (edital
+# 155685, testado contra a API real BGE-M3/DeepInfra): com as 9 consultas de
+# _CONSULTAS_HABILITACAO_ANALISE, top=1 seleciona ~52500 chars, top=2
+# ~72500 chars (ainda cabe nos 80000 de MAX_TOTAL, com folga), top=3 já
+# passa de 95000 (estoura). Top=2 dá uma margem de segurança sobre top=1
+# sem arriscar o 413 de MAX_TOTAL=200000 (ver comentário ali).
+_TOP_K_ANALISE = 2
 
-    total_itens: opcional, Nº real de itens do edital (ItemEdital, dado
-    estruturado do PNCP -- independe de quanto texto a IA conseguiu ler).
-    Achado real (edital 143879, 223 itens, Termo de Referência de ~98000
-    caracteres sozinho já estourando MAX_TOTAL=80000): a análise voltou
-    "analise_incompleta": false, mas os "lotes" só cobriam os itens 1-141
-    -- a IA não sinalizou o corte porque o texto que ELA recebeu já tinha
-    sido truncado ANTES de chegar até ela (ver MAX_TOTAL logo abaixo); pra
-    ela, o texto simplesmente "acabava" num ponto que parecia normal, sem
-    nada de óbvio indicando que faltava mais. Autorrelato de truncamento
-    não é confiável pra esse caso -- comparar a cobertura real dos lotes
-    contra o Nº de itens que a gente JÁ SABE que o edital tem (não depende
-    de IA nenhuma) é."""
-    if not ia_texto_disponivel(api_key):
-        return {"status": "sem_ia"}
+# Piso de confiança pra marcar analise_incompleta=true quando a MELHOR
+# similaridade encontrada pra alguma das consultas padrão for baixa demais
+# -- sinal de que aquela categoria pode não ter sido bem recuperada do
+# documento (ao contrário do autorrelato da IA, que não tem como saber o
+# que ficou de fora de um recorte). Calibrado com dados reais (edital
+# 155685, 9 consultas): todas as 9 scoraram entre 0.46 e 0.60 -- incluindo
+# "qualificação econômico-financeira" (0.4639), que SABIDAMENTE achou
+# conteúdo real (confirmado lendo o texto selecionado). 0.45 fica abaixo de
+# todos os scores reais observados (evita marcar incompleto à toa num caso
+# que na verdade funcionou), mas alto o bastante pra pegar uma consulta que
+# não achou NADA parecido no documento (pedido do usuário: prefere
+# "analise_incompleta" de sobra -- barato de conferir -- a deixar passar
+# batido uma categoria que não foi vista). Amostra de calibração pequena (1
+# edital) -- pode precisar de ajuste fino com mais casos reais.
+_LIMIAR_CONFIANCA_ANALISE = 0.45
 
-    if texto_pronto is not None:
-        texto, fonte = texto_pronto["texto"], texto_pronto.get("fonte")
-        # texto_pronto vem de uma extração anterior já cortada em MAX_TOTAL
-        # (ver `_texto_extraido` no retorno desta função) -- não temos aqui o
-        # tamanho ANTES do corte, então usamos len(texto)>=MAX_TOTAL como
-        # aproximação de "foi cortado" (mesmo raciocínio já usado na
-        # retentativa de 413 logo abaixo).
-        texto_truncado = len(texto) >= MAX_TOTAL
-    else:
-        if not arquivos:
-            return {"status": "sem_arquivo"}
+# As 9 categorias padrão de habilitação/exigência da Lei 14.133 (pedido do
+# usuário) -- cada uma vira uma consulta de embeddings pra achar, no
+# documento INTEIRO, o(s) trecho(s) mais parecido(s) com ela, em vez de só
+# pegar o início do texto. Lista fixa (não auto-gerada a partir do prompt)
+# de propósito: _PROMPT já pede por essas mesmas categorias em prosa, mas
+# aqui o texto da consulta é otimizado pra similaridade de embeddings
+# (termos técnicos/sinônimos juntos), não pra instrução de LLM.
+_CONSULTAS_HABILITACAO_ANALISE = [
+    "habilitação jurídica: ato constitutivo, contrato social, procuração do representante legal, registro comercial",
+    "regularidade fiscal e trabalhista: certidão negativa de débitos, CND da Receita Federal, FGTS, CNDT",
+    "qualificação técnica: atestado de capacidade técnica, registro em conselho de classe",
+    "qualificação econômico-financeira: balanço patrimonial, certidão negativa de falência, capital social mínimo",
+    "garantia contratual exigida do contratado vencedor",
+    "exigência de amostra ou prova de conceito do produto ofertado",
+    "exigência de visita técnica ou vistoria prévia ao local",
+    "declarações exigidas do licitante: microempresa/EPP, não emprega menor, trabalho degradante, reserva de cargos",
+    "critério de julgamento das propostas e modo de disputa",
+]
 
-        # prioriza retificação/errata, depois o edital principal, depois termo
-        # de referência/anexos (onde costumam estar as exigências de
-        # habilitação e a garantia contratual) -- ver _prioridade_arquivo
-        candidatos = sorted(arquivos, key=_prioridade_arquivo)
 
-        # baixa e combina até 2 documentos (ex.: edital + termo de
-        # referência), respeitando o limite total de caracteres do prompt.
-        # Achado real: editais grandes (ex.: 350 itens) enchiam o limite
-        # antigo (24000, ~6 mil tokens) ainda no meio da tabela de itens,
-        # cortando fora a seção de habilitação/garantia que costuma vir
-        # depois -- a IA sinalizava "analise_incompleta" com frequência. O
-        # Gemini (gemini-3.6/3.5-flash) tem contexto de sobra pra um texto
-        # bem maior; o teto pequeno era mais conservador do que precisava.
-        # A Groq (fallback, teto de corpo bem menor) já trunca de novo por
-        # conta própria em _GROQ_LIMITE_PROMPT_BYTES -- não depende deste
-        # valor. max_paginas também sobe (senão o PDF para de ser lido bem
-        # antes de bater esse teto de caracteres).
-        #
-        # Chegou a subir pra 200000 (achado real, edital 125821, PNCP
-        # 88830609000139/2026/371, catálogo de 90+ itens estourando o teto
-        # de 80000 no meio da tabela do Anexo I) -- revertido de volta
-        # depois que 200000 reproduziu HTTP 413 do Gemini DE VERDADE em
-        # produção, de forma persistente (não só na 1ª tentativa: refiz a
-        # análise várias vezes, com cooldown real entre elas, e continuou
-        # 413 mesmo na retentativa truncada pro próprio valor antigo de
-        # 80000 -- ver _MAX_TOTAL_SEGURO_413 logo abaixo, que cobre esse
-        # caso residual). Não achei o limite exato/documentado que o
-        # Gemini aceita nesse campo -- 80000 é o último valor confirmado
-        # estável em produção; mirar um número maior de novo arriscaria
-        # reproduzir o mesmo problema pra qualquer edital grande, não só
-        # este. Fica como está até haver um jeito confiável de confirmar
-        # um teto maior (ex.: erro mais específico do Gemini, ou suporte
-        # oficial confirmando o limite real).
-        partes, fontes = [], []
-        falhou_download = False
-        for a in candidatos[:5]:
-            # achado real (edital 138442, Contratação Direta com 6
-            # documentos administrativos curtos empatados em prioridade --
-            # ver _prioridade_arquivo): o teto de "só 2 documentos" (não de
-            # orçamento) parava o loop cedo demais, depois de só juntar os 2
-            # primeiros por ORDEM da lista do PNCP (raramente por
-            # relevância) -- mesmo sobrando dezenas de milhares de
-            # caracteres de orçamento, o documento de verdade com a
-            # habilitação (4º ou 5º na lista) nunca chegava a ser baixado.
-            # Só para quando o ORÇAMENTO acaba, não por contar documentos.
-            if sum(len(p) for p in partes) >= MAX_TOTAL:
-                break
-            if not a.get("url"):
-                continue
-            t, falhou = _baixar_texto_pdf(a["url"], max_paginas=150, max_chars=MAX_TOTAL, marcar_paginas=True)
-            if falhou:
-                falhou_download = True
-                continue
-            if len(t) > 300:
-                # achado real (edital 141844, PNCP 46384111000140/2026/1036):
-                # um "Aviso de Contratação Direta" sozinho já batia (e
-                # estourava) MAX_TOTAL -- o loop parava aqui, sem sobrar
-                # ESPAÇO NENHUM pro Termo de Referência (2º candidato, onde
-                # ficam item/habilitação), mesmo esse sendo bem menor que o
-                # orçamento total. Se o 1º documento sozinho já consome
-                # (quase) tudo e existe outro candidato esperando a vez,
-                # reserva metade do orçamento pra ele -- só se aplica ao 1º
-                # documento (fontes ainda vazio), então um edital de
-                # arquivo único continua usando o orçamento inteiro, sem
-                # perder texto à toa.
-                if not fontes and len(t) >= MAX_TOTAL - 5000 and len(candidatos) > 1:
-                    t = t[:MAX_TOTAL // 2]
-                titulo = a.get("titulo") or "documento"
-                partes.append(f"=== DOCUMENTO: {titulo} ===\n{t}")
-                fontes.append(titulo)
-        texto_bruto = "\n\n---\n\n".join(partes)
-        texto_truncado = len(texto_bruto) > MAX_TOTAL
-        texto = texto_bruto[:MAX_TOTAL]
-        fonte = ", ".join(fontes) if fontes else None
-        if len(texto) < 300:
-            # não confunde "não consegui baixar o arquivo" (rede/PNCP
-            # instável) com "baixei e realmente não tem texto legível"
-            # (scan) -- ver docstring de _baixar_texto_pdf.
-            if falhou_download:
-                return {"status": "erro_download_pdf"}
-            return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
+def _truncar_justo_entre_documentos(texto_bruto: str, max_chars: int) -> str:
+    """Corte cego (sem embeddings pra guiar) que reparte max_chars em fatias
+    IGUAIS entre os documentos baixados (identificados pelos cabeçalhos
+    "=== DOCUMENTO: ... ===" que analisar() já insere), em vez de cortar a
+    partir do byte 0 do texto combinado. Achado real (edital 141844): sem
+    isso, 1 documento sozinho perto do teto (ex.: um aviso administrativo
+    de 90000 chars) engolia o orçamento inteiro, sem sobrar NADA pros
+    documentos seguintes -- onde geralmente fica a habilitação. Usado só
+    como fallback de último recurso (embeddings indisponíveis ou documento
+    pequeno demais pra valer a pena escolher trechos -- ver
+    _selecionar_trechos_relevantes_analise); com embeddings disponíveis, a
+    recuperação já procura nos documentos TODOS, essa divisão não entra em
+    jogo."""
+    documentos = texto_bruto.split("\n\n---\n\n")
+    if len(documentos) <= 1:
+        return texto_bruto[:max_chars]
+    fatia = max_chars // len(documentos)
+    return "\n\n---\n\n".join(d[:fatia] for d in documentos)[:max_chars]
 
+
+def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
+    """Acha, no texto COMBINADO de todos os documentos baixados, só os
+    trechos mais parecidos com cada uma das 9 categorias padrão de
+    habilitação/exigência (_CONSULTAS_HABILITACAO_ANALISE) -- mesmo padrão
+    de itens_pdf._selecionar_trechos_relevantes (embeddings BGE-M3/
+    DeepInfra), só que as "consultas" aqui são as categorias da Lei 14.133,
+    não os itens do edital.
+
+    Devolve (texto_selecionado, confianca_baixa). confianca_baixa é True
+    quando os embeddings estão indisponíveis (cota/erro -- cai pro corte
+    cego de sempre, mas sem garantia nenhuma de ter pego a parte certa) OU
+    quando a PIOR similaridade entre as 9 consultas e seu melhor trecho fica
+    abaixo de _LIMIAR_CONFIANCA_ANALISE (ver docstring da constante) --
+    quem chama usa isso pra marcar analise_incompleta mesmo que a IA não
+    tenha percebido nada de errado.
+
+    Sem parâmetro de api_key (ao contrário de analisar(), que recebe a
+    chave GEMINI do próprio usuário) -- achado real (1º teste de ponta a
+    ponta: HTTP 401 do DeepInfra): embeddings_deepinfra usa uma chave
+    GLOBAL (paga pelo operador, settings.DEEPINFRA_API_KEY), diferente da
+    chave Gemini por usuário que analisar() recebe -- passar a chave do
+    Gemini aqui direto fazia TODA chamada de embeddings falhar por
+    autenticação errada, degradando pro corte cego (fallback) em TODO
+    edital grande, silenciosamente, sem a recuperação nunca realmente
+    entrar em ação em produção."""
+    partes = [texto[i:i + _CHUNK_TAM_ANALISE] for i in range(0, len(texto), _CHUNK_TAM_ANALISE)]
+    if len(partes) <= 2:
+        # documento pequeno o bastante pra não precisar escolher nada --
+        # mesmo corte de sempre (repartido entre documentos, não cego a
+        # partir do byte 0 -- ver _truncar_justo_entre_documentos), com
+        # confiança alta (nada foi descartado por similaridade, só o teto
+        # de caracteres já conhecido).
+        return _truncar_justo_entre_documentos(texto, MAX_TOTAL), False
+
+    vetores = embeddings_deepinfra(partes + _CONSULTAS_HABILITACAO_ANALISE)
+    vetores_partes = vetores[:len(partes)]
+    vetores_consultas = vetores[len(partes):]
+    if not any(vetores_partes):
+        # embeddings indisponíveis (sem saldo, cota, erro de rede) --
+        # degrada pro corte cego de sempre (mesmo comportamento de antes do
+        # achado v16, já reparado entre documentos -- ver
+        # _truncar_justo_entre_documentos), mas marca confiança baixa: sem
+        # embeddings não tem como saber se o corte pegou a seção certa.
+        return _truncar_justo_entre_documentos(texto, MAX_TOTAL), True
+
+    indices: set[int] = set()
+    pior_score: float | None = None
+    for vq in vetores_consultas:
+        if not vq:
+            pior_score = -1.0   # consulta sem vetor -- pior caso possível, nunca passa do piso
+            continue
+        scores = [cosseno(vq, vp) if vp else -1.0 for vp in vetores_partes]
+        melhor_desta_consulta = max(scores)
+        pior_score = melhor_desta_consulta if pior_score is None else min(pior_score, melhor_desta_consulta)
+        melhores = sorted(range(len(partes)), key=lambda i: scores[i], reverse=True)[:_TOP_K_ANALISE]
+        for idx in melhores:
+            indices.update((idx - 1, idx, idx + 1))   # vizinhos: a seção pode cruzar a borda do pedaço
+
+    ordenados = sorted(i for i in indices if 0 <= i < len(partes))
+    trecho = "\n\n".join(partes[i] for i in ordenados)
+    confianca_baixa = pior_score is not None and pior_score < _LIMIAR_CONFIANCA_ANALISE
+    return trecho, confianca_baixa
+
+
+def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None) -> dict:
+    """Faz UMA chamada de IA sobre um texto que já coube no orçamento de uma
+    requisição (MAX_TOTAL) e normaliza a resposta. Extraído de analisar()
+    pra poder ser chamado mais de uma vez -- ver _mesclar_resultados_analise
+    -- quando nem a recuperação por embeddings consegue encaixar as seções
+    relevantes numa chamada só (caso raro: ver achado v16 em VERSAO_PROMPT).
+
+    NÃO calcula "analise_incompleta" por cobertura de lotes/confiança de
+    recuperação -- isso depende do edital INTEIRO (total_itens, pior score
+    de similaridade), que só analisar() tem depois de juntar o(s)
+    resultado(s) desta função. Aqui, "analise_incompleta" é só o autorrelato
+    cru da própria IA."""
     # max_output_tokens dobrado em relação ao padrão de _gerar (16384): esta
     # é a única chamada cujo JSON de resposta cresce com o Nº DE ITENS do
     # edital (o "lotes" novo, ver _gerar) além de tudo mais que o prompt já
     # pede -- e, diferente de comparar_catalogo_usuario() (que já lida com
-    # isso dividindo em lotes de 25 itens por chamada), analisar() é uma
-    # chamada única: um corte aqui derruba a análise inteira, não só uma
-    # parte dela.
+    # isso dividindo em lotes de 25 itens por chamada), cada chamada aqui é
+    # única: um corte derruba essa parte da análise inteira.
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
                      response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
     if st.startswith("http_413"):   # startswith: st pode vir com o corpo da resposta colado
@@ -1437,12 +1486,12 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
                          response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
     if st != "ok" or not txt:
-        return {"status": "erro_ia", "detalhe": st, "_texto_extraido": texto, "_fonte_extraida": fonte}
+        return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
     if not isinstance(data, dict):
         log.warning("analisar(): resposta da IA não é um JSON válido (%d chars). Início: %r Fim: %r",
                    len(txt), txt[:300], txt[-300:])
-        return {"status": "resposta_invalida", "_texto_extraido": texto, "_fonte_extraida": fonte}
+        return {"status": "resposta_invalida"}
 
     # normaliza saída
     def lista(x):
@@ -1592,50 +1641,9 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
             "garantia_produto": s(x.get("garantia_produto")),
         }
 
-    lotes_normalizados = lotes(data.get("lotes"))
-    incompleta = b(data.get("analise_incompleta"))
-    aviso_cobertura = None
-    # cobertura real dos lotes x Nº de itens que o edital de fato tem (ver
-    # docstring de `total_itens` acima) -- só aplica quando há lotes pra
-    # medir (julgamento "item" não tem esse sinal disponível) e o dado
-    # estruturado do PNCP está disponível.
-    if lotes_normalizados and total_itens:
-        itens_cobertos = {n for l in lotes_normalizados for n in l["itens"]}
-        # folga pequena (2 itens): alguns editais têm item(ns) fora da
-        # numeração normal (ex.: um "item 0"/anexo administrativo) sem que
-        # isso signifique truncamento de verdade.
-        if len(itens_cobertos) < total_itens - 2:
-            incompleta = True
-            aviso_cobertura = ("Esta análise pode estar incompleta: nem todos os itens do "
-                              "edital foram cobertos pelos lotes identificados.")
-    elif texto_truncado and total_itens:
-        # achado real (edital 145959, 209 itens, PDF de 212000 caracteres):
-        # editais só-por-item (sem agrupamento em lotes) não têm "lotes" pra
-        # medir cobertura -- o ramo acima simplesmente não roda, e o corte
-        # em MAX_TOTAL passava batido (a IA nunca escreveu
-        # "analise_incompleta": o texto que ELA recebeu já tinha sido
-        # cortado ANTES, então pra ela parecia terminar num ponto normal --
-        # mesmo raciocínio da docstring de `total_itens`). Sem "lotes" pra
-        # confirmar cobertura item a item, a única informação que temos é
-        # "o texto foi cortado" -- não dá pra provar que os itens depois do
-        # corte foram vistos, então assume incompleto em vez de confiar no
-        # autorrelato da IA.
-        incompleta = True
-        aviso_cobertura = ("Esta análise pode estar incompleta: o texto do edital foi cortado "
-                          "antes do fim (documento grande) e este edital não usa agrupamento "
-                          "em lotes pra confirmar se todos os itens foram cobertos.")
-    pontos_atencao = lista(data.get("pontos_atencao"))
-    if incompleta and not b(data.get("analise_incompleta")):
-        # achado real (edital 143879): quando é ESTA checagem (não a IA)
-        # que detecta o corte, a IA nunca escreveu o aviso que o prompt
-        # pede pra esse caso (ver linha 125 do _PROMPT) -- sem isso,
-        # "pontos_atencao" ficava sem nenhum sinal do problema, mesmo com
-        # "analise_incompleta" virando true.
-        pontos_atencao = pontos_atencao + [aviso_cobertura]
     return {
         "status": "ok",
         "versao": VERSAO_PROMPT,
-        "fonte": fonte,
         "objeto": s(data.get("objeto")),
         "documentos_habilitacao": documentos_habilitacao(data.get("documentos_habilitacao")),
         "validade_documentos_habilitacao": s(data.get("validade_documentos_habilitacao")),
@@ -1647,8 +1655,302 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         "exige_visita": b(data.get("exige_visita")),
         "exclusivo_me_epp": b(data.get("exclusivo_me_epp")),
         "julgamento": s(data.get("julgamento")),
-        "lotes": lotes_normalizados,
+        "lotes": lotes(data.get("lotes")),
         "garantia_contratual": s(data.get("garantia_contratual")),
+        "analise_incompleta": b(data.get("analise_incompleta")),
+        "pontos_atencao": lista(data.get("pontos_atencao")),
+    }
+
+
+def _mesclar_resultados_analise(resultados: list[dict]) -> dict:
+    """Junta os resultados normalizados (_analisar_texto_unico) de 2+
+    chamadas sobre pedaços SEQUENCIAIS do mesmo edital -- fallback de último
+    recurso, só acionado quando até o texto JÁ FILTRADO pela recuperação por
+    embeddings ainda excede o orçamento de uma chamada (ver analisar()).
+    Campos-LISTA juntam e removem duplicata (um requisito só precisa
+    aparecer num pedaço pra valer pro edital inteiro); campos sim/não viram
+    verdadeiro se QUALQUER pedaço disser que sim; campos de fato único
+    (texto) usam a 1ª resposta não-vazia -- um pedaço sem aquela informação
+    respondeu "" por não ter visto aquele trecho, não porque o dado não
+    existe no edital."""
+    def valor(r, caminho):
+        v = r
+        for parte in caminho.split("."):
+            v = v.get(parte) if isinstance(v, dict) else None
+            if v is None:
+                return None
+        return v
+
+    def uniao_lista(caminho):
+        vistos, out = set(), []
+        for r in resultados:
+            for item in (valor(r, caminho) or []):
+                chave = item.strip().lower() if isinstance(item, str) else json.dumps(item, sort_keys=True, ensure_ascii=False)
+                if chave not in vistos:
+                    vistos.add(chave)
+                    out.append(item)
+        return out
+
+    def primeiro_nao_vazio(caminho):
+        for r in resultados:
+            v = valor(r, caminho)
+            if v:
+                return v
+        return valor(resultados[0], caminho)
+
+    def ou(caminho):
+        return any(bool(valor(r, caminho)) for r in resultados)
+
+    def uniao_declaracoes():
+        vistos, out = set(), []
+        for r in resultados:
+            for d in (valor(r, "documentos_habilitacao.declaracoes") or []):
+                nome_norm = (d.get("nome") or "").strip().lower()
+                if nome_norm and nome_norm not in vistos:
+                    vistos.add(nome_norm)
+                    out.append(d)
+        return out
+
+    def uniao_lotes():
+        vistos, out = set(), []
+        for r in resultados:
+            for lote in (valor(r, "lotes") or []):
+                numero = lote.get("numero")
+                if numero and numero not in vistos:
+                    vistos.add(numero)
+                    out.append(lote)
+        # mesma invariante de lotes() acima (um item só pode pertencer a UM
+        # lote): aplicada de novo aqui porque cada pedaço só validou DENTRO
+        # de si mesmo -- dois pedaços diferentes podem ter cada um, sozinho,
+        # uma composição internamente consistente, mas que colide quando
+        # juntas (ex.: item 10 num lote no pedaço 1 e em outro lote no
+        # pedaço 2, cada um sem saber do outro).
+        contagem: dict[int, int] = {}
+        for lote in out:
+            for n in lote.get("itens", []):
+                contagem[n] = contagem.get(n, 0) + 1
+        if any(c > 1 for c in contagem.values()):
+            return []
+        return out
+
+    return {
+        "status": "ok",
+        "versao": resultados[0]["versao"],
+        "objeto": primeiro_nao_vazio("objeto"),
+        "documentos_habilitacao": {
+            "juridica": uniao_lista("documentos_habilitacao.juridica"),
+            "fiscal_trabalhista": uniao_lista("documentos_habilitacao.fiscal_trabalhista"),
+            "tecnica": uniao_lista("documentos_habilitacao.tecnica"),
+            "economico_financeira": uniao_lista("documentos_habilitacao.economico_financeira"),
+            "declaracoes": uniao_declaracoes(),
+        },
+        "validade_documentos_habilitacao": primeiro_nao_vazio("validade_documentos_habilitacao"),
+        "requisitos_tecnicos": uniao_lista("requisitos_tecnicos"),
+        "dados_orgao": {
+            chave: primeiro_nao_vazio(f"dados_orgao.{chave}") for chave in
+            ("numero_processo", "modo_disputa", "criterio_julgamento", "plataforma", "data_sessao",
+             "pregoeiro_responsavel", "contato_orgao", "regiao_exclusiva")
+        } | {"exclusivo_regional": ou("dados_orgao.exclusivo_regional")},
+        "dados_proposta": {
+            chave: primeiro_nao_vazio(f"dados_proposta.{chave}") for chave in
+            ("validade_dias", "prazo_entrega", "local_entrega", "condicoes_pagamento",
+             "forma_apresentacao", "garantia_proposta", "prospecto_catalogo", "garantia_produto")
+        } | {
+            "aceita_similar": ou("dados_proposta.aceita_similar"),
+            "identificacao_marca_modelo": ou("dados_proposta.identificacao_marca_modelo"),
+            "entrega_tecnica": ou("dados_proposta.entrega_tecnica"),
+            "assistencia_tecnica": ou("dados_proposta.assistencia_tecnica"),
+        },
+        "prazos": uniao_lista("prazos"),
+        "exige_amostra": ou("exige_amostra"),
+        "exige_visita": ou("exige_visita"),
+        "exclusivo_me_epp": ou("exclusivo_me_epp"),
+        "julgamento": primeiro_nao_vazio("julgamento"),
+        "lotes": uniao_lotes(),
+        "garantia_contratual": primeiro_nao_vazio("garantia_contratual"),
+        "analise_incompleta": ou("analise_incompleta"),
+        "pontos_atencao": uniao_lista("pontos_atencao"),
+    }
+
+
+def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
+            texto_pronto: dict | None = None, total_itens: int | None = None) -> dict:
+    """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
+    api_key: chave Gemini do próprio usuário (obrigatória, cai para a global).
+
+    texto_pronto: opcional, {"texto": str, "fonte": str|None} já extraído
+    numa chamada anterior (ver _texto_pronto_cache em main.py) -- pula o
+    download/extração de PDF inteiramente quando fornecido. Achado real:
+    reabrir a aba ou tentar de novo (depois de uma falha na chamada de IA,
+    não na busca) baixava o PDF de novo à toa. Quando None (padrão), extrai
+    normalmente e devolve o texto usado em resultado["_texto_extraido"]/
+    ["_fonte_extraida"] -- só quando a EXTRAÇÃO deu certo, mesmo que a
+    chamada de IA em si falhe depois -- pra quem chama poder cachear.
+
+    total_itens: opcional, Nº real de itens do edital (ItemEdital, dado
+    estruturado do PNCP -- independe de quanto texto a IA conseguiu ler).
+    Achado real (edital 143879, 223 itens, Termo de Referência de ~98000
+    caracteres sozinho já estourando MAX_TOTAL=80000): a análise voltou
+    "analise_incompleta": false, mas os "lotes" só cobriam os itens 1-141
+    -- a IA não sinalizou o corte porque o texto que ELA recebeu já tinha
+    sido truncado ANTES de chegar até ela (ver MAX_TOTAL logo abaixo); pra
+    ela, o texto simplesmente "acabava" num ponto que parecia normal, sem
+    nada de óbvio indicando que faltava mais. Autorrelato de truncamento
+    não é confiável pra esse caso -- comparar a cobertura real dos lotes
+    contra o Nº de itens que a gente JÁ SABE que o edital tem (não depende
+    de IA nenhuma) é.
+
+    Quando o texto combinado excede MAX_TOTAL, v16 troca o corte cego (só os
+    primeiros MAX_TOTAL caracteres) por recuperação via embeddings -- ver
+    _selecionar_trechos_relevantes_analise e o changelog de VERSAO_PROMPT
+    acima pro achado real que motivou isso (edital 155685: o corte cego só
+    cobria o Edital inteiro, perdendo a seção de habilitação técnica do
+    Termo de Referência por inteiro). No raríssimo caso de nem os trechos
+    recuperados caberem numa chamada só, cai pro fallback de múltiplos
+    pedaços sequenciais (_mesclar_resultados_analise)."""
+    if not ia_texto_disponivel(api_key):
+        return {"status": "sem_ia"}
+
+    confianca_baixa = False
+    if texto_pronto is not None:
+        texto, fonte = texto_pronto["texto"], texto_pronto.get("fonte")
+        # texto_pronto vem de uma extração anterior já cortada/selecionada
+        # (ver `_texto_extraido` no retorno desta função) -- não temos aqui
+        # o tamanho ANTES do corte nem os scores de similaridade originais,
+        # então usamos len(texto)>=MAX_TOTAL como aproximação de "foi
+        # cortado" (mesmo raciocínio já usado na retentativa de 413 abaixo).
+        # Não recalcula confianca_baixa aqui (exigiria os embeddings dos
+        # OUTROS pedaços do documento original, que texto_pronto não guarda)
+        # -- caminho usado só pra RETRY imediato após falha na chamada de
+        # IA, não pra reanálise completa.
+        texto_truncado = len(texto) >= MAX_TOTAL
+    else:
+        if not arquivos:
+            return {"status": "sem_arquivo"}
+
+        # prioriza retificação/errata, depois o edital principal, depois termo
+        # de referência/anexos (onde costumam estar as exigências de
+        # habilitação e a garantia contratual) -- ver _prioridade_arquivo
+        candidatos = sorted(arquivos, key=_prioridade_arquivo)
+
+        # Baixa cada documento INTEIRO (até _MAX_BRUTO_ANALISE, bem acima de
+        # MAX_TOTAL) antes de decidir o que entra no prompt -- v16: só
+        # truncar por conta própria DEPOIS de ver o texto inteiro permite
+        # escolher os trechos certos por similaridade em vez de cortar cego
+        # a partir do início. max_paginas sobe de 150 pra 250 (achado real:
+        # o Termo de Referência do edital 155685 tem 181 páginas -- 150
+        # perdia as últimas 31 mesmo antes de qualquer corte por caracteres).
+        partes, fontes = [], []
+        falhou_download = False
+        for a in candidatos[:5]:
+            if sum(len(p) for p in partes) >= _MAX_BRUTO_ANALISE:
+                break
+            if not a.get("url"):
+                continue
+            t, falhou = _baixar_texto_pdf(a["url"], max_paginas=250, max_chars=_MAX_BRUTO_ANALISE, marcar_paginas=True)
+            if falhou:
+                falhou_download = True
+                continue
+            if len(t) > 300:
+                titulo = a.get("titulo") or "documento"
+                partes.append(f"=== DOCUMENTO: {titulo} ===\n{t}")
+                fontes.append(titulo)
+        texto_bruto = "\n\n---\n\n".join(partes)
+        fonte = ", ".join(fontes) if fontes else None
+        if len(texto_bruto) < 300:
+            # não confunde "não consegui baixar o arquivo" (rede/PNCP
+            # instável) com "baixei e realmente não tem texto legível"
+            # (scan) -- ver docstring de _baixar_texto_pdf.
+            if falhou_download:
+                return {"status": "erro_download_pdf"}
+            return {"status": "sem_texto"}  # PDF escaneado/imagem ou não extraível
+
+        texto_truncado = len(texto_bruto) > MAX_TOTAL
+        if not texto_truncado:
+            # caminho rápido: o texto inteiro já cabe numa chamada só --
+            # nenhuma mudança de comportamento pra essa fatia de editais
+            # (a mesma que já funcionava certinho antes do achado v16).
+            texto = texto_bruto
+        else:
+            texto, confianca_baixa = _selecionar_trechos_relevantes_analise(texto_bruto)
+
+    if len(texto) <= MAX_TOTAL:
+        resultado_bruto = _analisar_texto_unico(objeto, texto, api_key)
+    else:
+        # Fallback de múltiplos pedaços (pedido do usuário): raríssimo --
+        # só quando até os trechos JÁ FILTRADOS pela recuperação ainda
+        # excedem MAX_TOTAL (ex.: várias categorias de habilitação, cada
+        # uma com seção longa, em editais com retificação somada ao
+        # original). Pedaços sequenciais de MAX_TOTAL cada, uma chamada de
+        # IA por pedaço, resultados juntados em _mesclar_resultados_analise.
+        pedacos = [texto[i:i + MAX_TOTAL] for i in range(0, len(texto), MAX_TOTAL)]
+        resultados_pedacos = []
+        for pedaco in pedacos:
+            r = _analisar_texto_unico(objeto, pedaco, api_key)
+            if r["status"] != "ok":
+                # mesma filosofia de "um corte aqui derruba a análise
+                # inteira" já documentada em _analisar_texto_unico -- falha
+                # rápido em vez de devolver um resultado parcial silencioso.
+                return {**r, "_texto_extraido": texto, "_fonte_extraida": fonte}
+            resultados_pedacos.append(r)
+        resultado_bruto = _mesclar_resultados_analise(resultados_pedacos)
+
+    if resultado_bruto["status"] != "ok":
+        return {**resultado_bruto, "_texto_extraido": texto, "_fonte_extraida": fonte}
+
+    lotes_normalizados = resultado_bruto["lotes"]
+    incompleta = resultado_bruto["analise_incompleta"]
+    avisos_cobertura = []
+    # cobertura real dos lotes x Nº de itens que o edital de fato tem (ver
+    # docstring de `total_itens` acima) -- só aplica quando há lotes pra
+    # medir (julgamento "item" não tem esse sinal disponível) e o dado
+    # estruturado do PNCP está disponível.
+    if lotes_normalizados and total_itens:
+        itens_cobertos = {n for l in lotes_normalizados for n in l["itens"]}
+        # folga pequena (2 itens): alguns editais têm item(ns) fora da
+        # numeração normal (ex.: um "item 0"/anexo administrativo) sem que
+        # isso signifique truncamento de verdade.
+        if len(itens_cobertos) < total_itens - 2:
+            incompleta = True
+            avisos_cobertura.append("Esta análise pode estar incompleta: nem todos os itens do "
+                                    "edital foram cobertos pelos lotes identificados.")
+    elif texto_truncado and total_itens:
+        # achado real (edital 145959, 209 itens, PDF de 212000 caracteres):
+        # editais só-por-item (sem agrupamento em lotes) não têm "lotes" pra
+        # medir cobertura -- o ramo acima simplesmente não roda. Sem "lotes"
+        # pra confirmar cobertura item a item, a única informação que temos
+        # é "o texto original excedia MAX_TOTAL" -- não dá pra provar que
+        # TODOS os itens foram vistos, então assume incompleto em vez de
+        # confiar no autorrelato da IA.
+        incompleta = True
+        avisos_cobertura.append("Esta análise pode estar incompleta: o texto do edital foi cortado "
+                                "antes do fim (documento grande) e este edital não usa agrupamento "
+                                "em lotes pra confirmar se todos os itens foram cobertos.")
+    if confianca_baixa:
+        # achado v16 (pedido do usuário): sinal INDEPENDENTE dos dois acima,
+        # vindo da recuperação por embeddings -- dispara quando a MELHOR
+        # similaridade encontrada pra alguma das 9 categorias padrão (ver
+        # _LIMIAR_CONFIANCA_ANALISE) ficou baixa demais, ou quando os
+        # embeddings estavam indisponíveis e o texto caiu pro corte cego de
+        # sempre. Pode disparar sozinho (texto_truncado=true mas lotes
+        # cobriram tudo, por exemplo) -- por isso é um `if` à parte, não
+        # `elif` dos ramos acima.
+        incompleta = True
+        avisos_cobertura.append("Esta análise pode estar incompleta: não foi possível confirmar "
+                                "com confiança que todas as seções de habilitação/exigências do "
+                                "edital foram localizadas no documento -- vale conferir manualmente.")
+    pontos_atencao = resultado_bruto["pontos_atencao"]
+    if incompleta and not resultado_bruto["analise_incompleta"]:
+        # achado real (edital 143879): quando é ESTA checagem (não a IA)
+        # que detecta o problema, a IA nunca escreveu o aviso que o prompt
+        # pede pra esse caso (ver linha 125 do _PROMPT) -- sem isso,
+        # "pontos_atencao" ficava sem nenhum sinal do problema, mesmo com
+        # "analise_incompleta" virando true.
+        pontos_atencao = pontos_atencao + avisos_cobertura
+    return {
+        **resultado_bruto,
+        "fonte": fonte,
+        "lotes": lotes_normalizados,
         "analise_incompleta": incompleta,
         "pontos_atencao": pontos_atencao,
         "_texto_extraido": texto,
