@@ -26,6 +26,7 @@ import hashlib
 import logging
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -221,9 +222,22 @@ def rerank(query: str, documentos: list[str], timeout: int = 30,
     `documentos` com mais de _RERANKER_MAX_DOCUMENTOS (catálogo grande) é
     dividido em várias chamadas (mesma query, broadcastada em cada lote —
     continua dentro do único jeito testado como seguro, ver parágrafo
-    acima), scores concatenados na mesma ordem -- ver achado real acima.
-    Isso significa mais chamadas (e mais custo) pra catálogo grande, mas é
-    o único jeito de manter o reranker funcionando acima do teto da API.
+    acima), disparadas EM PARALELO (ver achado real de performance abaixo)
+    e os scores concatenados de volta na MESMA ORDEM dos lotes (nunca na
+    ordem em que cada chamada termina) -- cada lote é uma pontuação
+    independente (mesma pergunta, fatia diferente do catálogo, um lote não
+    influencia o score do outro), então rodar em paralelo dá exatamente o
+    mesmo resultado de rodar em sequência, só mais rápido.
+
+    Achado real (usuário reportou: catálogo de 3600 produtos, recálculo da
+    base inteira com 14652 editais): em sequência, cada item levava ~8s (4
+    lotes x ~2s cada, um atrás do outro) -- pra um edital com dezenas de
+    itens, e milhares de editais, isso tornava um recálculo completo
+    impraticável (dias). As 4 chamadas são independentes uma da outra (ver
+    parágrafo acima), então rodá-las em paralelo é seguro e corta o tempo
+    de ~8s pra ~2s por item (o tempo do lote mais lento, não a soma de
+    todos) -- mais chamadas simultâneas por item, mas não mais chamadas no
+    total, e cada uma continua exatamente igual à de antes.
 
     Retorna None em qualquer falha (sem chave, cota estourada, rede, HTTP
     != 200, resposta com contagem de scores diferente do esperado, OU
@@ -237,12 +251,17 @@ def rerank(query: str, documentos: list[str], timeout: int = 30,
     url = _RERANKER_URL_TPL.format(modelo=modelo or settings.DEEPINFRA_MODELO_RERANKER)
     if len(documentos) <= _RERANKER_MAX_DOCUMENTOS:
         return _rerank_um_lote(query, documentos, url, chave, timeout, tentativas)
+    lotes = [documentos[inicio:inicio + _RERANKER_MAX_DOCUMENTOS]
+             for inicio in range(0, len(documentos), _RERANKER_MAX_DOCUMENTOS)]
+    resultados: list[list[float] | None] = [None] * len(lotes)
+    with ThreadPoolExecutor(max_workers=len(lotes)) as executor:
+        futuros = {executor.submit(_rerank_um_lote, query, lote, url, chave, timeout, tentativas): i
+                  for i, lote in enumerate(lotes)}
+        for futuro in as_completed(futuros):
+            resultados[futuros[futuro]] = futuro.result()
+    if any(r is None for r in resultados):
+        return None   # um lote falhando invalida a pontuação do item inteiro -- mesmo contrato de "sem sinal" de hoje, não parcial
     scores: list[float] = []
-    for inicio in range(0, len(documentos), _RERANKER_MAX_DOCUMENTOS):
-        lote = documentos[inicio:inicio + _RERANKER_MAX_DOCUMENTOS]
-        parcial = _rerank_um_lote(query, lote, url, chave, timeout, tentativas)
-        if parcial is None:
-            return None   # um lote falhando invalida a pontuação do item inteiro -- mesmo contrato de "sem sinal" de hoje, não parcial
+    for parcial in resultados:
         scores.extend(parcial)
     return scores
-    return None
