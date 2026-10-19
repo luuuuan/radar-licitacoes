@@ -80,7 +80,18 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # recuperada, mesmo sem a IA perceber (pedido do usuário: prefere
 # "analise_incompleta" de sobra, barato de conferir, a um requisito
 # inventado com confiança).
-VERSAO_PROMPT = 16
+# v17 = achado real (usuário reportou, edital 172472, SAMAE Blumenau/SC):
+# exclusivo_regional virou true com regiao_exclusiva="Blumenau, SC", mas o
+# edital só tem "LICITAÇÃO EXCLUSIVA PARA ME/EPP" -- nenhuma restrição
+# geográfica real. A IA confundiu o ENDEREÇO DO ÓRGÃO (Blumenau aparece no
+# cabeçalho de toda página, é só onde o SAMAE fica) com uma exigência de
+# que o LICITANTE também precise ser de lá, e separadamente confundiu
+# "exclusivo_me_epp" (porte da empresa) com "exclusivo_regional"
+# (localização) -- são exigências independentes, uma não implica a outra.
+# Reforça a instrução de exclusivo_regional pra exigir restrição EXPLÍCITA
+# de onde o licitante deve estar sediado, nunca inferida do endereço do
+# próprio órgão nem da exclusividade ME/EPP.
+VERSAO_PROMPT = 17
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -143,8 +154,8 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "data_sessao": APENAS a data/hora rotulada explicitamente como sessão pública/abertura/disputa. NÃO use outra data do documento (assinatura do edital, publicação, prazo de validade de certidão) só porque é a mais parecida com uma data de sessão. "" se não houver data de sessão explícita.
   - "pregoeiro_responsavel": APENAS o nome identificado explicitamente como pregoeiro/agente de contratação/leiloeiro responsável pela sessão. NÃO use o nome de quem assina o edital (ordenador de despesa, secretário) nem de outra autoridade — são papéis diferentes. "" se não constar.
   - "contato_orgao": telefone/e-mail de contato do órgão para dúvidas sobre o edital.
-  - "exclusivo_regional": boolean. true se a participação for restrita a empresas de uma região/estado/município específico.
-  - "regiao_exclusiva": string. Qual região/UF/município, se exclusivo_regional for true. "" caso contrário.
+  - "exclusivo_regional": boolean. true SOMENTE se o edital restringir EXPLICITAMENTE a participação a empresas sediadas/domiciliadas numa região/UF/município específico (ex.: "participação exclusiva de licitantes sediados no Município de X", margem de preferência regional do art. 48 da Lei 14.133). NÃO marque true só porque o ÓRGÃO CONTRATANTE (endereço que aparece no cabeçalho/rodapé de cada página do edital) fica numa cidade específica — isso identifica onde o ÓRGÃO está, não uma exigência de onde o LICITANTE precisa estar. Também não confunda com "exclusivo_me_epp" (abaixo): uma licitação "exclusiva para ME/EPP" é sobre o PORTE da empresa (LC 123/2006), nada a ver com localização geográfica — uma coisa não implica a outra.
+  - "regiao_exclusiva": string. A região/UF/município EXATAMENTE como a restrição aparece no texto, se exclusivo_regional for true. "" caso contrário.
 
 - "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
   - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
