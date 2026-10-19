@@ -2,10 +2,15 @@ name: Coleta automática de licitações
 
 
 on:
-  schedule:
-    # Horários em UTC. Brasília = UTC-3.
-    - cron: "0 6 * * *"    
-    - cron: "0 12 * * *"     
+  # schedule desativado (2026-10): a coleta diária agora é disparada por
+  # Cron Jobs nativos da Railway, no mesmo projeto do app -- mesma rota
+  # /api/coletar-cron, só muda quem chama. Mantido aqui comentado (não
+  # apagado) como plano B, e workflow_dispatch continua ativo pra disparo
+  # manual se precisar.
+  # schedule:
+  #   # Horários em UTC. Brasília = UTC-3.
+  #   - cron: "0 6 * * *"
+  #   - cron: "0 12 * * *"
   workflow_dispatch: {}
 
 jobs:

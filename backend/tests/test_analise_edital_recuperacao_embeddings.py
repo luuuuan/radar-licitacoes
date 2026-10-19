@@ -21,6 +21,7 @@ from app.analise_edital import (
     analisar,
     _truncar_justo_entre_documentos,
     _selecionar_trechos_relevantes_analise,
+    _extrair_tabela_lotes,
     _mesclar_resultados_analise,
     _analisar_texto_unico,
     _CONSULTAS_HABILITACAO_ANALISE,
@@ -349,3 +350,136 @@ def test_mesclar_lotes_descarta_tudo_se_item_colide_entre_pedacos():
     mesclado = _mesclar_resultados_analise([r1, r2])
 
     assert mesclado["lotes"] == []
+
+
+# --------------------------------------------------------------------- #
+# _extrair_tabela_lotes -- achado real (edital 170373, Câmara Municipal de
+# Araucária): a composição dos lotes (quais itens pertencem a cada lote)
+# mora numa tabela grande que nenhuma das 9 consultas de
+# _CONSULTAS_HABILITACAO_ANALISE busca (testado contra a API real:
+# similaridade ~0.50, nunca no top-2) -- a IA via 2 lotes com itens=[] e
+# um 3º lote nem aparecia. Busca o marcador literal "VALOR TOTAL DO LOTE
+# N" em vez de depender de similaridade semântica pra achar uma tabela.
+# --------------------------------------------------------------------- #
+
+def test_extrair_tabela_lotes_acha_sequencia_completa():
+    texto = (
+        "texto antes, sem relação\n"
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"
+        "1 Caneta azul\n2 Caneta vermelha\n"
+        "VALOR TOTAL DO LOTE 1 R$ 100,00\n"
+        "3 Lápis preto\n4 Borracha branca\n"
+        "VALOR TOTAL DO LOTE 2 R$ 200,00\n"
+        "texto depois, sem relação"
+    )
+    r = _extrair_tabela_lotes(texto)
+    assert r is not None
+    assert "LOTE ITEM DESCRIÇÃO" in r
+    assert "Caneta azul" in r
+    assert "Lápis preto" in r
+    assert "VALOR TOTAL DO LOTE 2" in r
+    assert "texto depois" not in r
+
+
+def test_extrair_tabela_lotes_cabecalho_repetido_por_pagina_pega_o_primeiro():
+    """Achado real (edital 170373): o cabeçalho de coluna se repete a cada
+    página extraída do PDF -- pegar só a ÚLTIMA ocorrência antes do 1º
+    marcador de lote perdia os itens das páginas anteriores (ex.: perdia
+    os itens 1-23 de um lote que só terminava no item 28)."""
+    texto = (
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"   # cabeçalho da pág. 1
+        "1 Item um da pagina um\n"
+        "[QUEBRA DE PAGINA]\n"
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"   # cabeçalho repetido na pág. 2
+        "2 Item dois da pagina dois\n"
+        "VALOR TOTAL DO LOTE 1 R$ 50,00\n"
+        "3 Item tres\n"
+        "VALOR TOTAL DO LOTE 2 R$ 60,00\n"
+    )
+    r = _extrair_tabela_lotes(texto)
+    assert r is not None
+    assert "Item um da pagina um" in r   # não pode começar só na pág. 2
+
+
+def test_extrair_tabela_lotes_duplicada_pega_a_primeira_copia():
+    """Achado real: documentos grandes costumam ter a MESMA tabela
+    duplicada (edital + anexo/termo de referência remontados no mesmo
+    PDF) -- pega só a 1ª sequência completa, não a 2ª cópia mais adiante."""
+    copia_1 = (
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"
+        "1 Item original\n"
+        "VALOR TOTAL DO LOTE 1 R$ 10,00\n"
+        "2 Item original dois\n"
+        "VALOR TOTAL DO LOTE 2 R$ 20,00\n"
+    )
+    copia_2 = (
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"
+        "1 Item da copia duplicada\n"
+        "VALOR TOTAL DO LOTE 1 R$ 10,00\n"
+        "2 Item da copia duplicada dois\n"
+        "VALOR TOTAL DO LOTE 2 R$ 20,00\n"
+    )
+    texto = copia_1 + ("x" * 5000) + copia_2
+    r = _extrair_tabela_lotes(texto)
+    assert r is not None
+    assert "Item original" in r
+    assert "Item da copia duplicada" not in r
+
+
+def test_extrair_tabela_lotes_sem_padrao_retorna_none():
+    assert _extrair_tabela_lotes("edital comum, sem lote nenhum, julgamento por item") is None
+
+
+def test_extrair_tabela_lotes_so_um_lote_retorna_none():
+    # 1 "lote" sozinho não é bem uma COMPOSIÇÃO de lotes -- não teria o
+    # que mapear item->lote mesmo (achado real: julgamento="lote" sempre
+    # tem 2+ lotes de verdade; 1 só não faz sentido pra esse critério).
+    texto = "LOTE ITEM DESCRIÇÃO\n1 Item\nVALOR TOTAL DO LOTE 1 R$ 10,00\n"
+    assert _extrair_tabela_lotes(texto) is None
+
+
+def test_extrair_tabela_lotes_numeracao_fora_de_ordem_nao_conta():
+    # "LOTE 2" aparece antes de "LOTE 1" nunca -- sem um "LOTE 1" real
+    # seguido de um "LOTE 2" depois dele, não é uma sequência válida.
+    texto = "VALOR TOTAL DO LOTE 2 R$ 10,00\nVALOR TOTAL DO LOTE 5 R$ 20,00\n"
+    assert _extrair_tabela_lotes(texto) is None
+
+
+def test_extrair_tabela_lotes_span_absurdo_retorna_none():
+    # trava de sanidade -- se a sequência encontrada (cabeçalho até o
+    # último marcador) passar de _MAX_TABELA_LOTES, provavelmente não é
+    # mesmo uma tabela contígua -- melhor não incluir nada a arriscar um
+    # trecho gigante e sem sentido.
+    texto = (
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"
+        + ("x" * 50000)
+        + "VALOR TOTAL DO LOTE 1 R$ 10,00\n"
+        + ("y" * 50000)
+        + "VALOR TOTAL DO LOTE 2 R$ 20,00\n"
+    )
+    assert _extrair_tabela_lotes(texto) is None
+
+
+def test_selecionar_trechos_inclui_tabela_de_lotes_garantida():
+    """A tabela de lotes entra GARANTIDA no texto final, mesmo que as 9
+    consultas de habilitação não a considerem parecida com nada (mesmo
+    achado real: similaridade ~0.50, nunca no top-2 de verdade)."""
+    tabela = (
+        "LOTE ITEM DESCRIÇÃO CATMAT UNID QTDE\n"
+        "1 Item do lote um\n"
+        "VALOR TOTAL DO LOTE 1 R$ 10,00\n"
+        "2 Item do lote dois\n"
+        "VALOR TOTAL DO LOTE 2 R$ 20,00\n"
+    )
+    texto = tabela + ("x" * 10000)   # resto do documento, grande o bastante pra acionar embeddings
+
+    def _vetores_fake(textos, api_key=None):
+        # a tabela nunca "bate" com nenhuma consulta -- tudo ortogonal,
+        # igual ao caso real (similaridade baixa, nunca selecionada por
+        # score). Mesmo assim tem que entrar, porque é garantida.
+        return [[0.0, 1.0] if t in _CONSULTAS_HABILITACAO_ANALISE else [1.0, 0.0] for t in textos]
+
+    with patch("app.analise_edital.embeddings_deepinfra", side_effect=_vetores_fake):
+        trecho, _ = _selecionar_trechos_relevantes_analise(texto)
+    assert "Item do lote um" in trecho
+    assert "Item do lote dois" in trecho

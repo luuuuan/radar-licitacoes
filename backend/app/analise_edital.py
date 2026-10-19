@@ -133,7 +133,23 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # por item em requisitos_tecnicos/exige_amostra -- cada item já tem sua
 # descrição própria vinda direto do PNCP (ItemEdital), não passa por este
 # prompt.
-VERSAO_PROMPT = 18
+# v19 = achado real (usuário reportou, edital 170373, Câmara Municipal de
+# Araucária): julgamento por lote com 3 lotes reais -- a IA devolveu só 2
+# lotes, ambos com "itens": [] (nenhum item mapeado), e um 3º lote (o
+# maior em valor, R$ 84 mil de R$ 93,8 mil) nem apareceu. Causa: a
+# composição dos lotes mora numa TABELA grande ("LOTE ITEM DESCRIÇÃO...
+# VALOR TOTAL DO LOTE N"), e nenhuma das 9 consultas de
+# _CONSULTAS_HABILITACAO_ANALISE pergunta por isso -- testado contra a API
+# real, a similaridade dessa tabela ficou em ~0.50, nunca entrando no
+# top-2 de consulta nenhuma (ela é estruturada/tabular, não uma cláusula
+# com sentido concentrado -- embeddings semânticos não são a ferramenta
+# certa pra achar isso). _extrair_tabela_lotes busca o marcador literal
+# "VALOR TOTAL DO LOTE N" (convenção comum em editais PNCP julgados por
+# lote) e inclui a tabela inteira GARANTIDA, fora da disputa por
+# similaridade -- pega só a 1ª sequência completa e em ordem, ignorando
+# cópias duplicadas da mesma tabela mais adiante no documento (comum:
+# edital + anexo/TR remontados no mesmo PDF).
+VERSAO_PROMPT = 19
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1479,13 +1495,86 @@ def _truncar_justo_entre_documentos(texto_bruto: str, max_chars: int) -> str:
     return "\n\n---\n\n".join(d[:fatia] for d in documentos)[:max_chars]
 
 
+# Achado real (edital 170373, Câmara Municipal de Araucária, julgamento
+# por lote): a composição dos lotes (quais itens numerados pertencem a
+# cada lote) mora numa TABELA grande ("LOTE ITEM DESCRIÇÃO CATMAT UNID
+# QTDE... VALOR TOTAL DO LOTE N"), e nenhuma das 9 consultas de
+# _CONSULTAS_HABILITACAO_ANALISE pergunta por isso -- testado contra a API
+# real (DeepInfra): a similaridade dos pedaços que têm essa tabela ficou
+# em ~0.50, nunca entrando no top-2 de consulta nenhuma (fica no meio do
+# bolo, entre os 188 pedaços de um documento de 469 mil chars). Resultado
+# real: 2 dos 3 lotes vieram com "itens": [] e o 3º lote nem apareceu.
+#
+# Uma TABELA estruturada não é bem capturada por similaridade semântica
+# (pensada pra achar uma CLÁUSULA com sentido concentrado, não uma lista
+# repetitiva de linhas numéricas) -- em vez disso, busca o marcador
+# literal "VALOR TOTAL DO LOTE N", convenção comum em editais do PNCP
+# julgados por lote (não é um formato específico deste órgão), que marca
+# o FIM de cada seção de lote com exatidão, sem depender de nenhum score.
+# Documentos grandes costumam ter essa MESMA tabela duplicada (edital +
+# anexo/termo de referência remontados no mesmo PDF, às vezes repetido
+# mais de uma vez) -- pega só a 1ª sequência COMPLETA e em ordem (Lote 1,
+# depois 2, depois 3...), ignorando cópias repetidas mais adiante.
+_PADRAO_TOTAL_LOTE = re.compile(r"V\s*ALOR\s*TOTAL\s*DO\s*LOTE\s*(\d+)", re.IGNORECASE)
+_PADRAO_CABECALHO_LOTE = re.compile(r"LOTE\s*ITEM\s*DESCRI[ÇC][ÃA]O", re.IGNORECASE)
+# trava de sanidade: acima disso, a sequência encontrada provavelmente não
+# é mesmo uma tabela de lotes contígua (números batendo por coincidência,
+# espalhados pelo documento) -- melhor não incluir nada a arriscar
+# devolver um trecho gigante e sem sentido.
+_MAX_TABELA_LOTES = 40000
+
+
+def _extrair_tabela_lotes(texto: str) -> str | None:
+    """Acha a tabela de composição dos lotes (ver achado real acima) pelo
+    marcador literal "VALOR TOTAL DO LOTE N" -- None se não achar nenhuma
+    sequência (Lote 1, 2, 3... crescente, sem pular número) com pelo menos
+    2 lotes, ou se a trava de sanidade disparar."""
+    marcas = list(_PADRAO_TOTAL_LOTE.finditer(texto))
+    if not marcas:
+        return None
+    escolhidos = []
+    pos_minima = 0
+    numero_esperado = 1
+    while True:
+        candidatos = [m for m in marcas if int(m.group(1)) == numero_esperado and m.start() >= pos_minima]
+        if not candidatos:
+            break
+        m = min(candidatos, key=lambda m: m.start())
+        escolhidos.append(m)
+        pos_minima = m.end()
+        numero_esperado += 1
+    if len(escolhidos) < 2:
+        return None
+    inicio, fim = escolhidos[0].start(), escolhidos[-1].end()
+    # procura o cabeçalho da tabela ("LOTE ITEM DESCRIÇÃO...") antes do 1º
+    # marcador, pra incluir o COMEÇO de verdade da tabela (os itens do
+    # lote 1), não só a partir do fim dele. Achado real (edital 170373):
+    # esse cabeçalho de coluna se REPETE a cada página da tabela (comum em
+    # extração de PDF) -- pegar só a ÚLTIMA ocorrência antes do marcador
+    # pegava o cabeçalho da ÚLTIMA página do lote 1 (ex.: já em cima do
+    # item 24), perdendo os itens 1-23 que vieram antes. Pega a PRIMEIRA
+    # ocorrência dentro de uma janela de 20000 chars pra trás -- grande o
+    # bastante pra cobrir várias páginas da MESMA tabela, mas sem arriscar
+    # pegar um cabeçalho de uma tabela completamente diferente, bem mais
+    # pra trás no documento.
+    cabecalhos_na_janela = list(_PADRAO_CABECALHO_LOTE.finditer(texto, max(0, inicio - 20000), inicio))
+    if cabecalhos_na_janela:
+        inicio = cabecalhos_na_janela[0].start()
+    if fim - inicio > _MAX_TABELA_LOTES:
+        return None
+    return texto[inicio:fim]
+
+
 def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
     """Acha, no texto COMBINADO de todos os documentos baixados, só os
     trechos mais parecidos com cada uma das 9 categorias padrão de
     habilitação/exigência (_CONSULTAS_HABILITACAO_ANALISE) -- mesmo padrão
     de itens_pdf._selecionar_trechos_relevantes (embeddings BGE-M3/
     DeepInfra), só que as "consultas" aqui são as categorias da Lei 14.133,
-    não os itens do edital.
+    não os itens do edital. Quando acha uma tabela de composição de lotes
+    (ver _extrair_tabela_lotes, achado real do edital 170373), ela entra
+    GARANTIDA, fora da disputa por similaridade -- o resto do orçamento
+    (MAX_TOTAL menos o tamanho dela) ainda vai pras 9 consultas normais.
 
     Devolve (texto_selecionado, confianca_baixa). confianca_baixa é True
     quando os embeddings estão indisponíveis (cota/erro -- cai pro corte
@@ -1513,6 +1602,12 @@ def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
         # de caracteres já conhecido).
         return _truncar_justo_entre_documentos(texto, MAX_TOTAL), False
 
+    # tabela de lotes GARANTIDA (ver achado real acima) -- reserva o espaço
+    # dela primeiro; o resto do orçamento (MAX_TOTAL menos ela) ainda vai
+    # pras 9 consultas normais, igual sempre.
+    tabela_lotes = _extrair_tabela_lotes(texto)
+    orcamento = MAX_TOTAL - (len(tabela_lotes) + 2) if tabela_lotes else MAX_TOTAL
+
     vetores = embeddings_deepinfra(partes + _CONSULTAS_HABILITACAO_ANALISE)
     vetores_partes = vetores[:len(partes)]
     vetores_consultas = vetores[len(partes):]
@@ -1522,7 +1617,10 @@ def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
         # achado v16, já reparado entre documentos -- ver
         # _truncar_justo_entre_documentos), mas marca confiança baixa: sem
         # embeddings não tem como saber se o corte pegou a seção certa.
-        return _truncar_justo_entre_documentos(texto, MAX_TOTAL), True
+        trecho = _truncar_justo_entre_documentos(texto, orcamento)
+        if tabela_lotes:
+            trecho = tabela_lotes + "\n\n" + trecho
+        return trecho, True
 
     indices: set[int] = set()
     pior_score: float | None = None
@@ -1539,6 +1637,15 @@ def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
 
     ordenados = sorted(i for i in indices if 0 <= i < len(partes))
     trecho = "\n\n".join(partes[i] for i in ordenados)
+    if tabela_lotes:
+        trecho = tabela_lotes + "\n\n" + trecho
+        # salvaguarda: a tabela de lotes garantida entra INTEIRA de
+        # propósito (é exata, não vale cortar no meio) -- se sobrar maior
+        # que MAX_TOTAL mesmo assim (tabela grande + 9 consultas no top),
+        # quem perde espaço é a parte de similaridade (um corte simples no
+        # fim dela), nunca a tabela.
+        if len(trecho) > MAX_TOTAL:
+            trecho = trecho[:MAX_TOTAL]
     confianca_baixa = pior_score is not None and pior_score < _LIMIAR_CONFIANCA_ANALISE
     return trecho, confianca_baixa
 
