@@ -19,10 +19,14 @@
        do usuário: os cards da lista passam por baixo desse campo ao rolar
        a tela, e como --panel é opaco, backdrop-filter:blur não tem nada
        translúcido pra borrar (blur só aparece através de transparência).
-       Opacidade alta (.88) pra continuar lendo o texto do campo sem
-       esforço, só o suficiente pra deixar o que passa atrás borrado em
-       vez de nitidamente visível. */
-    --panel-vidro:rgba(26,33,41,.88);
+       Achado real (usuário reportou, print): opacidade alta (.88, valor
+       original) deixava essa faixa parecer um retângulo cinza sólido --
+       sobretudo sem nada ainda rolando por baixo dela (lista vazia/topo da
+       página) -- em vez do "vidro fosco" pretendido. A legibilidade do
+       texto do campo em si não depende dessa opacidade (.busca-item-destaque
+       tem fundo PRÓPRIO, opaco, var(--panel)) -- só a faixa ao redor dele
+       fica mais transparente, deixando o blur ser o efeito visível, não a cor. */
+    --panel-vidro:rgba(26,33,41,.2);
     /* fundo do botão "excluir" (.btn.perigo) -- valor fixo (não muda por
        tema) escolhido à parte de --destructive: achado do agente
        code-reviewer, texto branco sobre --destructive no tema escuro
@@ -40,7 +44,7 @@
     --txt:#1a2129; --muted:#5b6770; --accent:#6D28D9;
     --forte:#16a34a; --medio:#ca8a04; --fraco:#94a3b8;
     --destructive:#dc2626; --ring:#6D28D9; --overlay:rgba(15,23,42,.45);
-    --panel-vidro:rgba(255,255,255,.88);
+    --panel-vidro:rgba(255,255,255,.2);
   }
   *{box-sizing:border-box}
   /* troca de tema (claro/escuro) suave em vez de instantânea */
@@ -960,7 +964,7 @@
      a partir do tablet viram uma lateral fixa e sempre visível, com scroll próprio
      (assim os filtros não empurram a lista de editais). ---- */
   .editais-layout{display:flex;flex-direction:column;gap:14px;position:relative}
-  .filtros-btn-mobile{display:inline-flex;align-items:center;gap:6px;margin-bottom:2px}
+  .filtros-btn-mobile{display:inline-flex;align-items:center;gap:6px;margin-bottom:18px}
   .filtros-overlay{display:none}
   .filtros-overlay.aberto{display:block;position:fixed;inset:0;background:var(--overlay);z-index:5500}
   .filtros-lateral-head{display:flex;justify-content:space-between;align-items:center;
@@ -1063,7 +1067,7 @@
        quem precisava de "espaço pra grudar" era o filho; agora é o próprio
        #slot-busca-desktop que gruda). */
     #slot-busca-desktop{position:sticky;top:123px;z-index:5;padding:10px 0;
-      margin:0 0 4px;
+      margin:0 0 18px;
       background:var(--panel-vidro);
       backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
       transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden}
