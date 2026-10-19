@@ -64,3 +64,84 @@ def test_200_continua_funcionando_normalmente():
 
     assert r == [0.9, 0.1]
     assert emb.ia_bloqueada("chave-ok") is False
+
+
+# --------------------------------------------------------------------- #
+# Achado real (usuário reportou, catálogo de 3600 produtos): a DeepInfra
+# passou a rejeitar (HTTP 422, "queries... at most 1024 items") quando
+# `documentos` passa de _RERANKER_MAX_DOCUMENTOS -- o broadcast de 1 query
+# contra N documentos é validado do lado deles como se "queries" tivesse N
+# itens. Catálogo de 3600 produtos falhava em TODA chamada, SEMPRE,
+# degradando o motor pra só TF-IDF (reranker sempre None) sem nenhum aviso
+# visível no app.
+# --------------------------------------------------------------------- #
+
+def test_catalogo_grande_divide_em_lotes_dentro_do_teto():
+    emb._bloqueado_ate.clear()
+    corpos_recebidos = []
+
+    def _post(url, json=None, **kw):
+        corpos_recebidos.append(json)
+        n = len(json["documents"])
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"scores": [0.5] * n}
+        return resp
+
+    documentos = [f"produto {i}" for i in range(emb._RERANKER_MAX_DOCUMENTOS + 500)]
+    with patch("app.matching.embeddings.requests.post", side_effect=_post):
+        r = emb.rerank("item", documentos, api_key="chave-catalogo-grande")
+
+    # nenhuma chamada excedeu o teto de documentos por request
+    assert all(len(c["documents"]) <= emb._RERANKER_MAX_DOCUMENTOS for c in corpos_recebidos)
+    assert len(corpos_recebidos) == 2   # 1024 + 500 -- 2 lotes
+    # scores concatenados na MESMA ordem/tamanho do catálogo inteiro
+    assert r == [0.5] * len(documentos)
+    # cada lote manda a MESMA query (broadcast), nunca mais de uma por chamada
+    assert all(c["queries"] == ["item"] for c in corpos_recebidos)
+
+
+def test_catalogo_grande_lote_que_falha_invalida_o_item_inteiro():
+    emb._bloqueado_ate.clear()
+    chamadas = {"n": 0}
+
+    def _post(url, json=None, **kw):
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"scores": [0.5] * len(json["documents"])}
+            return resp
+        # 2º lote falha -- achado real que motivou o disjuntor (ver testes
+        # acima): não vale devolver scores PARCIAIS do catálogo, o item
+        # inteiro fica sem sinal confiável, igual qualquer outra falha.
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.text = "erro"
+        return resp
+
+    documentos = [f"produto {i}" for i in range(emb._RERANKER_MAX_DOCUMENTOS + 500)]
+    with patch("app.matching.embeddings.requests.post", side_effect=_post), \
+         patch("app.matching.embeddings.time.sleep"):
+        r = emb.rerank("item", documentos, api_key="chave-catalogo-grande-2", tentativas=1)
+
+    assert r is None
+
+
+def test_catalogo_dentro_do_teto_continua_numa_chamada_so():
+    emb._bloqueado_ate.clear()
+    chamadas = []
+
+    def _post(url, json=None, **kw):
+        chamadas.append(json)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"scores": [0.1] * len(json["documents"])}
+        return resp
+
+    documentos = [f"produto {i}" for i in range(emb._RERANKER_MAX_DOCUMENTOS)]
+    with patch("app.matching.embeddings.requests.post", side_effect=_post):
+        r = emb.rerank("item", documentos, api_key="chave-catalogo-no-teto")
+
+    assert len(chamadas) == 1
+    assert r == [0.1] * len(documentos)

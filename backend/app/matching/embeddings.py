@@ -137,33 +137,23 @@ def embeddings_deepinfra(textos: list[str], timeout: int = 30,
 _RERANKER_URL_TPL = "https://api.deepinfra.com/v1/inference/{modelo}"
 
 
-def rerank(query: str, documentos: list[str], timeout: int = 30,
-          api_key: str | None = None, tentativas: int = 2,
-          modelo: str | None = None) -> list[float] | None:
-    """Pontua a relevância de cada item de `documentos` contra `query`
-    (cross-encoder, DeepInfra) — mesma chave global de embeddings_deepinfra.
-    `modelo`: sobrescreve settings.DEEPINFRA_MODELO_RERANKER pra essa chamada
-    (ver MatchingEngine.modelo_reranker — só usado no seletor experimental do
-    recálculo, por enquanto restrito a uma conta).
+# Achado real (usuário reportou, catálogo de 3600 produtos): a DeepInfra
+# passou a rejeitar a chamada (HTTP 422, "queries... List should have at
+# most 1024 items") quando `documentos` passa de 1024 -- o broadcast de 1
+# query contra N documentos (ver docstring de rerank()) é validado do lado
+# deles como se "queries" tivesse N itens, e N > 1024 estoura o teto.
+# Catálogo de 3600 produtos falhava em TODA chamada, SEMPRE, degradando o
+# motor pra só TF-IDF (reranker sempre None) sem nenhum aviso visível no
+# app, só nos logs do servidor -- um catálogo desse tamanho não é caso
+# raro, é só uma conta que cresceu.
+_RERANKER_MAX_DOCUMENTOS = 1024
 
-    IMPORTANTE, testado contra a API real: ela só aceita `queries` e
-    `documents` do MESMO TAMANHO, e usar mais de 1 query DISTINTA por
-    chamada dá resultado ERRADO silenciosamente (o score parece depender só
-    do índice do documento, ignorando qual query foi pareada — nada indica
-    isso na resposta, só comparando os números). Por isso esta função só
-    aceita UMA query por chamada — a API faz o broadcast dela contra todos
-    os documentos automaticamente quando `queries` tem 1 elemento só. NUNCA
-    chame com mais de uma query por request.
 
-    Retorna None em qualquer falha (sem chave, cota estourada, rede, HTTP
-    != 200, resposta com contagem de scores diferente do esperado) — quem
-    chama trata como "sem sinal disponível", não deixa a exceção subir."""
-    chave = api_key or settings.DEEPINFRA_API_KEY
-    if not chave or not documentos:
-        return None
-    if ia_bloqueada(chave):
-        return None
-    url = _RERANKER_URL_TPL.format(modelo=modelo or settings.DEEPINFRA_MODELO_RERANKER)
+def _rerank_um_lote(query: str, documentos: list[str], url: str, chave: str,
+                    timeout: int, tentativas: int) -> list[float] | None:
+    """UMA chamada ao reranker (já dentro do teto de _RERANKER_MAX_DOCUMENTOS)
+    -- extraído de rerank() pra poder ser chamado várias vezes, uma por
+    lote, quando o catálogo inteiro excede o teto (ver rerank())."""
     body = {"queries": [query], "documents": documentos}
     for tentativa in range(1, max(1, tentativas) + 1):
         try:
@@ -207,4 +197,52 @@ def rerank(query: str, documentos: list[str], timeout: int = 30,
                        len(scores), len(documentos))
             return None
         return scores
+    return None
+
+
+def rerank(query: str, documentos: list[str], timeout: int = 30,
+          api_key: str | None = None, tentativas: int = 2,
+          modelo: str | None = None) -> list[float] | None:
+    """Pontua a relevância de cada item de `documentos` contra `query`
+    (cross-encoder, DeepInfra) — mesma chave global de embeddings_deepinfra.
+    `modelo`: sobrescreve settings.DEEPINFRA_MODELO_RERANKER pra essa chamada
+    (ver MatchingEngine.modelo_reranker — só usado no seletor experimental do
+    recálculo, por enquanto restrito a uma conta).
+
+    IMPORTANTE, testado contra a API real: ela só aceita `queries` e
+    `documents` do MESMO TAMANHO, e usar mais de 1 query DISTINTA por
+    chamada dá resultado ERRADO silenciosamente (o score parece depender só
+    do índice do documento, ignorando qual query foi pareada — nada indica
+    isso na resposta, só comparando os números). Por isso esta função só
+    aceita UMA query por chamada — a API faz o broadcast dela contra todos
+    os documentos automaticamente quando `queries` tem 1 elemento só. NUNCA
+    chame com mais de uma query por request.
+
+    `documentos` com mais de _RERANKER_MAX_DOCUMENTOS (catálogo grande) é
+    dividido em várias chamadas (mesma query, broadcastada em cada lote —
+    continua dentro do único jeito testado como seguro, ver parágrafo
+    acima), scores concatenados na mesma ordem -- ver achado real acima.
+    Isso significa mais chamadas (e mais custo) pra catálogo grande, mas é
+    o único jeito de manter o reranker funcionando acima do teto da API.
+
+    Retorna None em qualquer falha (sem chave, cota estourada, rede, HTTP
+    != 200, resposta com contagem de scores diferente do esperado, OU
+    qualquer lote intermediário falhando) — quem chama trata como "sem
+    sinal disponível", não deixa a exceção subir."""
+    chave = api_key or settings.DEEPINFRA_API_KEY
+    if not chave or not documentos:
+        return None
+    if ia_bloqueada(chave):
+        return None
+    url = _RERANKER_URL_TPL.format(modelo=modelo or settings.DEEPINFRA_MODELO_RERANKER)
+    if len(documentos) <= _RERANKER_MAX_DOCUMENTOS:
+        return _rerank_um_lote(query, documentos, url, chave, timeout, tentativas)
+    scores: list[float] = []
+    for inicio in range(0, len(documentos), _RERANKER_MAX_DOCUMENTOS):
+        lote = documentos[inicio:inicio + _RERANKER_MAX_DOCUMENTOS]
+        parcial = _rerank_um_lote(query, lote, url, chave, timeout, tentativas)
+        if parcial is None:
+            return None   # um lote falhando invalida a pontuação do item inteiro -- mesmo contrato de "sem sinal" de hoje, não parcial
+        scores.extend(parcial)
+    return scores
     return None
