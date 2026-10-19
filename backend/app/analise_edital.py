@@ -104,7 +104,19 @@ VERSAO_PROMPT = 16
 # entram como itens informativos status="declaracao" -- a lista passa a
 # mostrar os MESMOS itens do checklist por nome, só que cada um explicando
 # por que não vira ✓/✗ quando for o caso, em vez de esconder.
-VERSAO_VERIFICACAO_DOCUMENTOS = 3
+# v4 = achado real (usuário reportou, edital 159668): a IA respondeu com um
+# item "Atestado de capacidade técnica" marcado "não atendido", mas
+# documentos_habilitacao["tecnica"] deste edital é [] -- o prompt NUNCA
+# mencionou esse documento (ver _formatar_requisitos, só manda o que de
+# fato está em juridica/fiscal_trabalhista/tecnica/economico_financeira).
+# A IA inventou a exigência mais comum de licitação por conta própria,
+# apesar da instrução "não invente nada que não esteja nos textos" e
+# "exigência copiada exatamente como está na lista" -- confiar só no
+# prompt não bastou. verificar_documentos_usuario agora descarta (com log)
+# qualquer item cujo "exigido" não tenha NENHUMA palavra significativa em
+# comum com o que foi de fato mandado -- pega qualquer invenção sem
+# relação com o texto de entrada, não só este caso específico.
+VERSAO_VERIFICACAO_DOCUMENTOS = 4
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -1252,6 +1264,17 @@ def _sem_acento(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
 
 
+def _palavras_significativas(texto: str) -> set[str]:
+    """Palavras de 5+ letras, sem acento e minúsculas -- usada só pra
+    detectar se uma "exigência" que a IA devolveu em
+    verificar_documentos_usuario tem qualquer base no que foi de fato
+    mandado no prompt (ver _vocabulario_requisitos ali). Palavras curtas
+    (artigos, preposições) ficam de fora de propósito -- aparecem em
+    qualquer frase e não ajudam a distinguir "é sobre o que foi mandado"
+    de "inventou um documento novo"."""
+    return {p for p in re.findall(r"[a-z]+", _sem_acento(texto or "").lower()) if len(p) >= 5}
+
+
 def _prioridade_arquivo(a: dict) -> int:
     """Prioriza retificação/errata/aditamento -- achado real (edital 127082):
     quando existe uma retificação alterando data/condições, o edital
@@ -2068,6 +2091,11 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
             return {"status": "ok", "itens": itens_declaracao}
         return {"status": "sem_requisitos"}
     requisitos = _formatar_requisitos(docs)
+    # achado real (edital 159668, ver VERSAO_VERIFICACAO_DOCUMENTOS v4):
+    # vocabulário do que foi REALMENTE mandado no prompt (igual ao corte
+    # de requisitos[:6000] usado lá embaixo) -- serve pra filtrar exigência
+    # inventada pela IA depois (ver o loop de `itens`).
+    vocabulario_requisitos = _palavras_significativas(requisitos[:6000])
 
     # Achado real (usuário reportou: CNDT cadastrada e válida, IA disse
     # "não atendido" -- edital 126768): o corte antigo era um limite FIXO
@@ -2116,6 +2144,22 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
     for it in data["itens"]:
         if not isinstance(it, dict) or not it.get("exigido"):
             continue
+        exigido = str(it.get("exigido"))
+        # achado real (edital 159668, ver VERSAO_VERIFICACAO_DOCUMENTOS v4):
+        # a IA respondeu "Atestado de capacidade técnica" como exigência,
+        # mesmo esse edital não tendo NADA do tipo em documentos_habilitacao
+        # (tecnica=[]) -- o prompt nunca mencionou isso. Sem nenhuma
+        # palavra significativa em comum com o que foi de fato mandado, não
+        # tem como ser uma reformulação de uma exigência real, só invenção.
+        # palavras_exigido vazio (sigla curta, tipo "CND" sozinho, sem mais
+        # nada na frase) não entra nessa checagem -- não tem base nenhuma
+        # pra julgar, pra qualquer lado, então não descarta por falta de
+        # prova (só descarta quando SOBRA prova de que é outra coisa).
+        palavras_exigido = _palavras_significativas(exigido)
+        if vocabulario_requisitos and palavras_exigido and not (palavras_exigido & vocabulario_requisitos):
+            log.warning("verificar_documentos_usuario(): IA devolveu exigência sem base "
+                       "no prompt, descartada: %r", exigido)
+            continue
         # pedido do usuário: exigência alternativa que não se aplica a este
         # fornecedor (ex.: exigência de sociedade empresária quando os
         # documentos cadastrados mostram que o fornecedor é MEI) não é uma
@@ -2132,7 +2176,7 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
         else:
             status = "atendido" if atendido else "nao_atendido"
         itens.append({
-            "exigido": str(it.get("exigido")),
+            "exigido": exigido,
             "status": status,
             "atendido": atendido,
             "documento": str(it.get("documento") or ""),

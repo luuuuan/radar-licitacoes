@@ -3847,6 +3847,27 @@ def _anexar_verificacao_ia_documentos(resultado: dict, ed: Edital, user: Usuario
         return _verificar_ia_documentos_com_cache(resultado, ed, user, db, api_key, forcar)
 
 
+def _hash_documentos_habilitacao(documentos_habilitacao: dict | None) -> str:
+    """Hash do que a análise principal considera exigido (documentos_habilitacao)
+    no momento em que a Verificação por IA foi calculada. Achado real
+    (usuário reportou, edital 169682): essa verificação é cacheada só por
+    Usuario.versao_documentos (muda quando o usuário edita um documento
+    PRÓPRIO) e _versao_logica (muda quando verificar_documentos_usuario
+    muda) -- nenhum dos dois nota quando a análise DESTE EDITAL muda
+    (reanálise, retificação, ou uma correção como a da recuperação por
+    embeddings que trocou completamente o documentos_habilitacao
+    cacheado). Sem isso, o edital já tinha a análise principal corrigida
+    (documentos_habilitacao enxuto) mas a Verificação por IA continuava
+    cruzando contra a lista VELHA e inflada, presa no cache -- guardar
+    esse hash junto deixa qualquer mudança em documentos_habilitacao
+    invalidar a verificação automaticamente, sem depender do usuário
+    editar um documento ou clicar "forçar"."""
+    import hashlib as _hashlib
+    import json as _json
+    bruto = _json.dumps(documentos_habilitacao or {}, sort_keys=True, ensure_ascii=False)
+    return _hashlib.sha256(bruto.encode("utf-8")).hexdigest()
+
+
 def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuario, db: Session,
                                        api_key: str | None, forcar: bool = False) -> dict:
     import json as _json
@@ -3858,6 +3879,7 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
             dados_cache = _json.loads(cache.verificacao_documentos_ia)
         except ValueError:
             dados_cache = None
+    hash_atual = _hash_documentos_habilitacao(resultado.get("documentos_habilitacao"))
     # achado real (agente error-detective): cache versionada só por
     # versao_documentos_calc nunca detectava uma mudança na LÓGICA da
     # verificação (ex.: parar de cobrar declaração) -- guarda a versão da
@@ -3866,13 +3888,18 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
     # inválido, igual a forcar=True, MESMO que versao_documentos_calc ainda
     # bata com Usuario.versao_documentos. Cache "vazio" (usuário sem
     # documento algum na última vez) não tem nada pra ficar desatualizado,
-    # continua valendo normalmente.
-    cache_logica_valida = dados_cache is not None and dados_cache.get("_versao_logica") == ia.VERSAO_VERIFICACAO_DOCUMENTOS
+    # continua valendo normalmente. _hash_documentos (ver função acima,
+    # achado real do edital 169682): mesmo raciocínio, mas pra detectar
+    # quando a análise DO EDITAL mudou, não só a lógica desta função.
+    cache_logica_valida = (dados_cache is not None
+                           and dados_cache.get("_versao_logica") == ia.VERSAO_VERIFICACAO_DOCUMENTOS
+                           and dados_cache.get("_hash_documentos") == hash_atual)
     tem_cache = (cache is not None and cache.versao_documentos_calc is not None
                 and (cache.verificacao_documentos_ia is None or cache_logica_valida))
     if tem_cache and not forcar:
         if dados_cache is not None:
-            resultado["verificacao_documentos_ia"] = {k: v for k, v in dados_cache.items() if k != "_versao_logica"}
+            resultado["verificacao_documentos_ia"] = {
+                k: v for k, v in dados_cache.items() if k not in ("_versao_logica", "_hash_documentos")}
         if cache.versao_documentos_calc != user.versao_documentos:
             resultado["verificacao_documentos_desatualizada"] = True
         return resultado
@@ -3896,7 +3923,9 @@ def _verificar_ia_documentos_com_cache(resultado: dict, ed: Edital, user: Usuari
         )
     valor_json = None
     if saida:
-        valor_json = _json.dumps({**saida, "_versao_logica": ia.VERSAO_VERIFICACAO_DOCUMENTOS}, ensure_ascii=False)
+        valor_json = _json.dumps(
+            {**saida, "_versao_logica": ia.VERSAO_VERIFICACAO_DOCUMENTOS, "_hash_documentos": hash_atual},
+            ensure_ascii=False)
     _upsert_cache_extras(db, user, ed.id, cache,
         campo_valor="verificacao_documentos_ia", valor_json=valor_json,
         campo_versao="versao_documentos_calc", versao=user.versao_documentos)

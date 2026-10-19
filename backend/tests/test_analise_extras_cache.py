@@ -89,6 +89,34 @@ def test_verificacao_documentos_sem_mudanca_reusa_cache_sem_chamar_ia():
     assert "verificacao_documentos_desatualizada" not in out2
 
 
+def test_verificacao_documentos_quando_analise_do_edital_muda_recalcula_sem_tocar_documento_proprio():
+    """Achado real (usuário reportou, edital 169682): a análise PRINCIPAL
+    do edital foi corrigida (documentos_habilitacao mudou de uma lista
+    inflada/inventada pra uma enxuta), mas a Verificação por IA continuou
+    cruzando contra a lista VELHA, presa no cache -- essa cache nunca
+    dependia do conteúdo de documentos_habilitacao, só de
+    Usuario.versao_documentos (que só muda quando o usuário edita um
+    documento PRÓPRIO, nada a ver com a análise do edital mudar). Mudar
+    documentos_habilitacao (como uma reanálise/retificação faria) tem que
+    forçar recálculo, mesmo sem tocar em nenhum documento do usuário."""
+    db = _sessao()
+    u, ed, p = _semear(db)
+    with patch("app.analise_edital._gerar") as mock_gerar:
+        mock_gerar.return_value = (_resposta_docs, "ok")
+        _anexar_verificacao_ia_documentos(_resultado_base(ed), ed, u, db, "fake-key")
+
+        resultado_novo = {**_resultado_base(ed),
+                          "documentos_habilitacao": {"fiscal_trabalhista": ["Certificado de Regularidade do FGTS"]}}
+        mock_gerar.return_value = (
+            json.dumps({"itens": [{"exigido": "Certificado de Regularidade do FGTS", "atendido": True,
+                                   "documento": "Certidao", "observacao": ""}]}), "ok")
+        out2 = _anexar_verificacao_ia_documentos(resultado_novo, ed, u, db, "fake-key")
+
+    assert mock_gerar.call_count == 2, "documentos_habilitacao do edital mudou -- não pode reusar o cache antigo"
+    assert out2["verificacao_documentos_ia"]["itens"][0]["exigido"] == "Certificado de Regularidade do FGTS"
+    assert "verificacao_documentos_desatualizada" not in out2
+
+
 def test_verificacao_documentos_apos_editar_documento_devolve_antigo_marcado_desatualizado():
     db = _sessao()
     u, ed, p = _semear(db)

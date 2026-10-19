@@ -175,6 +175,32 @@ def test_verificar_documentos_ignora_itens_sem_exigido(monkeypatch):
     assert r["itens"][0]["exigido"] == "CND"
 
 
+def test_verificar_documentos_descarta_exigencia_inventada_sem_base_no_prompt(monkeypatch):
+    """Achado real (usuário reportou, edital 159668): a IA respondeu com um
+    item "Atestado de capacidade técnica" marcado "não atendido", mesmo o
+    edital não tendo NADA do tipo (documentos_habilitacao["tecnica"] == []
+    -- _formatar_requisitos nunca mandou essa exigência no prompt). Sem
+    nenhuma palavra em comum com o que foi de fato mandado (aqui, só
+    documentos fiscais/jurídicos), o item é descartado em vez de aparecer
+    como uma pendência real inventada."""
+    resposta_ia = json.dumps({"itens": [
+        {"exigido": "Certificado de Regularidade do FGTS", "atendido": True, "aplicavel": True,
+         "documento": "fgts.pdf", "observacao": ""},
+        {"exigido": "Atestado de capacidade técnica", "atendido": False, "aplicavel": True,
+         "documento": "", "observacao": "Não há documento cadastrado que comprove capacidade técnica."},
+    ]})
+    monkeypatch.setattr(ia, "_gerar", lambda prompt, api_key=None, timeout=70, **_: (resposta_ia, "ok"))
+
+    r = ia.verificar_documentos_usuario(
+        "Material de expediente",
+        {"fiscal_trabalhista": ["Certificado de Regularidade do FGTS"], "tecnica": []},
+        [{"nome": "fgts.pdf", "texto": "certificado de regularidade do fgts " * 5}], api_key="fake-key")
+
+    assert r["status"] == "ok"
+    assert len(r["itens"]) == 1
+    assert r["itens"][0]["exigido"] == "Certificado de Regularidade do FGTS"
+
+
 def test_verificar_documentos_item_nao_aplicavel_fica_marcado_mas_nao_some(monkeypatch):
     """Pedido do usuário (a partir de um caso real, edital com exigência
     alternativa por tipo de empresa: "sociedade empresária ou EIRELI" não
