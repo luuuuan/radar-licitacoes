@@ -201,6 +201,31 @@ def test_verificar_documentos_descarta_exigencia_inventada_sem_base_no_prompt(mo
     assert r["itens"][0]["exigido"] == "Certificado de Regularidade do FGTS"
 
 
+def test_filtrar_exigencias_inventadas_sem_vocabulario_nao_filtra_nada():
+    """Documenta uma limitação conhecida e aceita do filtro por palavra
+    (ver changelog de VERSAO_VERIFICACAO_DOCUMENTOS v5 pro porquê): quando
+    TODAS as linhas de requisito são siglas curtas (sem nenhuma palavra de
+    5+ letras, ex.: só "CNDT"), não há vocabulário nenhum pra comparar --
+    o filtro não tem como discriminar nada nesse caso, então não descarta
+    (prefere deixar passar a rejeitar à toa por falta de informação).
+
+    Achado real (calibração desta função, pedido do usuário): cogitou medir
+    similaridade de embeddings em vez de só palavra, pra pegar justamente
+    esse tipo de caso -- calibrando contra a API real do DeepInfra, pares
+    de exigências EQUIVALENTES (ex.: sigla vs. nome por extenso) e pares de
+    exigências DIFERENTES de verdade caíram no mesmo intervalo de
+    similaridade, sem limiar que separasse os dois de forma confiável.
+    Mantém o filtro por palavra, mais simples e previsível."""
+    itens = [
+        {"exigido": "Certidão Negativa de Débitos Trabalhistas", "status": "atendido",
+         "atendido": True, "documento": "cndt.pdf", "observacao": ""},
+        {"exigido": "Atestado de capacidade técnica", "status": "nao_atendido",
+         "atendido": False, "documento": "", "observacao": ""},
+    ]
+    out = ia._filtrar_exigencias_inventadas(itens, ["CNDT"])
+    assert out == itens
+
+
 def test_verificar_documentos_item_nao_aplicavel_fica_marcado_mas_nao_some(monkeypatch):
     """Pedido do usuário (a partir de um caso real, edital com exigência
     alternativa por tipo de empresa: "sociedade empresária ou EIRELI" não

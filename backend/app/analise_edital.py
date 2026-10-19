@@ -91,7 +91,49 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # Reforça a instrução de exclusivo_regional pra exigir restrição EXPLÍCITA
 # de onde o licitante deve estar sediado, nunca inferida do endereço do
 # próprio órgão nem da exclusividade ME/EPP.
-VERSAO_PROMPT = 17
+# v18 = revisão crítica do prompt pedida pelo usuário (3 achados confirmados
+# por fonte, não só aceitos de cara):
+# (a) a v17 citou "margem de preferência regional do art. 48 da Lei
+#     14.133" -- ARTIGO ERRADO (confirmado por busca): a Lei 14.133 Art. 48
+#     trata de exclusividade/subcontratação/cota pra ME/EPP, não de
+#     preferência regional. Quem trata disso é a LC 123/2006, art. 48, §3º
+#     (incluído pela LC 147/2014) -- "prioridade de contratação" (ninguém é
+#     excluído, só ganha prioridade até 10% acima do melhor preço), um
+#     instituto DIFERENTE de exclusividade (que exclui quem é de fora).
+# (b) o schema só tinha "exclusivo_regional" pra cobrir os dois institutos
+#     acima -- o caso do edital 169682 (Honório Serpa, sessão anterior)
+#     era exatamente o de PREFERÊNCIA regional (não exclusividade), e não
+#     tinha campo certo pra isso. Adiciona "preferencia_regional"
+#     (independente de "exclusivo_regional") pra cada um ser marcado pelo
+#     que realmente é.
+# (c) achado real, visto na própria análise de produção deste edital
+#     172472 antes desta correção: "plataforma": "Compras.gov.br
+#     (https://www.comprasbr.com.br)" -- a IA colou o nome de um portal
+#     (Compras.gov.br, federal) com o domínio de OUTRO (comprasbr.com.br,
+#     privado/BLL), sistemas diferentes com nome parecido. Acrescenta
+#     aviso explícito pra copiar o nome/domínio exatamente como aparece,
+#     sem "corrigir" pro nome mais conhecido.
+# (d) "pontos_atencao" tinha teto de 6 -- apertado pra edital complexo com
+#     vários riscos incomuns de verdade. Sobe pra 10, pedindo pra priorizar
+#     os mais graves se sobrar mais que isso (nunca vira "sem teto", o
+#     ponto era afrouxar, não remover o limite -- um teto existe pra IA não
+#     esvaziar o campo "exige_amostra"/"garantia_produto" repetindo tudo
+#     aqui de novo).
+# (e) "prazo_entrega" só pedia "como aparece no edital" -- não garantia
+#     que a IA incluísse UNIDADE (dias corridos ≠ dias úteis ≠ meses) nem
+#     MARCO inicial (da ordem de compra? da assinatura do contrato?).
+#     Reforça pedindo os três elementos sempre que existirem no texto, em
+#     vez de criar campos novos pra cada um -- a INFORMAÇÃO já cabia no
+#     campo que já existe, só faltava a instrução pedir ela por completo.
+# Descartadas (mesma revisão, sem base real encontrada): aumentar MAX_TOTAL
+# pra 200000 -- já foi tentado e revertido (achado real, edital 125821: deu
+# HTTP 413 de verdade no Gemini, ver comentário em _analisar_texto_unico);
+# campo "criterio_disputa" pra valor_total/valor_unitario -- já coberto por
+# "julgamento" (lote/item), mesmo conceito com outro nome; granularidade
+# por item em requisitos_tecnicos/exige_amostra -- cada item já tem sua
+# descrição própria vinda direto do PNCP (ItemEdital), não passa por este
+# prompt.
+VERSAO_PROMPT = 18
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -127,7 +169,21 @@ VERSAO_PROMPT = 17
 # qualquer item cujo "exigido" não tenha NENHUMA palavra significativa em
 # comum com o que foi de fato mandado -- pega qualquer invenção sem
 # relação com o texto de entrada, não só este caso específico.
-VERSAO_VERIFICACAO_DOCUMENTOS = 4
+# v5 = revisão crítica do prompt pedida pelo usuário -- tentativa e
+# descarte documentados (ver _filtrar_exigencias_inventadas): cogitou
+# trocar o filtro por palavra (v4) por similaridade de embeddings (BGE-M3/
+# DeepInfra), esperando pegar paráfrase legítima sem palavra em comum
+# (sigla vs. nome por extenso). Calibrando contra a API real, a
+# similaridade de pares BONS (mesma exigência) caiu no mesmo intervalo de
+# pares RUINS (exigências diferentes de verdade) -- sem separação
+# confiável nesse nível de granularidade, então NÃO trocou; mantém o
+# filtro por palavra (lógica idêntica à v4). O que muda de fato: o
+# vocabulário agora vem das MESMAS linhas truncadas em 6000 chars que
+# o prompt de verdade recebe (_linhas_requisitos, com o mesmo corte de
+# requisitos[:6000]) -- antes, o corte era aplicado só no texto já
+# JUNTADO (_formatar_requisitos(docs)[:6000]), que corta no meio de uma
+# linha em vez de entre linhas; incremento só por precaução de cache.
+VERSAO_VERIFICACAO_DOCUMENTOS = 5
 
 _PROMPT = """Você é um especialista em licitações públicas brasileiras (Lei 14.133/2021 e LC 123/2006).
 Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do JSON, sem ```), com exatamente esta estrutura:
@@ -150,16 +206,17 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "numero_processo": número do PROCESSO administrativo (ex.: "Processo nº 1234/2025"). É comum o edital ter um número de processo e um número de pregão/edital DIFERENTES — se ambos aparecerem, inclua os dois de forma clara (ex.: "Processo 1234/2025 — Pregão Eletrônico 07/2025"), nunca só um dos dois torcendo pra ser o certo.
   - "modo_disputa": "aberto", "fechado", "aberto e fechado" ou "".
   - "criterio_julgamento": o CRITÉRIO de escolha do vencedor. Ex.: "menor preço", "maior desconto", "técnica e preço". (Diferente de "julgamento", que é a unidade de disputa — ver abaixo.)
-  - "plataforma": sistema/portal onde ocorre a sessão/disputa (ex.: Compras.gov.br, BLL, Portal de Compras Públicas).
+  - "plataforma": sistema/portal onde ocorre a sessão/disputa (ex.: Compras.gov.br, BLL, Portal de Compras Públicas). Atenção: "Compras.gov.br" (portal do Governo Federal) e "ComprasBR"/"comprasbr.com.br" (Bolsa de Licitações do Brasil, plataforma privada) são sistemas DIFERENTES, apesar do nome parecido — copie EXATAMENTE o nome/domínio como aparece no edital, nunca troque por outro sistema que você conhece mais.
   - "data_sessao": APENAS a data/hora rotulada explicitamente como sessão pública/abertura/disputa. NÃO use outra data do documento (assinatura do edital, publicação, prazo de validade de certidão) só porque é a mais parecida com uma data de sessão. "" se não houver data de sessão explícita.
   - "pregoeiro_responsavel": APENAS o nome identificado explicitamente como pregoeiro/agente de contratação/leiloeiro responsável pela sessão. NÃO use o nome de quem assina o edital (ordenador de despesa, secretário) nem de outra autoridade — são papéis diferentes. "" se não constar.
   - "contato_orgao": telefone/e-mail de contato do órgão para dúvidas sobre o edital.
-  - "exclusivo_regional": boolean. true SOMENTE se o edital restringir EXPLICITAMENTE a participação a empresas sediadas/domiciliadas numa região/UF/município específico (ex.: "participação exclusiva de licitantes sediados no Município de X", margem de preferência regional do art. 48 da Lei 14.133). NÃO marque true só porque o ÓRGÃO CONTRATANTE (endereço que aparece no cabeçalho/rodapé de cada página do edital) fica numa cidade específica — isso identifica onde o ÓRGÃO está, não uma exigência de onde o LICITANTE precisa estar. Também não confunda com "exclusivo_me_epp" (abaixo): uma licitação "exclusiva para ME/EPP" é sobre o PORTE da empresa (LC 123/2006), nada a ver com localização geográfica — uma coisa não implica a outra.
-  - "regiao_exclusiva": string. A região/UF/município EXATAMENTE como a restrição aparece no texto, se exclusivo_regional for true. "" caso contrário.
+  - "exclusivo_regional": boolean. true SOMENTE se o edital PROIBIR EXPLICITAMENTE a participação de empresas de fora de uma região/UF/município (ex.: "participação exclusiva de licitantes sediados no Município de X") — empresas de fora não podem nem participar. NÃO marque true só porque o ÓRGÃO CONTRATANTE (endereço que aparece no cabeçalho/rodapé de cada página do edital) fica numa cidade específica — isso identifica onde o ÓRGÃO está, não uma exigência de onde o LICITANTE precisa estar. Também não confunda com "exclusivo_me_epp" (abaixo): uma licitação "exclusiva para ME/EPP" é sobre o PORTE da empresa (LC 123/2006), nada a ver com localização geográfica — uma coisa não implica a outra, e nenhuma delas implica "preferencia_regional" (a seguir), que é um instituto diferente.
+  - "preferencia_regional": boolean. true se o edital der PRIORIDADE de contratação (não exclusividade) a ME/EPP sediadas local ou regionalmente, até o limite de 10% acima do melhor preço — instituto do art. 48, §3º, da Lei Complementar nº 123/2006 (incluído pela LC nº 147/2014), geralmente citado como "prioridade de contratação regional/local" ou "empate ficto regional". Nesse caso, empresas de fora AINDA PODEM participar e vencer -- a diferença pra "exclusivo_regional" é exatamente essa: lá ninguém de fora participa, aqui todo mundo participa e só o desempate/prioridade favorece quem é local. Os dois são independentes; um edital pode ter só um, os dois, ou nenhum.
+  - "regiao_exclusiva": string. A região/UF/município EXATAMENTE como a restrição ou prioridade aparece no texto, se exclusivo_regional OU preferencia_regional for true. "" caso nenhum dos dois se aplique.
 
 - "dados_proposta": objeto com (string vazia "" em qualquer chave que não constar):
   - "validade_dias": prazo de validade da proposta, como texto (ex.: "60 dias").
-  - "prazo_entrega": prazo de entrega/execução do objeto, como aparece no edital.
+  - "prazo_entrega": prazo de entrega/execução do objeto. SEMPRE inclua os TRÊS elementos quando existirem no edital: (1) a quantidade, (2) a UNIDADE ("dias corridos" x "dias úteis" x "meses" -- são diferentes, nunca generalize só pra "dias"), e (3) o MARCO a partir de quando conta ("a partir da ordem de compra/fornecimento", "da assinatura do contrato", "do recebimento da nota de empenho" etc.) -- ex.: "15 (quinze) dias corridos, contados do recebimento da Ordem de Compra", não só "15 dias". Omitir qualquer um dos três faz o usuário não saber se o prazo já venceu ou não. "" se não constar prazo nenhum.
   - "local_entrega": ENDEREÇO COMPLETO de entrega/execução (rua, número, bairro, cidade/UF), quando o edital informar um endereço literal — não só o nome do órgão. Se não houver endereço completo, use o local/unidade como aparecer (ex.: "almoxarifado central da Secretaria"). Se o edital for Registro de Preços e disser que o local será definido depois (ex.: "conforme ordem de fornecimento"), registre isso literalmente. "" se não constar.
   - "condicoes_pagamento": forma e prazo de pagamento (ex.: "30 dias após atesto da nota fiscal").
   - "aceita_similar": boolean. true se o edital permite marca/modelo similar ou equivalente ao especificado.
@@ -184,7 +241,7 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
   - "descricao": string curta resumindo o conteúdo do lote (ex.: "Material de escritório — papelaria"). "" se não conseguir resumir.
 - "garantia_contratual": string. Percentual/forma de garantia CONTRATUAL exigida do vencedor após assinar o contrato (diferente da garantia de proposta e da garantia do produto). Vazio se não exigir.
 - "analise_incompleta": boolean. true se o texto do edital termina no meio de uma seção relevante (sobretudo a de habilitação) ou não contém seção de habilitação alguma — sinal de que pode ter sido truncado e a análise talvez não capture todos os documentos. false se o texto parece completo.
-- "pontos_atencao": array de strings (máx. 6). Riscos ou exigências INCOMUNS que NÃO tenham campo próprio neste JSON (ex.: multa/penalidade severa, prazo de entrega atipicamente curto, exigência técnica atípica, cláusula restritiva de concorrência). NÃO repita aqui informação que já esteja em outro campo estruturado (garantia_contratual, garantia_produto, validade_dias, exige_amostra, exige_visita etc.) — a tela já mostra esses campos separadamente, duplicar não ajuda. Única exceção: se "analise_incompleta" for true, inclua aqui um aviso de que a análise pode estar incompleta por truncamento do texto.
+- "pontos_atencao": array de strings (máx. 10 -- priorize os mais graves/impactantes se houver mais que isso). Riscos ou exigências INCOMUNS que NÃO tenham campo próprio neste JSON (ex.: multa/penalidade severa, prazo de entrega atipicamente curto, exigência técnica atípica, cláusula restritiva de concorrência). NÃO repita aqui informação que já esteja em outro campo estruturado (garantia_contratual, garantia_produto, validade_dias, exige_amostra, exige_visita etc.) — a tela já mostra esses campos separadamente, duplicar não ajuda. Única exceção: se "analise_incompleta" for true, inclua aqui um aviso de que a análise pode estar incompleta por truncamento do texto.
 
 O texto abaixo pode conter mais de um documento, cada um começando com um cabeçalho "=== DOCUMENTO: <nome do arquivo> ===" e separado do seguinte por "---" (por exemplo, o edital principal e um termo de referência/anexo publicados como arquivos separados, ou uma RETIFICAÇÃO/ERRATA seguida do edital original). Dentro de cada documento, use os marcadores "[pág. N]" que aparecem antes de trechos do texto pra saber em que página do ARQUIVO ATUAL (não do PDF combinado) uma informação está — são reiniciados a cada novo documento. Quando houver informação conflitante entre eles (datas, prazos, exigências), o valor da RETIFICAÇÃO/ERRATA prevalece sobre o do edital original — a retificação é sempre mais recente, mesmo quando aparece antes no texto.
 
@@ -243,11 +300,12 @@ _RESPONSE_SCHEMA = {
                 "modo_disputa": _S,
                 "criterio_julgamento": _S, "plataforma": _S,
                 "data_sessao": _S, "pregoeiro_responsavel": _S, "contato_orgao": _S,
-                "exclusivo_regional": _B, "regiao_exclusiva": _S,
+                "exclusivo_regional": _B, "preferencia_regional": _B, "regiao_exclusiva": _S,
             },
             "required": ["numero_processo", "modo_disputa", "criterio_julgamento",
                         "plataforma", "data_sessao", "pregoeiro_responsavel",
-                        "contato_orgao", "exclusivo_regional", "regiao_exclusiva"],
+                        "contato_orgao", "exclusivo_regional", "preferencia_regional",
+                        "regiao_exclusiva"],
         },
         "dados_proposta": {
             "type": "OBJECT",
@@ -1655,6 +1713,7 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None) -> dict:
             "pregoeiro_responsavel": s(x.get("pregoeiro_responsavel")),
             "contato_orgao": s(x.get("contato_orgao")),
             "exclusivo_regional": b(x.get("exclusivo_regional")),
+            "preferencia_regional": b(x.get("preferencia_regional")),
             "regiao_exclusiva": s(x.get("regiao_exclusiva")),
         }
 
@@ -1784,7 +1843,8 @@ def _mesclar_resultados_analise(resultados: list[dict]) -> dict:
             chave: primeiro_nao_vazio(f"dados_orgao.{chave}") for chave in
             ("numero_processo", "modo_disputa", "criterio_julgamento", "plataforma", "data_sessao",
              "pregoeiro_responsavel", "contato_orgao", "regiao_exclusiva")
-        } | {"exclusivo_regional": ou("dados_orgao.exclusivo_regional")},
+        } | {"exclusivo_regional": ou("dados_orgao.exclusivo_regional"),
+             "preferencia_regional": ou("dados_orgao.preferencia_regional")},
         "dados_proposta": {
             chave: primeiro_nao_vazio(f"dados_proposta.{chave}") for chave in
             ("validade_dias", "prazo_entrega", "local_entrega", "condicoes_pagamento",
@@ -2020,6 +2080,19 @@ DOCUMENTOS CADASTRADOS PELO FORNECEDOR:
 {documentos}"""
 
 
+def _linhas_requisitos(documentos_habilitacao: dict) -> list[str]:
+    """As exigências de habilitação (jurídica/fiscal-trabalhista/técnica/
+    econômico-financeira) como linhas soltas, SEM o prefixo "- " -- fonte
+    única compartilhada entre _formatar_requisitos (monta o texto do
+    prompt) e verificar_documentos_usuario (compara cada linha, uma a uma,
+    contra o que a IA devolveu, ver _ITENS_INVENTADOS_LIMIAR). Só estes 4
+    tipos entram aqui -- ver docstring de _formatar_requisitos pro motivo
+    de declarações/requisitos_tecnicos ficarem de fora."""
+    docs = documentos_habilitacao or {}
+    return [str(d) for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira")
+            for d in (docs.get(categoria) or [])]
+
+
 def _formatar_requisitos(documentos_habilitacao: dict) -> str:
     """Só entram aqui os 4 tipos de DOCUMENTO de habilitação (jurídica,
     fiscal/trabalhista, técnica, econômico-financeira) -- pedido do
@@ -2038,11 +2111,7 @@ def _formatar_requisitos(documentos_habilitacao: dict) -> str:
     Sem essa exclusão, a verificação por IA marcava os dois como "não
     atendido" (✗) mesmo quando não havia nada de errado, só porque nenhum
     arquivo cadastrado é, por definição, aquilo que a exigência pedia."""
-    linhas = []
-    docs = documentos_habilitacao or {}
-    for categoria in ("juridica", "fiscal_trabalhista", "tecnica", "economico_financeira"):
-        for d in (docs.get(categoria) or []):
-            linhas.append(f"- {d}")
+    linhas = [f"- {d}" for d in _linhas_requisitos(documentos_habilitacao)]
     return "\n".join(linhas) if linhas else "(nenhum requisito específico identificado na análise do edital)"
 
 
@@ -2076,6 +2145,48 @@ def _itens_declaracao(declaracoes: list | None) -> list[dict]:
     return itens
 
 
+def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[str]) -> list[dict]:
+    """Descarta itens de `itens` (já normalizados, com chave "exigido")
+    sem NENHUMA palavra significativa (5+ letras) em comum com nenhuma
+    linha de `linhas_requisitos` -- achado real (edital 159668): a IA
+    respondeu "Atestado de capacidade técnica" como exigência, mesmo esse
+    edital não tendo NADA do tipo em documentos_habilitacao (tecnica=[])
+    -- o prompt nunca mencionou isso, só pode ser invenção. Sigla curta
+    (tipo "CND" sozinho) não entra nessa checagem pra nenhum dos dois
+    lados -- não tem base nenhuma pra julgar, então não descarta por falta
+    de prova (só descarta quando SOBRA prova de que é outra coisa).
+
+    Achado real (calibração desta função, pedido do usuário): tentei trocar
+    esse filtro por similaridade de embeddings (BGE-M3/DeepInfra) esperando
+    pegar paráfrase legítima sem palavra em comum (ex.: sigla vs. nome por
+    extenso) que este filtro rejeita. Calibrando contra a API real com
+    pares conhecidos, a similaridade de pares BONS (mesma exigência, ex.:
+    "CRF do FGTS" vs. "Certificado de Regularidade do FGTS", 0.64) ficou no
+    mesmo intervalo de pares RUINS (exigências diferentes de verdade, ex.:
+    "Certificado de Regularidade do FGTS - CRF" vs. "Atestado de capacidade
+    técnica", 0.51) -- não existe um limiar que separe os dois de forma
+    confiável nesse nível de granularidade (frase curta administrativa).
+    Um limiar permissivo o bastante pra não rejeitar parafrase legítima
+    deixaria passar invenção de verdade; mantém o filtro por palavra, mais
+    simples e com o comportamento já conhecido."""
+    if not itens or not linhas_requisitos:
+        return itens
+    vocabulario = set()
+    for linha in linhas_requisitos:
+        vocabulario |= _palavras_significativas(linha)
+    if not vocabulario:
+        return itens
+    out = []
+    for it in itens:
+        palavras_exigido = _palavras_significativas(it["exigido"])
+        if palavras_exigido and not (palavras_exigido & vocabulario):
+            log.warning("verificar_documentos_usuario(): IA devolveu exigência sem base "
+                       "no prompt, descartada: %r", it["exigido"])
+            continue
+        out.append(it)
+    return out
+
+
 def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
                                  documentos_usuario: list[dict], api_key: str | None = None) -> dict:
     """Cruza os documentos que o usuário já tem cadastrados (cada um com
@@ -2102,11 +2213,21 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
             return {"status": "ok", "itens": itens_declaracao}
         return {"status": "sem_requisitos"}
     requisitos = _formatar_requisitos(docs)
-    # achado real (edital 159668, ver VERSAO_VERIFICACAO_DOCUMENTOS v4):
-    # vocabulário do que foi REALMENTE mandado no prompt (igual ao corte
-    # de requisitos[:6000] usado lá embaixo) -- serve pra filtrar exigência
-    # inventada pela IA depois (ver o loop de `itens`).
-    vocabulario_requisitos = _palavras_significativas(requisitos[:6000])
+    # achado real (edital 159668, ver VERSAO_VERIFICACAO_DOCUMENTOS v4/v5):
+    # as linhas REALMENTE mandadas no prompt -- serve pra filtrar exigência
+    # inventada pela IA depois (ver _filtrar_exigencias_inventadas, chamado
+    # após montar `itens`). Mesmo corte de 6000 chars usado no prompt
+    # (requisitos[:6000], logo abaixo) -- uma linha que nem chegou a ser
+    # mandada (cortada fora) não pode "validar" um item só por constar na
+    # análise original, senão o filtro aceitaria referência a algo que a IA
+    # nunca viu de verdade neste prompt.
+    linhas_requisitos: list[str] = []
+    _total_linhas = 0
+    for _linha in _linhas_requisitos(docs):
+        _total_linhas += len(_linha) + 1
+        if linhas_requisitos and _total_linhas > 6000:
+            break
+        linhas_requisitos.append(_linha)
 
     # Achado real (usuário reportou: CNDT cadastrada e válida, IA disse
     # "não atendido" -- edital 126768): o corte antigo era um limite FIXO
@@ -2156,21 +2277,6 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
         if not isinstance(it, dict) or not it.get("exigido"):
             continue
         exigido = str(it.get("exigido"))
-        # achado real (edital 159668, ver VERSAO_VERIFICACAO_DOCUMENTOS v4):
-        # a IA respondeu "Atestado de capacidade técnica" como exigência,
-        # mesmo esse edital não tendo NADA do tipo em documentos_habilitacao
-        # (tecnica=[]) -- o prompt nunca mencionou isso. Sem nenhuma
-        # palavra significativa em comum com o que foi de fato mandado, não
-        # tem como ser uma reformulação de uma exigência real, só invenção.
-        # palavras_exigido vazio (sigla curta, tipo "CND" sozinho, sem mais
-        # nada na frase) não entra nessa checagem -- não tem base nenhuma
-        # pra julgar, pra qualquer lado, então não descarta por falta de
-        # prova (só descarta quando SOBRA prova de que é outra coisa).
-        palavras_exigido = _palavras_significativas(exigido)
-        if vocabulario_requisitos and palavras_exigido and not (palavras_exigido & vocabulario_requisitos):
-            log.warning("verificar_documentos_usuario(): IA devolveu exigência sem base "
-                       "no prompt, descartada: %r", exigido)
-            continue
         # pedido do usuário: exigência alternativa que não se aplica a este
         # fornecedor (ex.: exigência de sociedade empresária quando os
         # documentos cadastrados mostram que o fornecedor é MEI) não é uma
@@ -2193,6 +2299,7 @@ def verificar_documentos_usuario(objeto: str, documentos_habilitacao: dict,
             "documento": str(it.get("documento") or ""),
             "observacao": str(it.get("observacao") or ""),
         })
+    itens = _filtrar_exigencias_inventadas(itens, linhas_requisitos)
     itens.extend(itens_declaracao)
     return {"status": "ok", "itens": itens}
 

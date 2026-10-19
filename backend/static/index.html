@@ -6268,6 +6268,11 @@ function _renderResultadoAnalise(r){
     if(r.exige_visita) flags.push('Exige visita técnica');
     if(r.exclusivo_me_epp) flags.push('Exclusivo/cota ME-EPP');
     if(r.dados_orgao?.exclusivo_regional) flags.push(r.dados_orgao.regiao_exclusiva ? `Exclusivo regional (${r.dados_orgao.regiao_exclusiva})` : 'Exclusivo regional');
+    // achado real (edital 172472): exclusivo_regional (ninguém de fora participa) e
+    // preferencia_regional (todos participam, local só tem prioridade até 10% --
+    // art. 48 §3º da LC 123/2006) são institutos diferentes -- mostrar com o MESMO
+    // selo "Exclusivo regional" confundiria um com o outro de novo, agora na tela.
+    if(r.dados_orgao?.preferencia_regional) flags.push(r.dados_orgao.regiao_exclusiva ? `Prioridade regional (${r.dados_orgao.regiao_exclusiva})` : 'Prioridade regional');
     if(r.julgamento==='lote') flags.push('Julgamento por lote (não dá pra disputar 1 item só)');
     else if(r.julgamento==='item') flags.push('Julgamento por item');
     const totalDocs = (r.checklist_documentos||[]).length;
@@ -6288,6 +6293,7 @@ function _renderResultadoAnalise(r){
         ['Data da sessão', orgao.data_sessao], ['Pregoeiro/responsável', orgao.pregoeiro_responsavel],
         ['Contato do órgão', orgao.contato_orgao],
         ['Exclusivo regional', orgao.exclusivo_regional ? (orgao.regiao_exclusiva || 'Sim') : ''],
+        ['Prioridade regional (ME/EPP)', orgao.preferencia_regional ? (orgao.regiao_exclusiva || 'Sim') : ''],
       ])}
 
       ${_paresHTML('Dados da proposta', [

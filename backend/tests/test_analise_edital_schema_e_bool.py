@@ -49,6 +49,21 @@ def test_boolean_de_verdade_continua_funcionando():
     assert resultado["exclusivo_me_epp"] is True
 
 
+def test_exclusivo_regional_e_preferencia_regional_sao_campos_independentes():
+    """VERSAO_PROMPT v18 (achado real, edital 172472, revisão externa do
+    prompt): exclusivo_regional (ninguém de fora participa) e
+    preferencia_regional (todos participam, local só tem prioridade de
+    desempate até 10%, art. 48 §3º da LC 123/2006) são institutos
+    diferentes -- confirma que cada um é normalizado pro seu próprio campo,
+    sem um pisar no valor do outro."""
+    resultado = _analisar_com_resposta(
+        '{"dados_orgao": {"exclusivo_regional": false, "preferencia_regional": true, '
+        '"regiao_exclusiva": "Blumenau, SC"}}')
+    assert resultado["dados_orgao"]["exclusivo_regional"] is False
+    assert resultado["dados_orgao"]["preferencia_regional"] is True
+    assert resultado["dados_orgao"]["regiao_exclusiva"] == "Blumenau, SC"
+
+
 def test_analisar_manda_response_schema_pro_gemini():
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
     chamadas = []
