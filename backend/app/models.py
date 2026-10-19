@@ -219,6 +219,16 @@ class Edital(Base):
     texto_analise_ia: Mapped[str | None] = mapped_column(Text, nullable=True)
     texto_analise_ia_fonte: Mapped[str | None] = mapped_column(Text, nullable=True)
     texto_analise_ia_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # achado real (usuário reportou, edital 169682): VERSAO_PROMPT muda de
+    # 15 pra 16 invalida o CACHE DA RESPOSTA (analise_ia, via _cache_valido
+    # em main.py), mas _texto_pronto_cache reaproveitava este
+    # texto_analise_ia (extraído da forma ANTIGA -- corte cego nos primeiros
+    # 80000 chars) sem checar versão nenhuma -- a "nova" análise rodava com
+    # o prompt v16, mas sobre o MESMO texto velho e mal-cortado da v15,
+    # reproduzindo exatamente o bug que a recuperação por embeddings devia
+    # ter corrigido. Guarda a versão junto com o texto pra
+    # _texto_pronto_cache poder invalidar os dois juntos.
+    texto_analise_ia_versao: Mapped[int | None] = mapped_column(Integer, nullable=True)
     coletado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # já tentou completar a descrição dos itens lendo o PDF (ver
     # app/itens_pdf.py) — só marca quando a tentativa TERMINA com um

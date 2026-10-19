@@ -69,6 +69,7 @@ _COLUNAS_NOVAS = {
         ("texto_analise_ia", "TEXT"),
         ("texto_analise_ia_fonte", "TEXT"),
         ("texto_analise_ia_em", "TIMESTAMP"),
+        ("texto_analise_ia_versao", "INTEGER"),
         ("plataforma", "VARCHAR(120)"),
         ("link_sistema_origem", "TEXT"),
     ],

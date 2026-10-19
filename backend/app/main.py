@@ -3497,14 +3497,25 @@ def _arquivos_pncp_cache(db: Session, ed: Edital, forcar: bool = False) -> dict:
     return resultado
 
 
-def _texto_pronto_cache(ed: Edital, forcar: bool) -> dict | None:
+def _texto_pronto_cache(ed: Edital, forcar: bool, versao_atual: int) -> dict | None:
     """Mesmo raciocínio de _arquivos_pncp_cache, mas pro TEXTO já extraído
     do PDF usado na Análise por IA -- achado real: tentar de novo depois de
     uma falha (PNCP instável, ou só a chamada de IA que falhou) baixava e
     extraía o PDF de novo, mesmo já tendo extraído com sucesso antes. Sem
     forcar, usa o cache se já existir; None quando não há cache (chama
-    analisar() sem texto_pronto, extrai normalmente)."""
-    if not forcar and ed.texto_analise_ia is not None:
+    analisar() sem texto_pronto, extrai normalmente).
+
+    versao_atual: achado real (usuário reportou, edital 169682) -- sem
+    comparar contra texto_analise_ia_versao, este cache sobrevivia a uma
+    mudança de VERSAO_PROMPT que alterou COMO o texto é extraído (v16:
+    recuperação por embeddings em vez de corte cego nos primeiros 80000
+    chars). _cache_valido() (acima, no chamador) já invalida o resultado
+    da análise numa troca de versão, mas sem invalidar ESTE texto também, a
+    "nova" análise rodava com o prompt novo sobre o texto extraído do jeito
+    ANTIGO -- reproduzindo o mesmo bug que a versão nova devia corrigir,
+    silenciosamente, só pros editais que já tinham sido analisados antes da
+    troca."""
+    if not forcar and ed.texto_analise_ia is not None and ed.texto_analise_ia_versao == versao_atual:
         return {"texto": ed.texto_analise_ia, "fonte": ed.texto_analise_ia_fonte}
     return None
 
@@ -4111,7 +4122,7 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
             # -- pula a busca de arquivos no PNCP inteiramente, ela só serve
             # pra achar o PDF de onde extrair o texto.
             total_itens_edital = len(ed.itens)
-            texto_pronto = _texto_pronto_cache(ed, forcar)
+            texto_pronto = _texto_pronto_cache(ed, forcar, ia.VERSAO_PROMPT)
             if texto_pronto is not None:
                 resultado = ia.analisar(ed.objeto or "", [], api_key=chave, texto_pronto=texto_pronto,
                                         total_itens=total_itens_edital)
@@ -4143,6 +4154,11 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
                 ed.texto_analise_ia = texto_extraido
                 ed.texto_analise_ia_fonte = fonte_extraida
                 ed.texto_analise_ia_em = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(tzinfo=None)
+                # marca COM QUE VERSÃO este texto foi extraído -- é o que
+                # permite _texto_pronto_cache recusar reaproveitar um texto
+                # extraído da forma antiga depois que VERSAO_PROMPT muda
+                # (ver achado real na docstring de _texto_pronto_cache).
+                ed.texto_analise_ia_versao = ia.VERSAO_PROMPT
                 db.commit()
             if resultado.get("status") == "ok":
                 ed.analise_ia = _json.dumps(resultado, ensure_ascii=False)

@@ -53,21 +53,53 @@ def _resposta_gemini_ok(json_texto='{"objeto": "teste"}'):
 
 def test_sem_cache_devolve_none():
     ed = Edital(fonte="PNCP", id_externo="x", orgao="O", objeto="Obj", uf="SP")
-    assert app_main._texto_pronto_cache(ed, forcar=False) is None
+    assert app_main._texto_pronto_cache(ed, forcar=False, versao_atual=ia_module.VERSAO_PROMPT) is None
 
 
 def test_com_cache_devolve_texto_e_fonte():
     ed = Edital(fonte="PNCP", id_externo="x", orgao="O", objeto="Obj", uf="SP")
     ed.texto_analise_ia = "texto ja extraido"
     ed.texto_analise_ia_fonte = "Edital"
-    r = app_main._texto_pronto_cache(ed, forcar=False)
+    ed.texto_analise_ia_versao = ia_module.VERSAO_PROMPT
+    r = app_main._texto_pronto_cache(ed, forcar=False, versao_atual=ia_module.VERSAO_PROMPT)
     assert r == {"texto": "texto ja extraido", "fonte": "Edital"}
 
 
 def test_forcar_ignora_cache_mesmo_existindo():
     ed = Edital(fonte="PNCP", id_externo="x", orgao="O", objeto="Obj", uf="SP")
     ed.texto_analise_ia = "texto ja extraido"
-    assert app_main._texto_pronto_cache(ed, forcar=True) is None
+    ed.texto_analise_ia_versao = ia_module.VERSAO_PROMPT
+    assert app_main._texto_pronto_cache(ed, forcar=True, versao_atual=ia_module.VERSAO_PROMPT) is None
+
+
+# ---------------------------------------------------------------------------
+# Achado real (usuário reportou, edital 169682): VERSAO_PROMPT mudar de 15
+# pra 16 (recuperação por embeddings em vez de corte cego) invalidava o
+# CACHE DA RESPOSTA (ver _cache_valido em main.py), mas não este cache do
+# TEXTO -- a "nova" análise (prompt v16) rodava sobre o MESMO texto velho,
+# extraído do jeito ANTIGO (corte cego nos primeiros 80000 chars),
+# reproduzindo o mesmo bug que a v16 devia ter corrigido, só que agora
+# escondido atrás de um "versao": 16 que não significava o que deveria.
+# ---------------------------------------------------------------------------
+
+def test_versao_diferente_nao_reaproveita_texto_extraido_a_forma_antiga():
+    ed = Edital(fonte="PNCP", id_externo="x", orgao="O", objeto="Obj", uf="SP")
+    ed.texto_analise_ia = "texto extraido pela logica antiga (corte cego)"
+    ed.texto_analise_ia_versao = ia_module.VERSAO_PROMPT - 1   # versão anterior
+    r = app_main._texto_pronto_cache(ed, forcar=False, versao_atual=ia_module.VERSAO_PROMPT)
+    assert r is None   # força re-extração com a lógica atual, não reusa o texto velho
+
+
+def test_versao_none_mesmo_motivo_de_dado_pre_existente_sem_a_coluna_nova():
+    """Editais já analisados ANTES desta coluna existir têm
+    texto_analise_ia_versao = None (migração só adiciona a coluna, não
+    retroage valor nenhum) -- precisa cair no mesmo caso do teste acima,
+    não só quando o número bate com uma versão antiga específica."""
+    ed = Edital(fonte="PNCP", id_externo="x", orgao="O", objeto="Obj", uf="SP")
+    ed.texto_analise_ia = "texto de antes desta coluna existir"
+    ed.texto_analise_ia_versao = None
+    r = app_main._texto_pronto_cache(ed, forcar=False, versao_atual=ia_module.VERSAO_PROMPT)
+    assert r is None
 
 
 # --------- analisar(): texto_pronto pula download --------- #
@@ -182,6 +214,7 @@ def test_rota_reusa_texto_cacheado_sem_buscar_lista_de_arquivos(monkeypatch):
     ed = _edital(db)
     ed.texto_analise_ia = "texto ja cacheado"
     ed.texto_analise_ia_fonte = "Edital"
+    ed.texto_analise_ia_versao = ia_module.VERSAO_PROMPT
     db.commit()
 
     chamou_pncp = []
