@@ -164,7 +164,13 @@ def test_selecionar_trechos_pior_score_acima_do_limiar_confianca_alta():
 # bruto agora chega na IA quando os embeddings encontram ela.
 # --------------------------------------------------------------------- #
 
-def test_analisar_recupera_secao_que_o_corte_bruto_perderia():
+def test_analisar_recupera_secao_que_o_corte_bruto_perderia(monkeypatch):
+    # Este teste cobre o caminho ANTIGO (recuperação por embeddings, 1 chamada
+    # só): com _ANALISE_POR_PARTES ligado, um texto maior que MAX_TOTAL é lido
+    # INTEIRO em partes (ver tests/test_analise_partes.py) -- o mock de
+    # embeddings_deepinfra abaixo (que guia qual pedaço É ESCOLHIDO) não entra
+    # em jogo nesse outro caminho.
+    monkeypatch.setattr("app.analise_edital._ANALISE_POR_PARTES", False)
     # edital pequeno + termo de referência gigante -- juntos passam de
     # MAX_TOTAL, e a seção-alvo só existe bem no fim do 2º documento (fora
     # do que o corte cego dos primeiros MAX_TOTAL chars alcançaria).
@@ -240,11 +246,17 @@ def test_analisar_sem_corte_nao_aciona_embeddings():
     assert resultado["analise_incompleta"] is False
 
 
-def test_analisar_marca_incompleta_quando_confianca_baixa_mesmo_ia_nao_percebendo():
+def test_analisar_marca_incompleta_quando_confianca_baixa_mesmo_ia_nao_percebendo(monkeypatch):
     """Pedido do usuário: prefere analise_incompleta de sobra a deixar
     passar batido -- mesmo quando a IA responde sem sinalizar nada de
     errado, a checagem determinística (pior score abaixo do piso) marca
-    incompleta sozinha."""
+    incompleta sozinha.
+
+    Este teste cobre o caminho ANTIGO (recuperação por embeddings): com
+    _ANALISE_POR_PARTES ligado, o edital é lido INTEIRO em partes, e
+    "analise_incompleta" vem do código (sempre False -- sem amostra, sem
+    incerteza), não da confiança da recuperação (ver _analisar_por_partes)."""
+    monkeypatch.setattr("app.analise_edital._ANALISE_POR_PARTES", False)
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
     texto_grande = "x" * 90000
 

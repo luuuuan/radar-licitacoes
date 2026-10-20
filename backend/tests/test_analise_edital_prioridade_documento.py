@@ -161,9 +161,10 @@ def test_analisar_nao_deixa_1o_documento_gigante_engolir_o_2o():
         resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "ok"
-    assert len(chamadas) == 1   # só o Gemini -- embeddings foi mockado direto, sem passar por requests.post
-    assert "MARCADOR-ESPECIFICACOES" in _texto_enviado_a_ia(chamadas)
-    assert resultado["analise_incompleta"] is True   # embeddings indisponíveis -- confiança baixa (achado v16)
+    # edital grande: agora é lido INTEIRO, em partes (várias chamadas) -- o que
+    # este teste protege continua valendo: o 2º documento chega na IA.
+    assert len(chamadas) >= 2
+    assert any("MARCADOR-ESPECIFICACOES" in _texto_enviado_a_ia(c) for c in chamadas)
 
 
 def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
@@ -190,9 +191,10 @@ def test_analisar_documento_unico_gigante_continua_usando_o_orcamento_inteiro():
         resultado = analisar("Objeto de teste", arquivos, api_key="fake-key")
 
     assert resultado["status"] == "ok"
-    texto_enviado = _texto_enviado_a_ia(chamadas)
-    # não foi cortado pela metade (40000) -- usou perto do teto cheio (80000)
-    assert texto_enviado.count("A") > 70000
+    # agora o documento inteiro (90000) é lido em partes: nada é descartado
+    # (com sobreposição, o total de "A" enviados é >= ao do documento).
+    assert sum(_texto_enviado_a_ia(c).count("A") for c in chamadas) >= 90000
+    assert any("MARCADOR-INICIO" in _texto_enviado_a_ia(c) for c in chamadas)
 
 
 def test_analisar_combina_mais_de_2_documentos_quando_sobra_orcamento():

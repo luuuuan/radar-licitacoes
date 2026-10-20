@@ -26,12 +26,14 @@ import subprocess
 import tempfile
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import requests
 
 from .config import settings
 from .matching.embeddings import embeddings_deepinfra, cosseno
+from . import analise_partes
 
 log = logging.getLogger("ia.edital")
 
@@ -149,7 +151,21 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # similaridade -- pega só a 1ª sequência completa e em ordem, ignorando
 # cópias duplicadas da mesma tabela mais adiante no documento (comum:
 # edital + anexo/TR remontados no mesmo PDF).
-VERSAO_PROMPT = 19
+# v20 = leitura do edital INTEIRO por partes (_ANALISE_POR_PARTES, default
+# True) -- em vez de escolher uma AMOSTRA por similaridade (v16-v19), um
+# texto maior que MAX_TOTAL agora é dividido em partes (analise_partes.py)
+# e lido por completo, uma chamada de IA por parte, mescladas por código
+# (ver _analisar_por_partes). A recuperação por embeddings (v16-v19) continua
+# existindo como fallback só pra documentos grandes demais até pra isso
+# (> _MAX_PARTES_ANALISE partes) -- inclusive a tabela de lotes garantida
+# (achado acima) continua valendo nesse fallback.
+# Bump OBRIGATÓRIO aqui: sem isso, qualquer edital grande JÁ analisado antes
+# desta mudança continuaria com o texto cacheado da AMOSTRA antiga
+# (texto_analise_ia, ≤ MAX_TOTAL) servido como "fresco" por
+# _texto_pronto_cache -- que só invalida pelo (texto_analise_ia_versao ==
+# VERSAO_PROMPT) -- nunca chegando a ativar o modo por partes (que exige
+# len(texto) > MAX_TOTAL) pra quem já tinha sido analisado uma vez.
+VERSAO_PROMPT = 20
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1419,6 +1435,25 @@ _MAX_TOTAL_SEGURO_413 = 40000
 # que nunca passa pelo bloco onde essa constante era definida localmente.
 MAX_TOTAL = 80000
 
+# Análise COMPLETA por partes (pedido do usuário: a IA tem que ver o edital
+# INTEIRO, não uma amostra). Quando o texto combinado excede MAX_TOTAL, em
+# vez de escolher trechos por similaridade (v16 -- uma amostra, ver
+# _selecionar_trechos_relevantes_analise), o texto INTEIRO é dividido em
+# partes (analise_partes.dividir_em_partes), cada parte é analisada numa
+# chamada e os resultados são mesclados por código
+# (_mesclar_resultados_analise). _TAM_PARTE_ANALISE = 34000: deixa folga pra
+# sobreposição (4000) + cabeçalhos/aviso de parte (~1200) ainda ficarem
+# abaixo de _MAX_TOTAL_SEGURO_413 (40000), o último tamanho que já rodou
+# em produção sem HTTP 413 -- a retentativa de 413 em _analisar_texto_unico
+# nunca corta conteúdo de uma parte. _MAX_PARTES_ANALISE: teto de custo (a
+# 400000 chars de _MAX_BRUTO_ANALISE dá ~12 partes); acima disso cai pra
+# recuperação por embeddings (comportamento v16-v19) e marca incompleta.
+# _ANALISE_POR_PARTES=False desliga tudo e volta ao comportamento anterior.
+_ANALISE_POR_PARTES = True
+_TAM_PARTE_ANALISE = 34000
+_MAX_PARTES_ANALISE = 14
+_PARALELISMO_PARTES = 3
+
 # Baixa o(s) documento(s) inteiro(s) antes de decidir o que entra no prompt
 # (em vez de truncar cada um em MAX_TOTAL na hora do download, como antes do
 # achado v16) -- mesmo teto de itens_pdf.MAX_BRUTO, mesmo motivo: só depois
@@ -1650,7 +1685,8 @@ def _selecionar_trechos_relevantes_analise(texto: str) -> tuple[str, bool]:
     return trecho, confianca_baixa
 
 
-def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None) -> dict:
+def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
+                          permitir_groq: bool = True) -> dict:
     """Faz UMA chamada de IA sobre um texto que já coube no orçamento de uma
     requisição (MAX_TOTAL) e normaliza a resposta. Extraído de analisar()
     pra poder ser chamado mais de uma vez -- ver _mesclar_resultados_analise
@@ -1668,8 +1704,11 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None) -> dict:
     # pede -- e, diferente de comparar_catalogo_usuario() (que já lida com
     # isso dividindo em lotes de 25 itens por chamada), cada chamada aqui é
     # única: um corte derruba essa parte da análise inteira.
+    # permitir_groq só é repassado quando False (modo "por partes") -- no caminho
+    # normal a chamada fica idêntica à de sempre.
+    extra = {} if permitir_groq else {"permitir_groq": False}
     txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
-                     response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
+                     response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768, **extra)
     if st.startswith("http_413"):   # startswith: st pode vir com o corpo da resposta colado
         # Achado real (edital 125821): MAX_TOTAL=200000 reproduziu HTTP 413
         # de verdade no Gemini mesmo já sem a inflação de ensure_ascii (ver
@@ -1683,7 +1722,7 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None) -> dict:
         # falhar por completo) em vez de travar a análise inteira.
         texto = texto[:_MAX_TOTAL_SEGURO_413]
         txt, st = _gerar(_PROMPT.format(objeto=(objeto or "")[:1000], texto=texto), api_key=api_key,
-                         response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768)
+                         response_schema=_RESPONSE_SCHEMA, max_output_tokens=32768, **extra)
     if st != "ok" or not txt:
         return {"status": "erro_ia", "detalhe": st}
     data = _parse_json(txt)
@@ -1912,13 +1951,29 @@ def _mesclar_resultados_analise(resultados: list[dict]) -> dict:
         return out
 
     def uniao_lotes():
-        vistos, out = set(), []
+        # Mesmo lote em partes diferentes (a tabela de itens de um lote
+        # atravessa a fronteira entre duas partes, ou cai na sobreposição):
+        # junta os itens pelo NÚMERO do lote em vez de ficar só com a 1ª
+        # ocorrência (que perderia os itens da parte seguinte).
+        por_numero: dict[str, dict] = {}
         for r in resultados:
             for lote in (valor(r, "lotes") or []):
                 numero = lote.get("numero")
-                if numero and numero not in vistos:
-                    vistos.add(numero)
-                    out.append(lote)
+                if not numero:
+                    continue
+                if numero not in por_numero:
+                    por_numero[numero] = {"numero": numero, "itens": list(lote.get("itens") or []),
+                                          "descricao": lote.get("descricao") or ""}
+                else:
+                    alvo = por_numero[numero]
+                    for n in (lote.get("itens") or []):
+                        if n not in alvo["itens"]:
+                            alvo["itens"].append(n)
+                    if not alvo["descricao"]:
+                        alvo["descricao"] = lote.get("descricao") or ""
+        out = list(por_numero.values())
+        for lote in out:
+            lote["itens"].sort()
         # mesma invariante de lotes() acima (um item só pode pertencer a UM
         # lote): aplicada de novo aqui porque cada pedaço só validou DENTRO
         # de si mesmo -- dois pedaços diferentes podem ter cada um, sozinho,
@@ -1974,6 +2029,52 @@ def _mesclar_resultados_analise(resultados: list[dict]) -> dict:
     }
 
 
+def _analisar_por_partes(objeto: str, texto: str, api_key: str | None) -> dict | None:
+    """Analisa o texto INTEIRO de um edital grande: divide em partes
+    (analise_partes.dividir_em_partes), analisa cada uma (até
+    _PARALELISMO_PARTES ao mesmo tempo), mescla por código e devolve o mesmo
+    formato normalizado de _analisar_texto_unico (status "ok") ou o erro da
+    1ª parte que falhou. Devolve None quando o edital tem partes demais
+    (_MAX_PARTES_ANALISE) -- quem chama cai na recuperação por embeddings.
+
+    - permitir_groq=False: o Groq corta o prompt em 20000 bytes sem avisar
+      (ver _gerar) -- numa parte isso seria perder conteúdo e ainda assim
+      parecer sucesso, exatamente o que esta função existe pra evitar.
+    - "analise_incompleta" NÃO vem do autorrelato da IA (cada parte, por
+      definição, termina no meio de uma seção): o código sabe que leu todas
+      as partes, então o valor é False; se uma parte falha, a análise
+      inteira falha (mesma filosofia de "um corte aqui derruba a análise"
+      já usada no fallback sequencial) e o texto fica em cache pra retry.
+    - Divergências entre partes (ex.: duas datas de sessão) viram aviso em
+      pontos_atencao (analise_partes.conflitos_entre_partes)."""
+    partes = analise_partes.dividir_em_partes(texto, max_chars=_TAM_PARTE_ANALISE)
+    if not partes or len(partes) > _MAX_PARTES_ANALISE:
+        return None
+    log.info("analisar(): edital grande (%d chars) -> %d partes", len(texto), len(partes))
+
+    def rodar(parte: dict) -> dict:
+        return _analisar_texto_unico(
+            objeto, analise_partes.aviso_de_parte(parte) + parte["texto"], api_key, permitir_groq=False)
+
+    with ThreadPoolExecutor(max_workers=max(1, _PARALELISMO_PARTES)) as ex:
+        resultados = list(ex.map(rodar, partes))     # mantém a ORDEM das partes
+    for i, (parte, r) in enumerate(zip(partes, resultados)):
+        if r["status"] != "ok":
+            r = rodar(parte)                          # 1 retentativa da parte que falhou
+            resultados[i] = r
+            if r["status"] != "ok":
+                log.warning("analisar(): parte %d/%d (%s) falhou: %s",
+                           parte["indice"], parte["total"], parte["cobertura"], r)
+                return {**r, "parte_com_falha": f"{parte['indice']}/{parte['total']} ({parte['cobertura']})"}
+
+    mesclado = _mesclar_resultados_analise(resultados)
+    mesclado["analise_incompleta"] = False
+    avisos = analise_partes.conflitos_entre_partes(resultados)
+    mesclado["pontos_atencao"] = (avisos + mesclado["pontos_atencao"])[:12]
+    mesclado["partes_analisadas"] = len(partes)
+    return mesclado
+
+
 def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
             texto_pronto: dict | None = None, total_itens: int | None = None) -> dict:
     """arquivos: lista de {titulo, tipo, url} (do endpoint de documentos).
@@ -2013,6 +2114,7 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         return {"status": "sem_ia"}
 
     confianca_baixa = False
+    modo_partes = False
     if texto_pronto is not None:
         texto, fonte = texto_pronto["texto"], texto_pronto.get("fonte")
         # texto_pronto vem de uma extração anterior já cortada/selecionada
@@ -2025,6 +2127,11 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
         # -- caminho usado só pra RETRY imediato após falha na chamada de
         # IA, não pra reanálise completa.
         texto_truncado = len(texto) >= MAX_TOTAL
+        if _ANALISE_POR_PARTES and len(texto) > MAX_TOTAL:
+            # cache novo: guarda o texto INTEIRO (ver `_texto_extraido` abaixo),
+            # não um recorte -- mais que MAX_TOTAL só acontece nesse caso
+            # (os recortes antigos, v16-v19, nunca passam de MAX_TOTAL).
+            modo_partes, texto_truncado = True, False
     else:
         if not arquivos:
             return {"status": "sem_arquivo"}
@@ -2072,10 +2179,27 @@ def analisar(objeto: str, arquivos: list[dict], api_key: str | None = None,
             # nenhuma mudança de comportamento pra essa fatia de editais
             # (a mesma que já funcionava certinho antes do achado v16).
             texto = texto_bruto
+        elif _ANALISE_POR_PARTES:
+            # edital grande: lê o texto INTEIRO, em partes (ver
+            # _analisar_por_partes). `texto` fica com o texto completo --
+            # é ele que vai pro cache (ed.texto_analise_ia) pra um retry.
+            texto = texto_bruto
+            modo_partes, texto_truncado = True, False
         else:
             texto, confianca_baixa = _selecionar_trechos_relevantes_analise(texto_bruto)
 
-    if len(texto) <= MAX_TOTAL:
+    resultado_partes = None
+    if modo_partes:
+        resultado_partes = _analisar_por_partes(objeto, texto, api_key)
+        if resultado_partes is None:
+            # partes demais (> _MAX_PARTES_ANALISE): comportamento v16-v19
+            # (recuperação por embeddings), sinalizando incompleta.
+            modo_partes, texto_truncado = False, True
+            texto, confianca_baixa = _selecionar_trechos_relevantes_analise(texto)
+
+    if modo_partes:
+        resultado_bruto = resultado_partes
+    elif len(texto) <= MAX_TOTAL:
         resultado_bruto = _analisar_texto_unico(objeto, texto, api_key)
     else:
         # Fallback de múltiplos pedaços (pedido do usuário): raríssimo --

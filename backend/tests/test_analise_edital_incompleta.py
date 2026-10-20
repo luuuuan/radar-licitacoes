@@ -53,6 +53,10 @@ def test_analise_incompleta_false_por_padrao():
 def test_413_do_gemini_retenta_truncando_pro_teto_seguro(monkeypatch):
     from app.analise_edital import _MAX_TOTAL_SEGURO_413
 
+    # Este teste cobre o caminho ANTIGO (um só prompt, texto cortado/recortado): com
+    # _ANALISE_POR_PARTES ligado, um texto maior que MAX_TOTAL é lido inteiro em
+    # partes (ver tests/test_analise_partes.py) e não passa mais por aqui.
+    monkeypatch.setattr("app.analise_edital._ANALISE_POR_PARTES", False)
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
     # maior que _MAX_TOTAL_SEGURO_413 (pra retentativa truncar de verdade),
     # mas MENOR que MAX_TOTAL (80000) -- acima disso, v16 aciona a
@@ -99,6 +103,10 @@ def test_413_do_gemini_retenta_truncando_pro_teto_seguro(monkeypatch):
 def test_sem_lotes_e_texto_truncado_marca_incompleta(monkeypatch):
     from app.analise_edital import MAX_TOTAL
 
+    # Este teste cobre o caminho ANTIGO (um só prompt, texto cortado/recortado): com
+    # _ANALISE_POR_PARTES ligado, um texto maior que MAX_TOTAL é lido inteiro em
+    # partes (ver tests/test_analise_partes.py) e não passa mais por aqui.
+    monkeypatch.setattr("app.analise_edital._ANALISE_POR_PARTES", False)
     arquivos = [{"titulo": "Edital", "url": "http://x/edital.pdf"}]
     # texto MAIOR que MAX_TOTAL -> analisar() vai cortar de verdade
     texto_grande = "x" * (MAX_TOTAL + 20000)
