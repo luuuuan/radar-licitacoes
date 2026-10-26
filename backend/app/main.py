@@ -17,6 +17,7 @@ Rotas principais:
 """
 import csv
 import io
+import math
 import os
 import base64
 import re
@@ -1229,18 +1230,29 @@ _LOTE_COMMIT_IMPORT = 200  # commita a cada N linhas (ver comentário no loop de
 
 
 def _num_br(v):
-    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None."""
+    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None.
+
+    Achado real (auditoria de error-detective): `float()` do Python aceita
+    de bom grado as strings "inf"/"Infinity"/"nan" (qualquer caixa) sem
+    lançar -- uma célula digitada errado numa planilha de importação de
+    catálogo (coluna itens_por_unidade) virava `float('inf')` persistido
+    sem aviso, e mais tarde explodia como OverflowError bem depois, dentro
+    de `matching/validacao.py:_formatar_qtd` (`int(float('inf'))`), numa
+    chamada que nem parece relacionada. Rejeita aqui, na borda de entrada,
+    em vez de confiar que todo consumidor desse campo vai lidar com
+    infinito/NaN."""
     if v is None or v == "":
         return None
     if isinstance(v, (int, float)):
-        return float(v)
+        return float(v) if math.isfinite(v) else None
     s = str(v).strip().replace("R$", "").replace(" ", "")
     if "," in s:                       # formato BR: ponto = milhar, vírgula = decimal
         s = s.replace(".", "").replace(",", ".")
     try:
-        return float(s)
+        n = float(s)
     except ValueError:
         return None
+    return n if math.isfinite(n) else None
 
 
 @app.post("/api/produtos/importar")

@@ -8,7 +8,7 @@ import pytest
 from app.models import Produto
 from app.main import (
     _custo_e_margem, _qtd_embalagem_pncp, _e_unidade_embalagem_pncp, _validacao_tecnica_json,
-    _qtd_embalagem_descricao,
+    _qtd_embalagem_descricao, _num_br,
 )
 
 
@@ -231,3 +231,22 @@ def test_validacao_tecnica_sem_nada_verificavel_retorna_none():
     p = _produto(descricao="Serviço de consultoria genérica")
     vt = _validacao_tecnica_json("Serviço de consultoria", p, 1.0)
     assert vt is None
+
+
+# ---------------------------------------------------------------------------
+# Achado real (error-detective): float() do Python aceita "inf"/"Infinity"/
+# "nan" sem lançar -- uma célula digitada errado na planilha de importação
+# de catálogo (coluna itens_por_unidade) virava infinito persistido sem
+# aviso, e quebrava bem mais tarde (OverflowError) dentro da validação
+# técnica. Rejeita na borda de entrada.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("bruto", ["inf", "Infinity", "-inf", "nan", "NaN", float("inf"), float("nan")])
+def test_num_br_rejeita_infinito_e_nan(bruto):
+    assert _num_br(bruto) is None
+
+
+def test_num_br_continua_convertendo_formato_br_normal():
+    assert _num_br("1.234,56") == 1234.56
+    assert _num_br("18,90") == 18.9
+    assert _num_br(None) is None
+    assert _num_br("") is None

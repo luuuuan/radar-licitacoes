@@ -5,9 +5,14 @@ candidato do catálogo.
 O matching semântico/textual (engine.py) responde "este produto é sobre o
 mesmo assunto que o item?". Isso NÃO basta: "impressora bivolt, 32 ppm" e
 "impressora bivolt, 18 ppm" são quase idênticas em texto e incompatíveis na
-especificação. Este módulo roda DEPOIS que engine.py (ou o ranking
-semântico) já escolheu um candidato, e decide se ele de fato CUMPRE o item
-— podendo reprovar um candidato mesmo com similaridade 1.0.
+especificação. Este módulo roda DEPOIS que o candidato já foi escolhido
+(por código exato ou reranker) e decide se ele de fato CUMPRE o item —
+podendo reprovar um candidato mesmo com similaridade 1.0. Chamado de dois
+lugares, com propósitos diferentes: de dentro de `engine.py:avaliar()`,
+pra decidir se a confiança do match pode ficar automática ("alta") ou
+precisa de confirmação manual; e de novo em `main.py`, só pra exibir as
+pendências (críticas/avisos) na tela — mesmo mecanismo determinístico,
+chamadas independentes, sem cache compartilhado entre as duas.
 
 Pendência CRÍTICA reprova o produto (vira "Não atende" independente do
 score). Pendência de AVISO só sinaliza para conferência manual: a ausência
@@ -15,6 +20,7 @@ de uma informação na descrição do produto não é prova de que ele não tem
 aquele atributo, só que o catálogo não descreve.
 """
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 
 from .atributos import AtributoNumerico, AtributosTecnicos, estado_caracteristica, extrair_atributos, familia_unidade
@@ -93,8 +99,15 @@ def _corrigir_por_embalagem(atributos: list[AtributoNumerico], itens_por_unidade
     em pacote de 4 BLOCOS, itens_por_unidade=4, cada bloco com 50 folhas)
     ele conta uma granularidade diferente (blocos, não folhas) — não dá pra
     saber com segurança o total de folhas só com esse número, então não
-    mexe (mantém o comportamento conservador de antes)."""
-    if not itens_por_unidade or itens_por_unidade <= 0:
+    mexe (mantém o comportamento conservador de antes).
+
+    Defesa em profundidade (achado real de error-detective): `inf`/`nan`
+    passa a checagem de truthy/`> 0` acima (`inf > 0` é True) e quebra
+    `_formatar_qtd` mais abaixo (`int(float('inf'))` -> OverflowError). A
+    entrada principal (importação de planilha, `main.py:_num_br`) já
+    rejeita isso antes de persistir, mas um valor inválido que chegue aqui
+    por qualquer outro caminho não pode travar a validação inteira."""
+    if not itens_por_unidade or itens_por_unidade <= 0 or not math.isfinite(itens_por_unidade):
         return atributos
     corrigidos = []
     for a in atributos:

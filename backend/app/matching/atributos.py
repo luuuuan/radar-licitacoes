@@ -21,6 +21,11 @@ Importante: aqui NÃO reaproveitamos normalizar()/preparar() de engine.py.
 Aquele pipeline remove pontuação (letra "/", aspas, vírgula decimal) e
 aplica stemming — ótimo para TF-IDF, mas destrói exatamente a informação que
 precisamos aqui ("26/6", "110/220V", "15\"", "2,5 l").
+
+Direção da dependência dentro de matching/: engine.py -> validacao.py ->
+atributos.py (este módulo), nunca o contrário — este arquivo não importa
+nem conhece engine.py, mesmo rodando "do lado de dentro" de
+MatchingEngine.avaliar() hoje.
 """
 from __future__ import annotations
 import re
@@ -110,7 +115,34 @@ def _e_marca_3m(unidade: str, valor: float, bruto: str) -> bool:
 # com PONTO fora do padrão BR mas comum em ficha técnica copiada de fora
 # ("1.0mm", só 1-2 dígitos depois do ponto — 3 dígitos é sempre milhar, nunca
 # decimal) -> dígitos simples com vírgula decimal opcional ("2,5" ou "250").
-_NUM = r"(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+\.\d{1,2}(?!\d)|\d+(?:,\d+)?)"
+#
+# Achado real (auditoria de error-detective, confirmado por execução): os
+# "\d+" das alternativas 2 e 3 eram ilimitados -- uma sequência longa de
+# dígitos puros SEM ponto/vírgula (ex.: número de processo/EAN colado sem
+# pontuação, lixo de scraping do PNCP) faz o motor de regex consumir tudo
+# com o "\d+" e backtrackear um dígito por vez procurando o separador que
+# não existe, a partir de CADA posição de início testada por
+# re.finditer -- O(N²) por unidade, vezes ~20 unidades em _UNIDADES. 1200
+# dígitos já travava ~3,7s numa chamada só; texto real pode ter dígitos
+# suficientes pra travar o processo por minutos. Nenhum número de
+# especificação real passa de 15 dígitos inteiros -- limitar o tamanho do
+# "\d+" com {1,15} (e a parte decimal com {1,6}) elimina o backtracking sem
+# mudar o que é reconhecido como número válido na prática.
+#
+# 2º achado real (auditoria de performance-engineer, confirmado por
+# execução, DEPOIS do limite {1,15} acima): a 1ª alternativa continuava
+# O(N²) numa cadeia LONGA de grupos de milhar ("1.000.000...000Z") -- o
+# "(?:\.\d{3})+" é ilimitado e, pra cada posição inicial testada por
+# re.finditer, casa a cadeia inteira e depois backtrackeia grupo por grupo
+# procurando a unidade que não vem. 3,2 KB de cadeia pontuada já travava
+# ~5,3s numa chamada só. O "(?<![\d.,])" abaixo faz qualquer posição NO
+# MEIO de uma cadeia (precedida por dígito/ponto/vírgula) falhar em O(1)
+# em vez de tentar casar a cadeia inteira de novo -- só a posição de
+# início real da cadeia tenta o match completo, tornando a varredura
+# linear. Verificado sem mudar nenhum atributo reconhecido (marca 3M,
+# "2 M/MIN", decimal "1.0mm", milhar "2.500", campos estruturados, "26/6",
+# "15\"", "2,5 l" vs "2000 ml").
+_NUM = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d{1,6})?|\d{1,15}\.\d{1,2}(?!\d)|\d{1,15}(?:,\d{1,6})?)"
 
 
 def _parse_numero(bruto: str) -> float:

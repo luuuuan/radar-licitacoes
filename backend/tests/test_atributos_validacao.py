@@ -598,3 +598,53 @@ def test_itens_por_unidade_nao_afeta_unidades_que_nao_sao_contagem_de_pecas():
     com = validar(item, produto, itens_por_unidade=10.0)
     assert [p.descricao for p in sem.criticas] == [p.descricao for p in com.criticas]
     assert any("digitos" in p.descricao for p in com.criticas)
+
+
+# ---------------------------------------------------------------------------
+# Robustez contra entrada adversarial/malformada (achados reais de
+# error-detective): texto de edital/catálogo real pode ter lixo de
+# scraping (número colado sem pontuação) ou vir de importação de planilha
+# com valor numérico fora de qualquer faixa plausível.
+# ---------------------------------------------------------------------------
+def test_sequencia_longa_de_digitos_sem_pontuacao_nao_trava():
+    """Achado real: uma sequência longa de dígitos puros (ex.: número de
+    processo colado sem separador) fazia _extrair_numericos backtrackear
+    O(N²) por unidade reconhecida (~20 unidades) -- texto adversarial
+    plausível (lixo de scraping do PNCP) travava a extração por segundos a
+    minutos sem lançar exceção nenhuma. Limite de tempo generoso (segundos,
+    não minutos) só pra provar que não é mais quadrático."""
+    import time
+    texto = f"Caneta esferografica azul, processo SEI numero {'9' * 5000} ref. compra direta"
+    inicio = time.time()
+    extrair_atributos(texto)
+    assert time.time() - inicio < 5.0
+
+
+def test_cadeia_longa_de_separador_de_milhar_nao_trava():
+    """2º achado real (auditoria de performance-engineer, depois do fix
+    acima): o limite {1,15} no "\\d+" solto não protegia a 1ª alternativa
+    de _NUM ("(?:\\.\\d{3})+", separador de milhar), que continuava
+    ilimitada -- uma cadeia longa de grupos ".000" (ex.: número de
+    processo/valor mal formatado, repetido por engano) travava ~67s com
+    12,8 KB de texto, sem lançar exceção. Corrigido com lookbehind
+    "(?<![\\d.,])" pra não reprocessar a cadeia inteira em cada posição
+    interna."""
+    import time
+    texto = "1" + ".000" * 12800 + "Z"
+    inicio = time.time()
+    extrair_atributos(texto)
+    assert time.time() - inicio < 5.0
+
+
+def test_itens_por_unidade_infinito_nao_quebra_validacao():
+    """Achado real: itens_por_unidade=inf passava pela checagem "> 0" (inf
+    é truthy e maior que qualquer valor finito) e quebrava _formatar_qtd
+    com OverflowError (int(float('inf'))) bem mais abaixo na cadeia --
+    agora é rejeitado antes de chegar lá, sem lançar."""
+    r = validar("no mínimo 500 folhas", "caixa papel 500 folhas", itens_por_unidade=float("inf"))
+    assert r.criticas == []
+
+
+def test_itens_por_unidade_nan_nao_quebra_validacao():
+    r = validar("no mínimo 500 folhas", "caixa papel 500 folhas", itens_por_unidade=float("nan"))
+    assert r.criticas == []

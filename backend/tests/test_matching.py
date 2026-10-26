@@ -196,6 +196,56 @@ def test_score_alto_com_folga_do_2o_colocado_continua_confianca_alta(monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# Pendência crítica da validação técnica (matching/validacao.py) rebaixa a
+# confiança automática -- achado real: item "Papel A4 75g/m²" e produto
+# "Papel A4 180g/m²" são quase o mesmo texto (reranker dá score alto, sem
+# empate com ninguém), mas a especificação diverge de verdade. Vale pra
+# QUALQUER atributo (peso, dimensão, grampo...), não só papel.
+# ---------------------------------------------------------------------------
+def test_pendencia_critica_de_atributo_rebaixa_confianca_alta_para_media(monkeypatch):
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
+    item = r.detalhe[0]
+    assert item["produto_id"] == 1   # continua sendo a sugestão -- só não confia automático
+    assert item["confianca"] == "media"
+
+
+def test_pendencia_critica_de_atributo_rebaixa_mesmo_com_codigo_exato_corroborado(monkeypatch):
+    """A regra vale mesmo quando o motivo do match foi código fiscal exato
+    corroborado pelo reranker -- código certo não é garantia de gramatura
+    certa."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca", ncm="48025590")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.9})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2", ncm="4802.55.90")])
+    item = r.detalhe[0]
+    assert item["motivo"].startswith("código")
+    assert item["confianca"] == "media"
+
+
+def test_sem_pendencia_critica_de_atributo_mantem_confianca_alta(monkeypatch):
+    """Controle: mesma gramatura dos dois lados -- não há motivo pra rebaixar."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 75g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
+    assert r.detalhe[0]["confianca"] == "alta"
+
+
+def test_erro_na_validacao_tecnica_nao_derruba_avaliar(monkeypatch):
+    """Achado real (error-detective): a checagem de pendência crítica roda
+    em BackgroundTasks, por item, pra todo edital de todo usuário -- uma
+    exceção nela (bug futuro, dado malformado) não pode propagar e perder a
+    avaliação do edital inteiro. Falha aberta: mantém a confiança já
+    calculada em vez de propagar."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    monkeypatch.setattr(engine_mod, "_validar_tecnico",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
+    assert r.detalhe[0]["confianca"] == "alta"
+
+
+# ---------------------------------------------------------------------------
 # Corroboração de código exato pelo reranker — casos reais de produção que
 # motivaram a regra (código fiscal amplo não garante ser o MESMO produto).
 # ---------------------------------------------------------------------------

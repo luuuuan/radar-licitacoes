@@ -105,7 +105,7 @@ def _carregar_catalogo(db: Session, usuario_id: int) -> list[ProdutoCat]:
     return [ProdutoCat(
         id=p.id, descricao=p.descricao, ncm=p.ncm or "", cest=p.cest or "",
         ean=p.ean or "", catmat=p.catmat or "", catser=p.catser or "",
-        palavras_chave=p.palavras_chave or "",
+        palavras_chave=p.palavras_chave or "", itens_por_unidade=p.itens_por_unidade,
     ) for p in produtos]
 
 
