@@ -467,6 +467,85 @@ def test_validacao_de_trio_de_dimensao_bate_exato_sem_pendencia():
     assert r.atende
 
 
+# ---------------------------------------------------------------------------
+# Achados reais (auditoria de performance pedida pelo usuário): a validação
+# de grupo de dimensão (1) ignorava o OPERADOR de cada exigido (comparava só
+# por igualdade de conjunto, reprovando um produto MAIOR que o mínimo
+# exigido) e (2) comparava contra QUALQUER número da mesma família no texto
+# do produto, não só os que formam a cadeia "AxB" correspondente (um número
+# solto não relacionado virava parte da comparação e reprovava um produto
+# que, na cadeia certa, batia em cheio).
+# ---------------------------------------------------------------------------
+
+def test_dimensao_no_minimo_aceita_produto_maior():
+    item = "caixa organizadora - dimensoes no minimo 20 x 30 cm"
+    produto = "caixa organizadora plastica 25cm x 35cm"
+    r = validar(item, produto)
+    assert not r.criticas
+    assert r.atende
+
+
+def test_dimensao_no_minimo_reprova_produto_menor():
+    item = "caixa organizadora - dimensoes no minimo 20 x 30 cm"
+    produto = "caixa organizadora plastica 15cm x 25cm"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.critico for p in r.pendencias)
+
+
+def test_dimensao_no_maximo_aceita_produto_menor():
+    item = "caixa organizadora - dimensoes no maximo 20 x 30 cm"
+    produto = "caixa organizadora plastica 15cm x 25cm"
+    r = validar(item, produto)
+    assert r.atende
+
+
+def test_dimensao_no_maximo_reprova_produto_maior():
+    item = "caixa organizadora - dimensoes no maximo 20 x 30 cm"
+    produto = "caixa organizadora plastica 25cm x 35cm"
+    r = validar(item, produto)
+    assert not r.atende
+    assert any(p.critico for p in r.pendencias)
+
+
+def test_numero_solto_fora_da_cadeia_do_produto_nao_contamina_a_comparacao():
+    """'Bloco Adesivo 38mm x 51mm, caixa com 100mm de largura' -- o produto
+    TEM a cadeia 38x51 que corresponde exatamente ao item, mas também
+    menciona um 3º número da mesma família (100, largura da caixa, sem
+    relação com a cadeia de dimensão do bloco em si). Não pode reprovar."""
+    item = "bloco adesivo 38 x 51"
+    produto = "bloco adesivo 38mm x 51mm, caixa com 100mm de largura"
+    r = validar(item, produto)
+    assert not r.criticas
+    assert r.atende
+
+
+def test_produto_com_duas_cadeias_do_mesmo_tamanho_usa_a_que_bate_nao_a_primeira():
+    """Achado real (auditoria do code-reviewer na 1ª versão deste fix): com
+    DUAS cadeias ofertadas do mesmo tamanho do grupo exigido, o código
+    pegava a PRIMEIRA que aparece no texto, mesmo que não fosse a que
+    corresponde -- um produto listando "20x25, também na versão 38x51"
+    reprovava contra um item "38x51" porque a cadeia 20x25 (irrelevante)
+    vinha primeiro no texto. Agora testa TODAS as cadeias do tamanho certo
+    e aceita se qualquer uma bater."""
+    item = "bloco adesivo 38 x 51"
+    produto = "bloco adesivo 20mm x 25mm, tambem vendido na versao 38mm x 51mm"
+    r = validar(item, produto)
+    assert not r.criticas
+    assert r.atende
+
+
+def test_quantidade_de_medidas_diferente_sem_cadeia_correspondente_vira_aviso():
+    """Quando o produto não tem NENHUMA cadeia do mesmo tamanho do grupo
+    exigido (nem no texto em si há como montar o pareamento), a pendência
+    vira aviso pra conferência manual, nunca crítica -- genuinamente
+    ambíguo, não dá pra saber quais números correspondem."""
+    item = "bloco adesivo 38 x 51"
+    produto = "bloco adesivo tamanho unico, 100mm de largura"
+    r = validar(item, produto)
+    assert not any(p.critico for p in r.pendencias)
+
+
 def test_extrai_digitos_com_rotulo_antes_do_numero():
     """Caso real: alguns editais descrevem primeiro o rótulo, depois o valor
     ('dígitos: 12'), ao contrário da ordem natural ('12 dígitos'). Sem
@@ -598,3 +677,53 @@ def test_itens_por_unidade_nao_afeta_unidades_que_nao_sao_contagem_de_pecas():
     com = validar(item, produto, itens_por_unidade=10.0)
     assert [p.descricao for p in sem.criticas] == [p.descricao for p in com.criticas]
     assert any("digitos" in p.descricao for p in com.criticas)
+
+
+# ---------------------------------------------------------------------------
+# Robustez contra entrada adversarial/malformada (achados reais de
+# error-detective/performance-engineer): texto de edital/catálogo real pode
+# ter lixo de scraping (número colado sem pontuação) ou vir de importação de
+# planilha com valor numérico fora de qualquer faixa plausível.
+# ---------------------------------------------------------------------------
+def test_sequencia_longa_de_digitos_sem_pontuacao_nao_trava():
+    """Achado real: uma sequência longa de dígitos puros (ex.: número de
+    processo colado sem separador) fazia _extrair_numericos backtrackear
+    O(N²) por unidade reconhecida (~20 unidades) -- texto adversarial
+    plausível (lixo de scraping do PNCP) travava a extração por segundos a
+    minutos sem lançar exceção nenhuma. Limite de tempo generoso (segundos,
+    não minutos) só pra provar que não é mais quadrático."""
+    import time
+    texto = f"Caneta esferografica azul, processo SEI numero {'9' * 5000} ref. compra direta"
+    inicio = time.time()
+    extrair_atributos(texto)
+    assert time.time() - inicio < 5.0
+
+
+def test_cadeia_longa_de_separador_de_milhar_nao_trava():
+    """2º achado real (auditoria de performance-engineer, depois do fix
+    acima): o limite {1,15} no "\\d+" solto não protegia a 1ª alternativa
+    de _NUM ("(?:\\.\\d{3})+", separador de milhar), que continuava
+    ilimitada -- uma cadeia longa de grupos ".000" (ex.: número de
+    processo/valor mal formatado, repetido por engano) travava ~67s com
+    12,8 KB de texto, sem lançar exceção. Corrigido com lookbehind
+    "(?<![\\d.,])" pra não reprocessar a cadeia inteira em cada posição
+    interna."""
+    import time
+    texto = "1" + ".000" * 12800 + "Z"
+    inicio = time.time()
+    extrair_atributos(texto)
+    assert time.time() - inicio < 5.0
+
+
+def test_itens_por_unidade_infinito_nao_quebra_validacao():
+    """Achado real: itens_por_unidade=inf passava pela checagem "> 0" (inf
+    é truthy e maior que qualquer valor finito) e quebrava _formatar_qtd
+    com OverflowError (int(float('inf'))) bem mais abaixo na cadeia --
+    agora é rejeitado antes de chegar lá, sem lançar."""
+    r = validar("no mínimo 500 folhas", "caixa papel 500 folhas", itens_por_unidade=float("inf"))
+    assert r.criticas == []
+
+
+def test_itens_por_unidade_nan_nao_quebra_validacao():
+    r = validar("no mínimo 500 folhas", "caixa papel 500 folhas", itens_por_unidade=float("nan"))
+    assert r.criticas == []

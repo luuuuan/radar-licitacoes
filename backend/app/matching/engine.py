@@ -44,15 +44,45 @@ motor cai pra SÓ o código exato, sem corroboração nenhuma disponível — ou
 seja, sem reranker, nenhum código exato vira vencedor automático e não há
 nenhum sinal textual. Decisão consciente: sem fallback textual paralelo
 (TF-IDF) — o reranker é a única fonte de similaridade textual do motor.
+
+3. Validação técnica determinística (matching/validacao.py — dimensão, peso,
+   voltagem, categórico, características) roda em cima do candidato que
+   "ganhou" nos passos 1/2, ANTES de `avaliar()` devolver o detalhe: uma
+   pendência crítica (ex.: edital exige 75g/m², produto oferece 180g/m² —
+   texto quase idêntico, especificação divergente) rebaixa "confianca" de
+   "alta" pra "media", nunca o contrário. Garante que confiança automática
+   (o que entra em cotação/proposta/margem sem o usuário confirmar nada)
+   nunca conviva com um requisito técnico obrigatório não cumprido.
 """
 from __future__ import annotations
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 
 from ..config import settings
 from .embeddings import rerank as _rerank
-from ..analise_edital import rerank_gemini as _rerank_gemini
+from .validacao import validar as _validar_tecnico
+
+log = logging.getLogger("matching.engine")
+
+
+def _rerank_gemini(*args, **kwargs):
+    """Wrapper fino só pra atrasar o import de ..analise_edital (2752 linhas:
+    4 provedores de LLM, OCR, extração de PDF/DOCX/OLE2 via subprocess) pro
+    momento em que o seletor "gemini" do reranker é de fato usado -- achado
+    real (auditoria de arquitetura pedida pelo usuário): matching/engine.py é
+    o núcleo determinístico do motor, mas importava esse módulo gigante no
+    nível do arquivo só por causa deste ÚNICO caminho experimental (restrito
+    a uma conta, ver _USUARIOS_SELETOR_RERANKER em main.py). Qualquer código
+    que só queira o motor de matching (sem IA nenhuma, ou só com o reranker
+    padrão da DeepInfra) arrastava a árvore inteira de IA/OCR mesmo assim.
+    Mantido como uma função de módulo (não inline em _reranker_scores) de
+    propósito: é o nome que os testes substituem via monkeypatch.setattr
+    (engine_mod, "_rerank_gemini", ...) -- continua funcionando igual,
+    porque o teste troca este atributo do módulo antes de chamar o motor."""
+    from ..analise_edital import rerank_gemini
+    return rerank_gemini(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +118,10 @@ class ProdutoCat:
     catmat: str = ""
     catser: str = ""
     palavras_chave: str = ""
+    # campo do catálogo (Produto.itens_por_unidade) -- repassado pra
+    # validacao._corrigir_por_embalagem na checagem técnica abaixo, mesmo
+    # tratamento de granularidade (resma x caixa) que /detalhe já aplica.
+    itens_por_unidade: float | None = None
 
     def texto(self) -> str:
         """Texto mandado ao reranker — descrição + palavras-chave como
@@ -185,6 +219,30 @@ class MatchingEngine:
                 if cod:
                     self._idx_codigo.setdefault(f"{tipo}:{cod}", []).append(i)
 
+        # Cache de reranker POR INSTÂNCIA (nunca global): o catálogo
+        # (self._textos_prod) e o modelo/backend são fixos pra vida desta
+        # engine, então a mesma descrição de item ("PAPEL A4 75G/M² 500
+        # FOLHAS", por exemplo) dá exatamente o mesmo score sempre que
+        # reaparecer — e reaparece MUITO, tanto dentro de um edital quanto
+        # entre editais diferentes do mesmo usuário (ver _gerar_matches_
+        # usuario em service.py, que cria UMA engine e chama avaliar() em
+        # loop pra milhares de editais seguidos). Achado real (auditoria de
+        # performance pedida pelo usuário): sem cache nenhum, um recálculo
+        # completo (3600 produtos, 14652 editais) gerava ~1,7M chamadas HTTP
+        # ao reranker -- a maior parte pagando de novo por um texto que já
+        # tinha sido pontuado minutos antes. Guardado na INSTÂNCIA (não num
+        # dict de módulo) porque o resultado depende do catálogo e do
+        # modelo desta engine especificamente -- um dict global
+        # misturaria score de catálogos/usuários diferentes pro mesmo texto
+        # de item, e também não teria como ser descartado (cresceria sem
+        # teto, o mesmo problema já apontado em embeddings._cache_deepinfra).
+        # Só guarda sucesso (scores != None): uma falha transitória (rede,
+        # HTTP 503) não pode "travar" None pra todo o resto da rodada só
+        # porque o mesmo texto reapareceu -- o disjuntor (ver embeddings.
+        # ia_bloqueada) já evita a chamada de rede nesse caso sem precisar
+        # de cache nenhum.
+        self._cache_rerank: dict[str, list[float]] = {}
+
     def _reranker_scores(self, texto_item: str) -> list[float] | None:
         """Pontua TODO o catálogo contra o item numa chamada só (o reranker
         broadcasta 1 query contra N documentos). None se a IA estiver
@@ -192,11 +250,28 @@ class MatchingEngine:
         "sem sinal disponível", nunca deixa a exceção subir."""
         if not self.usar_ia or not texto_item or not self._textos_prod:
             return None
+        cacheado = self._cache_rerank.get(texto_item)
+        if cacheado is not None:
+            return cacheado
         if self._usa_gemini:
-            return _rerank_gemini(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
-                                  api_key=self._gemini_api_key)
-        return _rerank(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
-                       api_key=settings.DEEPINFRA_API_KEY, modelo=self._modelo_reranker)
+            # Achado real (auditoria de performance pedida pelo usuário):
+            # rerank_gemini (analise_edital.py) tem o PRÓPRIO prompt
+            # (_PROMPT_RERANK), que já pede explicitamente "mesmo tipo de
+            # objeto e uso prático, não só categoria parecida" -- a mesma
+            # instrução de _INSTRUCAO_RERANKER, redundante aqui. Prefixá-la
+            # de novo só comia ~196 chars do orçamento de 500 que
+            # rerank_gemini reserva pro texto do item (sobravam uns 300
+            # chars de descrição de verdade) sem agregar nada que o prompt
+            # já não garantisse por conta própria. _rerank (DeepInfra) NÃO
+            # tem prompt próprio -- é uma comparação direta query/documento
+            # --, então continua precisando do prefixo.
+            scores = _rerank_gemini(texto_item, self._textos_prod, api_key=self._gemini_api_key)
+        else:
+            scores = _rerank(self._INSTRUCAO_RERANKER + texto_item, self._textos_prod,
+                             api_key=settings.DEEPINFRA_API_KEY, modelo=self._modelo_reranker)
+        if scores is not None:
+            self._cache_rerank[texto_item] = scores
+        return scores
 
     def _score_item(self, item: ItemEdt, texto_item: str | None = None,
                     scores: list[float] | None = None) -> tuple[float, ProdutoCat | None, str]:
@@ -284,6 +359,38 @@ class MatchingEngine:
             else:
                 confianca = "media"
 
+            # Achado real (usuário reportou): "Papel A4 75g/m²" exigido batendo
+            # confiança alta com "Papel A4 180g/m²" ofertado -- texto quase
+            # idêntico (mesmo o reranker vê como o mesmo produto), mas a
+            # especificação numérica diverge de verdade. Sem operador explícito
+            # ("no mínimo"/"no máximo") no texto do item, a exigência é por
+            # igualdade (ver atributos.py) -- "mais" não serve só porque é
+            # maior, o item pode exigir exatamente aquele valor por um motivo
+            # (gramatura certa pra impressora, tensão certa pro equipamento).
+            # Regra central, vale pra qualquer atributo (peso, dimensão,
+            # voltagem, formato de grampo...): pendência CRÍTICA da validação
+            # técnica nunca pode conviver com confiança automática -- rebaixa
+            # pra "media" e deixa a decisão final pro usuário confirmar
+            # manualmente, mesmo quando o motivo foi código exato corroborado.
+            # Só vale a pena checar quando confianca ainda é "alta" -- é o
+            # único valor que essa checagem pode mudar (achado real, revisão
+            # de performance-engineer: rodar a extração de atributos de novo
+            # pra um item que já ia ficar "media" por outro motivo é CPU
+            # gasta sem efeito possível no resultado).
+            if confianca == "alta" and prod is not None:
+                # Achado real (auditoria de error-detective): esta chamada
+                # roda em BackgroundTasks, por item, pra TODO edital de TODO
+                # usuário -- uma exceção aqui (bug futuro em validacao.py/
+                # atributos.py, dado malformado que escapou das defesas já
+                # existentes ali) não pode derrubar a avaliação do edital
+                # inteiro. Falha ABERTA (mantém a confiança já calculada,
+                # não rebaixa "no escuro") -- mais seguro que propagar.
+                try:
+                    if _validar_tecnico(it.texto(), prod.descricao, prod.itens_por_unidade).criticas:
+                        confianca = "media"
+                except Exception:
+                    log.exception("validação técnica falhou pro item %r x produto %s", it.numero, prod.id)
+
             candidatos: list[dict] = []
             if scores:
                 ordenados = sorted(range(len(scores)), key=lambda i: -scores[i])
@@ -312,7 +419,16 @@ class MatchingEngine:
 
             detalhe.append({
                 "item": it.numero,
-                "descricao_item": it.descricao[:160],
+                # texto COMPLETO (achado real, revisão de code-reviewer/
+                # architect-reviewer): cortar aqui fazia a listagem de
+                # editais (que reaplica validacao.validar() em cima deste
+                # mesmo campo, ver main.py) checar um texto diferente do que
+                # "confianca" acima usou -- um atributo divergente que só
+                # aparecesse depois do corte não aparecia na pendência
+                # mostrada na tela, mesmo com a confiança já rebaixada por
+                # ele. Frontend quebra linha por CSS (overflow-wrap), não
+                # depende de um tamanho fixo.
+                "descricao_item": it.descricao,
                 "produto_id": prod.id if prod else None,
                 "produto": prod.descricao if prod else None,
                 "score_item": round(sc, 3),

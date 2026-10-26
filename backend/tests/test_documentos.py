@@ -74,6 +74,23 @@ def test_usuario_nao_baixa_arquivo_de_documento_de_outro_usuario():
     assert resp.body == b"segredo do dono"
 
 
+def test_baixar_arquivo_com_falha_de_decifra_da_erro_claro_em_vez_de_500_cru(monkeypatch):
+    """Achado real (auditoria de segurança pedida pelo usuário, item 9):
+    se a chave de cifra não bater mais com o que gravou o arquivo (ex.:
+    SECRET_KEY/APP_ENCRYPTION_KEY trocada), auth.decifrar devolve None e o
+    código antigo quebrava com TypeError genérico em
+    base64.b64decode(None). Agora devolve um 500 com mensagem que aponta
+    pra causa, em vez de deixar a exceção crua subir."""
+    db = _sessao()
+    u = _usuario(db)
+    criado = _criar(db, u)
+    monkeypatch.setattr(auth, "decifrar", lambda token: None)
+    with pytest.raises(HTTPException) as exc:
+        baixar_arquivo_documento(criado["id"], user=u, db=db)
+    assert exc.value.status_code == 500
+    assert "decifrar" in exc.value.detail.lower()
+
+
 def test_usuario_nao_edita_documento_de_outro_usuario():
     db = _sessao()
     dono = _usuario(db, "dono2@t.com")

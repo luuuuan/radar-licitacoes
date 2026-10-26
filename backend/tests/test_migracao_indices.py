@@ -113,3 +113,27 @@ def test_migrar_indices_cria_todos_os_usuario_id_e_telegram_codigo(monkeypatch):
 
     for tabela, nome in _INDICES_NOVOS:
         assert _tem_indice(engine, nome, tabela), f"{nome} não foi criado pela migração"
+
+
+# ---------------------------------------------------------------------------
+# Achado real #4 (auditoria de banco pedida pelo usuário): CREATE INDEX comum
+# (sem CONCURRENTLY) no Postgres bloqueia escrita na tabela pelo tempo do
+# build inteiro -- trocado por CONCURRENTLY (app.database._criar_indices_
+# concurrently), que exige rodar FORA de uma transação (conexão em
+# autocommit). Não dá pra testar a semântica real de CONCURRENTLY aqui (a
+# suíte roda em sqlite, sem Postgres disponível) -- mas dá pra confirmar que
+# a função nunca derruba a migração quando um item falha.
+# ---------------------------------------------------------------------------
+
+def test_criar_indices_concurrently_nao_derruba_migracao_quando_um_item_falha(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    # SQL do Postgres (pg_class/pg_index, CONCURRENTLY) não existe no
+    # sqlite -- cada item desta lista falha, mas a chamada não deve levantar.
+    db_module._criar_indices_concurrently([
+        ("indice_falso_1", "tabela_falsa",
+         "CREATE INDEX CONCURRENTLY IF NOT EXISTS indice_falso_1 ON tabela_falsa (col)"),
+        ("indice_falso_2", "tabela_falsa",
+         "CREATE INDEX CONCURRENTLY IF NOT EXISTS indice_falso_2 ON tabela_falsa (col)"),
+    ])

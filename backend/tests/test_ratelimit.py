@@ -104,6 +104,47 @@ def test_ip_cliente_cai_pro_ip_da_conexao_sem_o_header():
     assert rl.ip_cliente(_req("5.6.7.8")) == "5.6.7.8"
 
 
+# ---------------------------------------------------------------------------
+# Achado real (auditoria de segurança pedida pelo usuário): com Cloudflare
+# na frente da hospedagem, a cadeia de X-Forwarded-For passa a ter DOIS
+# saltos (cliente -> Cloudflare -> hospedagem) -- o último valor passa a ser
+# o IP da Cloudflare, igual pra todo visitante, e o rate limit por IP vira
+# um limite único pra base inteira. CF-Connecting-IP (escrito pela própria
+# Cloudflare com o IP real, em qualquer topologia por trás dela) resolve
+# isso sem precisar saber quantos saltos existem.
+# ---------------------------------------------------------------------------
+
+def test_ip_cliente_prioriza_cf_connecting_ip_quando_presente():
+    req = Request({"type": "http", "headers": [
+        (b"cf-connecting-ip", b"8.8.4.4"),
+        (b"x-forwarded-for", b"8.8.4.4, ip-da-cloudflare"),
+    ], "client": ("127.0.0.1", 1)})
+    assert rl.ip_cliente(req) == "8.8.4.4"
+
+
+def test_ip_cliente_cf_connecting_ip_diferencia_visitantes_atras_da_mesma_cloudflare():
+    """O cenário real do achado: dois visitantes diferentes, mesma cadeia de
+    X-Forwarded-For (mesmo IP da Cloudflare no final) -- sem CF-Connecting-IP
+    cairiam na MESMA chave de rate limit."""
+    req1 = Request({"type": "http", "headers": [
+        (b"cf-connecting-ip", b"1.2.3.4"),
+        (b"x-forwarded-for", b"1.2.3.4, ip-da-cloudflare"),
+    ], "client": ("127.0.0.1", 1)})
+    req2 = Request({"type": "http", "headers": [
+        (b"cf-connecting-ip", b"9.9.9.9"),
+        (b"x-forwarded-for", b"9.9.9.9, ip-da-cloudflare"),
+    ], "client": ("127.0.0.1", 1)})
+    assert rl.ip_cliente(req1) != rl.ip_cliente(req2)
+
+
+def test_ip_cliente_sem_cf_connecting_ip_usa_x_forwarded_for_normal():
+    """Sem Cloudflare na frente (só a hospedagem, um salto só), continua
+    exatamente como antes: último valor do X-Forwarded-For."""
+    req = Request({"type": "http", "headers": [(b"x-forwarded-for", b"9.9.9.9, 10.0.0.1")],
+                   "client": ("127.0.0.1", 1)})
+    assert rl.ip_cliente(req) == "10.0.0.1"
+
+
 # --------- /api/auth/login --------- #
 
 def test_login_bloqueia_apos_muitas_tentativas_com_mesmo_email():

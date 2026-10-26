@@ -15,7 +15,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app import auth
 from app.config import settings
-from app.models import Base, Usuario
+from app.main import auth_redefinir_senha, RedefinirSenhaIn
+from app.models import Base, Usuario, utcnow
 
 
 def _sessao():
@@ -192,3 +193,75 @@ def test_get_current_user_email_nao_verificado_da_403():
     with pytest.raises(HTTPException) as exc:
         auth.get_current_user(_req_com_cookie(token), Response(), db)
     assert exc.value.status_code == 403
+
+
+# --------- token_versao: trocar/redefinir senha invalida sessão aberta --------- #
+# --------- com a senha antiga (achado real, auditoria de segurança) --------- #
+
+def test_get_current_user_token_com_tv_desatualizada_da_401():
+    db = _sessao()
+    u = _usuario(db)
+    token = auth.criar_token(u.id, token_versao=0)
+    u.token_versao = 1   # ex.: senha trocada depois que este token foi emitido
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_req_com_cookie(token), Response(), db)
+    assert exc.value.status_code == 401
+
+
+def test_get_current_user_token_com_tv_atual_autentica():
+    db = _sessao()
+    u = _usuario(db)
+    u.token_versao = 2
+    db.commit()
+    token = auth.criar_token(u.id, token_versao=2)
+    resultado = auth.get_current_user(_req_com_cookie(token), Response(), db)
+    assert resultado.id == u.id
+
+
+def test_get_current_user_token_sem_tv_equivale_a_zero():
+    """Token emitido antes de "tv" existir (sessão aberta num deploy
+    anterior) -- não pode virar 401 à toa pra um usuário que nunca trocou
+    a senha (token_versao ainda no padrão 0)."""
+    db = _sessao()
+    u = _usuario(db)
+    assert u.token_versao == 0
+    token_formato_antigo = jwt.encode(
+        {"sub": str(u.id), "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        settings.SECRET_KEY, algorithm="HS256")
+    resultado = auth.get_current_user(_req_com_cookie(token_formato_antigo), Response(), db)
+    assert resultado.id == u.id
+
+
+def _usuario_com_token_reset(db) -> Usuario:
+    u = _usuario(db)
+    u.token_reset_senha = "token-de-reset-valido"
+    u.token_reset_expira = utcnow() + timedelta(hours=1)
+    db.commit()
+    return u
+
+
+def test_redefinir_senha_incrementa_token_versao():
+    db = _sessao()
+    u = _usuario_com_token_reset(db)
+    versao_antes = u.token_versao
+    req = Request({"type": "http", "headers": [], "client": ("9.9.9.1", 1)})
+    auth_redefinir_senha(RedefinirSenhaIn(token="token-de-reset-valido", senha="SenhaNova2@"), req, db)
+    assert u.token_versao == versao_antes + 1
+
+
+def test_redefinir_senha_invalida_sessao_aberta_com_senha_antiga():
+    """O cenário real que motivou o achado: uma sessão (roubada ou não)
+    aberta ANTES do "esqueci minha senha" precisa parar de valer assim que
+    a senha é redefinida -- senão o invasor continua com acesso mesmo
+    depois da vítima "recuperar" a conta."""
+    db = _sessao()
+    u = _usuario_com_token_reset(db)
+    token_da_sessao_antiga = auth.criar_token(u.id, token_versao=u.token_versao)
+
+    req = Request({"type": "http", "headers": [], "client": ("9.9.9.2", 1)})
+    auth_redefinir_senha(RedefinirSenhaIn(token="token-de-reset-valido", senha="SenhaNova2@"), req, db)
+
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_req_com_cookie(token_da_sessao_antiga), Response(), db)
+    assert exc.value.status_code == 401

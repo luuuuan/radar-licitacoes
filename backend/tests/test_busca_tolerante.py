@@ -41,6 +41,56 @@ def test_medida_colada_ou_separada_e_a4():
     assert not bate("Papel A4 750 g", "a4 75g")
 
 
+# ---------------------------------------------------------------------------
+# Achado real (auditoria de arquitetura pedida pelo usuário): "5.000" e
+# "5000" normalizavam pra strings DIFERENTES, então nunca batiam um com o
+# outro como número -- quem buscava "5000 folhas" não achava o item cujo
+# texto bruto do PNCP usa "5.000 folhas" (e vice-versa).
+# ---------------------------------------------------------------------------
+
+def test_numero_com_separador_de_milhar_bate_sem_separador():
+    assert bate("Papel A4 5.000 folhas", "5000 folhas")
+
+
+def test_numero_sem_separador_bate_com_separador_de_milhar():
+    assert bate("Papel A4 5000 folhas", "5.000 folhas")
+
+
+def test_numero_com_separador_de_milhar_virgula_tambem_bate():
+    assert bate("Papel A4 5.000 folhas", "5,000 folhas")
+
+
+def test_numero_grande_com_varios_grupos_de_milhar():
+    assert bate("Lote de 1.234.567 unidades", "1234567 unidades")
+
+
+def test_decimal_continua_exato_nao_e_tratado_como_milhar():
+    """"0.7"/"18.90" têm só 1-2 dígitos depois do separador -- não é um
+    padrão de milhar (que exige grupos de exatamente 3) e não pode ser
+    confundido com outro número só porque os dois têm um ponto."""
+    assert bate("Álcool em gel 0,7 litro", "0.7 litro")
+    assert not bate("Álcool em gel 0,7 litro", "0.70 litro")
+
+
+def test_numero_com_milhar_continua_nao_casando_numero_diferente():
+    assert not bate("Papel A4 5.000 folhas", "500 folhas")
+    assert not bate("Papel A4 5.000 folhas", "50000 folhas")
+
+
+def test_sql_numero_com_separador_de_milhar_aceita_ponto_virgula_ou_nada():
+    """condicoes_sql (caminho Postgres) tem que casar o número digitado sem
+    separador contra o texto bruto da coluna, que pode ter "5.000", "5,000"
+    ou "5000" -- mesmo achado do teste acima, só no lado SQL."""
+    sql = str(_condicoes_busca_item("5000", True)[0].compile(compile_kwargs={"literal_binds": True}))
+    padrao = _extrair_padroes_regex(sql)[0]
+    padrao_python = _pg_regex_para_python(padrao)
+    assert _re.search(padrao_python, "papel a4 5000 folhas")
+    assert _re.search(padrao_python, "papel a4 5.000 folhas")
+    assert _re.search(padrao_python, "papel a4 5,000 folhas")
+    assert not _re.search(padrao_python, "papel a4 500 folhas")
+    assert not _re.search(padrao_python, "papel a4 50000 folhas")
+
+
 def test_sinonimo_de_produto_e_stopword():
     assert bate("Papel A4 Chamex 75 g", "sulfite")
     assert bate("Grampeador de mesa", "grampeador mesa")

@@ -9,7 +9,7 @@ from .models import utcnow
 
 from sqlalchemy import delete, exists, select
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .config import settings, parse_csv_str
 from .models import (
@@ -105,7 +105,7 @@ def _carregar_catalogo(db: Session, usuario_id: int) -> list[ProdutoCat]:
     return [ProdutoCat(
         id=p.id, descricao=p.descricao, ncm=p.ncm or "", cest=p.cest or "",
         ean=p.ean or "", catmat=p.catmat or "", catser=p.catser or "",
-        palavras_chave=p.palavras_chave or "",
+        palavras_chave=p.palavras_chave or "", itens_por_unidade=p.itens_por_unidade,
     ) for p in produtos]
 
 
@@ -289,7 +289,13 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         Match.status.in_(("proposta_enviada", "ganho", "perdido")),
     )
     hoje = date.today()
-    query_editais = select(Edital).where(
+    # Achado real (auditoria de banco pedida pelo usuário): sem o eager load
+    # abaixo, cada acesso a `ed.itens` no loop logo mais (itens_edt = [... for
+    # i in ed.itens]) disparava 1 SELECT em itens_edital POR EDITAL -- com
+    # recalcular_todos=True (base inteira, ~15k editais numa conta ativa),
+    # isso é literalmente milhares de round-trips evitáveis por rodada. Mesmo
+    # padrão já usado em main.py (bloco "sem_match") pra essa exata relação.
+    query_editais = select(Edital).options(selectinload(Edital.itens)).where(
         (Edital.data_encerramento.is_(None))
         | (Edital.data_encerramento >= hoje)
         | (Edital.id.in_(sub_acompanhados))
@@ -318,182 +324,212 @@ def _gerar_matches_usuario(db: Session, usuario, recalcular_todos: bool = False,
         log.info("Recálculo do usuário %s retomando do checkpoint (edital_id=%s, %s)",
                 usuario.id, cp_id, usuario.recalculo_checkpoint_em)
     # mais relevantes primeiro (se a cota de IA acabar, os melhores já foram feitos)
-    editais = db.execute(
-        query_editais.order_by(Edital.coletado_em.desc(), Edital.id.desc())
-    ).scalars().all()
-    total = len(editais)
-    if progresso:
-        progresso(0, total)
-
-    # carrega de uma vez os matches que o usuário já tem (mais rápido que consultar
-    # um a um, e evita tentar criar duplicata na mesma rodada)
-    existentes_map = {
-        m.edital_id: m for m in db.execute(
-            select(Match).where(Match.usuario_id == usuario.id)
-        ).scalars().all()
-    }
-
-    resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
-    novos_fortes: list[Edital] = []   # editais dos matches fortes recém-criados
-    # retrato do que já foi de fato persistido (o commit em lote pode falhar
-    # e ser desfeito por rollback — sem isso, o resumo/aviso reportaria
-    # progresso que na verdade nunca chegou a salvar no banco).
-    resumo_commitado = dict(resumo)
-    novos_fortes_commitados: list[Edital] = []
-    ultimo_visto: Edital | None = None   # pra gravar o checkpoint junto do commit parcial
-    for _i, ed in enumerate(editais):
-        if progresso and _i % 50 == 0:
-            progresso(_i, total)
-        # commits parciais: com dezenas de milhares de editais isso pode levar
-        # minutos/horas rodando numa única transação. Sem isso, qualquer soluço
-        # de conexão com o banco no meio do caminho perde TODO o progresso.
-        if _i > 0 and _i % 200 == 0:
-            if recalcular_todos and ultimo_visto is not None:
-                usuario.recalculo_checkpoint_edital_id = ultimo_visto.id
-                usuario.recalculo_checkpoint_coletado_em = ultimo_visto.coletado_em
-                usuario.recalculo_checkpoint_em = utcnow()
-            try:
-                db.commit()
-                resumo_commitado = dict(resumo)
-                novos_fortes_commitados = list(novos_fortes)
-            except IntegrityError:
-                db.rollback()
-                resumo, novos_fortes = dict(resumo_commitado), list(novos_fortes_commitados)
-                log.warning("Conflito de matches em paralelo (usuário %s) — ignorado neste lote.",
-                            usuario.id)
-            except OperationalError:
-                # a conexão com o banco caiu no meio da rodada (rodadas longas,
-                # com chamadas de IA intercaladas, dão tempo da conexão expirar
-                # do lado do provedor). O commit falho é desfeito por completo
-                # pelo rollback — só o que foi commitado em lotes ANTERIORES
-                # está realmente salvo, então o resumo volta pra esse ponto.
-                db.rollback()
-                resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
-                log.warning("Conexão com o banco caiu durante os matches do usuário %s "
-                           "— parando nesta rodada com o progresso já salvo.", usuario.id)
-                break
-            # cancelamento a pedido do usuário — mesmo ponto dos commits
-            # parciais, então o que já foi salvo continua salvo (só não
-            # processa o resto da fila).
-            if deve_cancelar():
-                resumo["cancelado"] = True
-                log.info("Recálculo do usuário %s cancelado a pedido — %s/%s editais processados.",
-                         usuario.id, _i, total)
-                break
-        ultimo_visto = ed
-        existente = existentes_map.get(ed.id)
-        if existente and not recalcular_todos:
-            continue
-        resumo["editais"] += 1
-
-        itens_edt = [ItemEdt(numero=i.numero, descricao=i.descricao,
-                             ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
-                     for i in ed.itens]
-        # exclusões do próprio usuário -- achado real (auditoria do agente
-        # error-detective): esse branch deletava o Match incondicionalmente,
-        # SEM a proteção de _match_engajado que o branch "fraco" logo abaixo
-        # já tem. Um Match "ganho" (ou lido/interessante/com item confirmado)
-        # podia sumir em silêncio só porque o usuário adicionou depois um
-        # termo de exclusão genérico que por acaso bate no objeto/itens
-        # daquele edital específico -- mesma classe de bug já corrigida uma
-        # vez nesta sessão pra outro campo (preco_cotacao, ver
-        # _mesclar_confirmacoes_manuais). Edital que o usuário já se
-        # engajou com continua sendo avaliado normalmente pelas regras de
-        # exclusão dali pra frente (só este recálculo não mexe nele).
-        if aplicar_regras_exclusao(ed.objeto or "", itens_edt, termos_excl, None, categorias_excl):
-            if existente:
-                if not _match_engajado(existente):
-                    db.delete(existente)
-            continue
-
-        era_novo = existente is None
-        resultado = engine.avaliar(ed.objeto or "", itens_edt)
-
-        # Confirmação manual (ver confirmar_item_edital em main.py) é um
-        # sinal MAIS forte que o palpite fresco do reranker — o usuário
-        # olhou e disse "é este produto". Achado real: um edital com 9
-        # itens confirmados manualmente continuava "Baixa Compatibilidade
-        # · 0", porque o score AGREGADO usava só o palpite do motor, cego
-        # às confirmações (que só apareciam no detalhe por item). Mescla
-        # ANTES de decidir "fraco", com score 1.0 pros itens confirmados,
-        # e recalcula o agregado a partir daí — assim uma confirmação
-        # pode tirar o edital de "fraco".
-        detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
-        detalhe_final = _mesclar_confirmacoes_manuais(resultado.detalhe, detalhe_antigo, produtos_validos_ids)
-        # parte de TODO item avaliado (resultado.scores_por_item), não só do
-        # `detalhe` filtrado (que já exclui item de score baixo) — senão um
-        # item de confiança baixa some da conta de "fração do edital" só por
-        # não ter entrado no detalhe, mudando o agregado de itens que NEM
-        # foram confirmados.
-        scores_por_numero = {it["item"]: it["score_item"] for it in resultado.scores_por_item}
-        for it in detalhe_final:
-            if it.get("confirmado_manualmente"):
-                scores_por_numero[it["item"]] = 1.0
-        score_final, nivel_final, compativeis_final = MatchingEngine.agregar_de_scores(
-            list(scores_por_numero.values()))
-
-        # não guardamos matches "fracos" (baixa compatibilidade): entopem a base
-        # e não representam oportunidade real. Se um match existente virou fraco
-        # (ex.: no recálculo após mudar o catálogo), removemos — A MENOS que o
-        # usuário já tenha se engajado com ele (ver _match_engajado): aí só
-        # atualiza score/nivel pra refletir a realidade, mas preserva a linha.
-        if nivel_final == "fraco":
-            if existente:
-                if _match_engajado(existente):
-                    existente.score = score_final
-                    existente.nivel = nivel_final
-                    existente.itens_compativeis = compativeis_final
-                    existente.detalhe = {"itens": detalhe_final}
-                else:
-                    db.delete(existente)
-                    existentes_map.pop(ed.id, None)
-            continue
-        m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
-        if existente is None:
-            db.add(m)
-            existentes_map[ed.id] = m   # evita recriar na mesma rodada
-        m.score = score_final
-        m.nivel = nivel_final
-        m.itens_compativeis = compativeis_final
-        m.detalhe = {"itens": detalhe_final}
-        resumo["atualizados"] += 1
-        if nivel_final == "forte":
-            resumo["fortes"] += 1
-            if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
-                novos_fortes.append(ed)
-    else:
-        # "else" do for: só roda se o loop terminou a lista inteira sem
-        # nenhum "break" (cancelamento ou queda de conexão) — ou seja, a
-        # rodada completou de verdade. Limpa o checkpoint: a PRÓXIMA vez que
-        # alguém pedir um recálculo completo deve ser do zero de novo (reflete
-        # o catálogo mais atual), não retomar um checkpoint de uma rodada que
-        # já terminou.
-        if recalcular_todos:
-            usuario.recalculo_checkpoint_edital_id = None
-            usuario.recalculo_checkpoint_coletado_em = None
-            usuario.recalculo_checkpoint_em = None
+    # Achado real (auditoria do agente database-optimizer): cascade="all,
+    # delete-orphan" em Edital.itens (models.py) faz o SQLAlchemy recarregar
+    # a coleção de itens de QUALQUER Edital expirado que participe de um
+    # flush -- mesmo sem este código tocar `ed.itens` (já extraído pra
+    # itens_por_edital acima, achado real anterior). expire_on_commit=True
+    # (padrão do SessionLocal) expira TODO objeto da sessão em cada commit
+    # parcial (a cada 200 editais, ver loop abaixo) -- cada Edital tocado
+    # depois disso (ex.: só por `existentes_map.get(ed.id)`) dispara essa
+    # recarga, 1 SELECT por edital restante (medido: 250 editais, commit em
+    # 200 -> 50 SELECTs individuais de itens_edital pelos 50 que sobraram).
+    # Desligado só pela duração deste loop (nunca escrevemos em Edital/
+    # ItemEdital aqui, só lemos -- sem risco de servir dado desatualizado
+    # desses dois) e restaurado no finally, antes de devolver o controle
+    # pro chamador.
+    _expire_on_commit_original = db.expire_on_commit
+    db.expire_on_commit = False
     try:
-        db.commit()
-    except IntegrityError:
-        # rede de segurança: se outra coleta criou os mesmos matches em paralelo,
-        # desfaz e não derruba o processo (a próxima coleta completa o que faltar)
-        db.rollback()
-        log.warning("Conflito de matches em paralelo (usuário %s) — ignorado.", usuario.id)
-        return {"editais": 0, "atualizados": 0, "fortes": 0}
-    except OperationalError:
-        # conexão caiu bem no commit final — o rollback desfaz essa última
-        # leva pendente, então o resumo/aviso voltam pro que foi de fato
-        # commitado nos lotes anteriores (o resto já está salvo no banco).
-        db.rollback()
-        resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
-        log.warning("Conexão com o banco caiu ao finalizar os matches do usuário %s "
-                   "— mantendo o progresso já commitado nesta rodada.", usuario.id)
+        editais = db.execute(
+            query_editais.order_by(Edital.coletado_em.desc(), Edital.id.desc())
+        ).scalars().all()
+        total = len(editais)
+        if progresso:
+            progresso(0, total)
 
-    if novos_fortes and not recalcular_todos:
-        _notificar_usuario(usuario, novos_fortes)
-    if progresso:
-        progresso(total, total)
-    return resumo
+        # Extrai os itens pra ItemEdt (dataclass solto) logo depois da query,
+        # ANTES de qualquer commit -- defesa redundante, mas barata, junto
+        # com expire_on_commit=False acima: mesmo que algo reative a
+        # expiração no meio do caminho, o loop já não depende mais de
+        # `ed.itens` nenhuma vez (só deste dict), então não tem como voltar
+        # a pagar 1 SELECT por edital por causa disso especificamente.
+        itens_por_edital: dict[int, list[ItemEdt]] = {
+            ed.id: [ItemEdt(numero=i.numero, descricao=i.descricao,
+                           ncm=i.ncm or "", catalogo_codigo=i.catalogo_codigo or "")
+                   for i in ed.itens]
+            for ed in editais
+        }
+
+        # carrega de uma vez os matches que o usuário já tem (mais rápido que consultar
+        # um a um, e evita tentar criar duplicata na mesma rodada)
+        existentes_map = {
+            m.edital_id: m for m in db.execute(
+                select(Match).where(Match.usuario_id == usuario.id)
+            ).scalars().all()
+        }
+
+        resumo = {"editais": 0, "atualizados": 0, "fortes": 0}
+        novos_fortes: list[Edital] = []   # editais dos matches fortes recém-criados
+        # retrato do que já foi de fato persistido (o commit em lote pode falhar
+        # e ser desfeito por rollback — sem isso, o resumo/aviso reportaria
+        # progresso que na verdade nunca chegou a salvar no banco).
+        resumo_commitado = dict(resumo)
+        novos_fortes_commitados: list[Edital] = []
+        ultimo_visto: Edital | None = None   # pra gravar o checkpoint junto do commit parcial
+        for _i, ed in enumerate(editais):
+            if progresso and _i % 50 == 0:
+                progresso(_i, total)
+            # commits parciais: com dezenas de milhares de editais isso pode levar
+            # minutos/horas rodando numa única transação. Sem isso, qualquer soluço
+            # de conexão com o banco no meio do caminho perde TODO o progresso.
+            if _i > 0 and _i % 200 == 0:
+                if recalcular_todos and ultimo_visto is not None:
+                    usuario.recalculo_checkpoint_edital_id = ultimo_visto.id
+                    usuario.recalculo_checkpoint_coletado_em = ultimo_visto.coletado_em
+                    usuario.recalculo_checkpoint_em = utcnow()
+                try:
+                    db.commit()
+                    resumo_commitado = dict(resumo)
+                    novos_fortes_commitados = list(novos_fortes)
+                except IntegrityError:
+                    db.rollback()
+                    resumo, novos_fortes = dict(resumo_commitado), list(novos_fortes_commitados)
+                    log.warning("Conflito de matches em paralelo (usuário %s) — ignorado neste lote.",
+                                usuario.id)
+                except OperationalError:
+                    # a conexão com o banco caiu no meio da rodada (rodadas longas,
+                    # com chamadas de IA intercaladas, dão tempo da conexão expirar
+                    # do lado do provedor). O commit falho é desfeito por completo
+                    # pelo rollback — só o que foi commitado em lotes ANTERIORES
+                    # está realmente salvo, então o resumo volta pra esse ponto.
+                    db.rollback()
+                    resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
+                    log.warning("Conexão com o banco caiu durante os matches do usuário %s "
+                               "— parando nesta rodada com o progresso já salvo.", usuario.id)
+                    break
+                # cancelamento a pedido do usuário — mesmo ponto dos commits
+                # parciais, então o que já foi salvo continua salvo (só não
+                # processa o resto da fila).
+                if deve_cancelar():
+                    resumo["cancelado"] = True
+                    log.info("Recálculo do usuário %s cancelado a pedido — %s/%s editais processados.",
+                             usuario.id, _i, total)
+                    break
+            ultimo_visto = ed
+            existente = existentes_map.get(ed.id)
+            if existente and not recalcular_todos:
+                continue
+            resumo["editais"] += 1
+
+            itens_edt = itens_por_edital[ed.id]
+            # exclusões do próprio usuário -- achado real (auditoria do agente
+            # error-detective): esse branch deletava o Match incondicionalmente,
+            # SEM a proteção de _match_engajado que o branch "fraco" logo abaixo
+            # já tem. Um Match "ganho" (ou lido/interessante/com item confirmado)
+            # podia sumir em silêncio só porque o usuário adicionou depois um
+            # termo de exclusão genérico que por acaso bate no objeto/itens
+            # daquele edital específico -- mesma classe de bug já corrigida uma
+            # vez nesta sessão pra outro campo (preco_cotacao, ver
+            # _mesclar_confirmacoes_manuais). Edital que o usuário já se
+            # engajou com continua sendo avaliado normalmente pelas regras de
+            # exclusão dali pra frente (só este recálculo não mexe nele).
+            if aplicar_regras_exclusao(ed.objeto or "", itens_edt, termos_excl, None, categorias_excl):
+                if existente:
+                    if not _match_engajado(existente):
+                        db.delete(existente)
+                continue
+
+            era_novo = existente is None
+            resultado = engine.avaliar(ed.objeto or "", itens_edt)
+
+            # Confirmação manual (ver confirmar_item_edital em main.py) é um
+            # sinal MAIS forte que o palpite fresco do reranker — o usuário
+            # olhou e disse "é este produto". Achado real: um edital com 9
+            # itens confirmados manualmente continuava "Baixa Compatibilidade
+            # · 0", porque o score AGREGADO usava só o palpite do motor, cego
+            # às confirmações (que só apareciam no detalhe por item). Mescla
+            # ANTES de decidir "fraco", com score 1.0 pros itens confirmados,
+            # e recalcula o agregado a partir daí — assim uma confirmação
+            # pode tirar o edital de "fraco".
+            detalhe_antigo = existente.detalhe.get("itens") if (existente and existente.detalhe) else None
+            detalhe_final = _mesclar_confirmacoes_manuais(resultado.detalhe, detalhe_antigo, produtos_validos_ids)
+            # parte de TODO item avaliado (resultado.scores_por_item), não só do
+            # `detalhe` filtrado (que já exclui item de score baixo) — senão um
+            # item de confiança baixa some da conta de "fração do edital" só por
+            # não ter entrado no detalhe, mudando o agregado de itens que NEM
+            # foram confirmados.
+            scores_por_numero = {it["item"]: it["score_item"] for it in resultado.scores_por_item}
+            for it in detalhe_final:
+                if it.get("confirmado_manualmente"):
+                    scores_por_numero[it["item"]] = 1.0
+            score_final, nivel_final, compativeis_final = MatchingEngine.agregar_de_scores(
+                list(scores_por_numero.values()))
+
+            # não guardamos matches "fracos" (baixa compatibilidade): entopem a base
+            # e não representam oportunidade real. Se um match existente virou fraco
+            # (ex.: no recálculo após mudar o catálogo), removemos — A MENOS que o
+            # usuário já tenha se engajado com ele (ver _match_engajado): aí só
+            # atualiza score/nivel pra refletir a realidade, mas preserva a linha.
+            if nivel_final == "fraco":
+                if existente:
+                    if _match_engajado(existente):
+                        existente.score = score_final
+                        existente.nivel = nivel_final
+                        existente.itens_compativeis = compativeis_final
+                        existente.detalhe = {"itens": detalhe_final}
+                    else:
+                        db.delete(existente)
+                        existentes_map.pop(ed.id, None)
+                continue
+            m = existente or Match(edital_id=ed.id, usuario_id=usuario.id)
+            if existente is None:
+                db.add(m)
+                existentes_map[ed.id] = m   # evita recriar na mesma rodada
+            m.score = score_final
+            m.nivel = nivel_final
+            m.itens_compativeis = compativeis_final
+            m.detalhe = {"itens": detalhe_final}
+            resumo["atualizados"] += 1
+            if nivel_final == "forte":
+                resumo["fortes"] += 1
+                if era_novo:   # só avisa de oportunidades NOVAS (não no recálculo)
+                    novos_fortes.append(ed)
+        else:
+            # "else" do for: só roda se o loop terminou a lista inteira sem
+            # nenhum "break" (cancelamento ou queda de conexão) — ou seja, a
+            # rodada completou de verdade. Limpa o checkpoint: a PRÓXIMA vez que
+            # alguém pedir um recálculo completo deve ser do zero de novo (reflete
+            # o catálogo mais atual), não retomar um checkpoint de uma rodada que
+            # já terminou.
+            if recalcular_todos:
+                usuario.recalculo_checkpoint_edital_id = None
+                usuario.recalculo_checkpoint_coletado_em = None
+                usuario.recalculo_checkpoint_em = None
+        try:
+            db.commit()
+        except IntegrityError:
+            # rede de segurança: se outra coleta criou os mesmos matches em paralelo,
+            # desfaz e não derruba o processo (a próxima coleta completa o que faltar)
+            db.rollback()
+            log.warning("Conflito de matches em paralelo (usuário %s) — ignorado.", usuario.id)
+            return {"editais": 0, "atualizados": 0, "fortes": 0}
+        except OperationalError:
+            # conexão caiu bem no commit final — o rollback desfaz essa última
+            # leva pendente, então o resumo/aviso voltam pro que foi de fato
+            # commitado nos lotes anteriores (o resto já está salvo no banco).
+            db.rollback()
+            resumo, novos_fortes = resumo_commitado, novos_fortes_commitados
+            log.warning("Conexão com o banco caiu ao finalizar os matches do usuário %s "
+                       "— mantendo o progresso já commitado nesta rodada.", usuario.id)
+
+        if novos_fortes and not recalcular_todos:
+            _notificar_usuario(usuario, novos_fortes)
+        if progresso:
+            progresso(total, total)
+        return resumo
+    finally:
+        db.expire_on_commit = _expire_on_commit_original
 
 
 def notificar_usuario_lote(usuario, titulo: str, intro: str, itens: list[dict],

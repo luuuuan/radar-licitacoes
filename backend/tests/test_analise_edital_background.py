@@ -221,3 +221,87 @@ def test_status_sem_entrada_em_memoria_e_sem_analise_no_banco_continua_parado(tm
     st = app_main.analise_edital_status(ed.id, user=u, db=db)
 
     assert st == {"rodando": False, "erro": None}
+
+
+# ---------------------------------------------------------------------------
+# Achado real (auditoria de arquitetura pedida pelo usuário): _analise_status
+# guarda o RESULTADO INTEIRO da análise por (usuário, edital), sem teto nem
+# expurgo -- cresce com toda combinação já analisada neste processo, nunca
+# encolhe. _definir_status_analise agora descarta a entrada mais antiga JÁ
+# TERMINADA ao passar do teto, nunca uma em andamento.
+# ---------------------------------------------------------------------------
+
+def test_definir_status_analise_descarta_a_mais_antiga_terminada_ao_passar_do_teto(monkeypatch):
+    app_main._analise_status.clear()
+    monkeypatch.setattr(app_main, "_MAX_ANALISE_STATUS", 3)
+
+    app_main._definir_status_analise((1, 100), {"rodando": False, "erro": None})
+    app_main._definir_status_analise((1, 101), {"rodando": False, "erro": None})
+    app_main._definir_status_analise((1, 102), {"rodando": False, "erro": None})
+    assert len(app_main._analise_status) == 3
+
+    app_main._definir_status_analise((1, 103), {"rodando": False, "erro": None})
+
+    assert len(app_main._analise_status) == 3
+    assert (1, 100) not in app_main._analise_status   # a mais antiga saiu
+    assert (1, 103) in app_main._analise_status
+
+
+def test_definir_status_analise_nunca_descarta_entrada_em_andamento(monkeypatch):
+    app_main._analise_status.clear()
+    monkeypatch.setattr(app_main, "_MAX_ANALISE_STATUS", 2)
+
+    app_main._definir_status_analise((1, 100), {"rodando": True, "erro": None})   # ainda rodando -- protegida
+    app_main._definir_status_analise((1, 101), {"rodando": False, "erro": None})
+    app_main._definir_status_analise((1, 102), {"rodando": False, "erro": None})
+
+    # passou do teto (3 > 2), mas a única candidata a sair é a "rodando",
+    # que nunca pode ser removida -- fica temporariamente acima do teto
+    # em vez de apagar um job ainda em andamento.
+    assert (1, 100) in app_main._analise_status
+    assert app_main._analise_status[(1, 100)]["rodando"] is True
+
+
+# ---------------------------------------------------------------------------
+# Achado real (auditoria de arquitetura pedida pelo usuário): até a versão
+# anterior, _analise_cancelar era keyed só por usuário (não por (usuário,
+# edital)). analise_edital_status() cai no fallback de cache (acima) e chama
+# analise_edital() de volta quando não há entrada em _analise_status para
+# aquele edital -- e analise_edital() reseta _analise_cancelar no próprio
+# início ("defensivo"). Com a chave por usuário só, um poll de status de um
+# edital B (cache-hit, sem entrada em _analise_status) resetava o MESMO dict
+# usado pelo cancelamento de um edital A, ainda rodando em segundo plano --
+# o botão "Cancelar" da análise de A parecia não fazer nada.
+# ---------------------------------------------------------------------------
+
+def test_cancelar_de_um_edital_nao_e_apagado_por_poll_de_status_de_outro_edital(monkeypatch, tmp_path):
+    db, fabrica = _sessao_e_fabrica(tmp_path, "i.db")
+    monkeypatch.setattr(app_main, "SessionLocal", fabrica)
+    u, edital_a = _usuario_e_edital(db, email="t@t.com")
+    edital_b = Edital(fonte="PNCP", id_externo="sem-ref-valida-b", orgao="Orgao",
+                      objeto="Outro objeto", uf="SP")
+    db.add(edital_b)
+    db.commit()
+
+    # edital B já tem uma análise válida cacheada (de uma rodada anterior) e
+    # NENHUMA entrada em _analise_status -- é exatamente a condição que
+    # dispara o fallback de analise_edital_status chamando analise_edital().
+    edital_b.analise_ia = __import__("json").dumps({
+        "status": "ok", "versao": ia_module.VERSAO_PROMPT, "resumo": "ok",
+        "objeto": edital_b.objeto, "requisitos_tecnicos": [], "documentos_habilitacao": []})
+    db.commit()
+
+    # edital A está com uma análise "em andamento" nesta engine (simulado:
+    # não precisa de fato rodar em background pra este teste, só precisa
+    # que o usuário tenha acabado de pedir cancelamento pra ele).
+    app_main.analise_cancelar(edital_a.id, user=u)
+    assert app_main._analise_cancelar[(u.id, edital_a.id)] is True
+
+    # usuário abre OUTRA aba com o edital B -- o front consulta /status, cai
+    # no fallback de cache (sem entrada em _analise_status pra B) e chama
+    # analise_edital(B, ...) internamente.
+    st_b = app_main.analise_edital_status(edital_b.id, user=u, db=db)
+    assert st_b["resultado"]["status"] == "ok"   # confirma que passou pelo fallback de fato
+
+    # o cancelamento do edital A tem que continuar valendo
+    assert app_main._analise_cancelar.get((u.id, edital_a.id)) is True

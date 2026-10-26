@@ -10,6 +10,7 @@ Autenticação e segurança (multiusuário).
 from __future__ import annotations
 import base64
 import hashlib
+import logging
 from functools import lru_cache
 import re
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,7 @@ from .models import Usuario
 
 _ALG = "HS256"
 COOKIE_NOME = "radar_sessao"
+log = logging.getLogger("auth")
 
 
 # ---------------- Senha ----------------
@@ -85,6 +87,17 @@ def decifrar(token: str | None) -> str | None:
     try:
         return _fernet().decrypt(token.encode("utf-8")).decode("utf-8")
     except (InvalidToken, ValueError):
+        # Achado real (auditoria de segurança pedida pelo usuário, item 9):
+        # antes disso, uma falha aqui virava None sem nenhum log -- o dado
+        # cifrado "desaparecia" em silêncio (ex.: SECRET_KEY/
+        # APP_ENCRYPTION_KEY trocada em produção) e só aparecia como um erro
+        # genérico em outro lugar (ex.: baixar_arquivo_documento, que
+        # quebrava com TypeError ao tentar base64-decodificar None). Loga
+        # pra aparecer no monitoramento ANTES de alguém notar que um dado
+        # próprio virou ilegível.
+        log.warning("Falha ao decifrar um valor (Fernet InvalidToken/ValueError) -- "
+                    "SECRET_KEY/APP_ENCRYPTION_KEY pode ter mudado desde que este "
+                    "valor foi cifrado.")
         return None
 
 
@@ -96,13 +109,13 @@ def decifrar(token: str | None) -> str | None:
 # token em token). Sem o teto absoluto, um usuário ativo todo dia nunca
 # precisaria logar de novo; sem a inatividade, uma aba esquecida aberta num
 # computador compartilhado continuaria valendo por até 7 dias.
-def criar_token(usuario_id: int, exp_abs: float | None = None) -> str:
+def criar_token(usuario_id: int, exp_abs: float | None = None, token_versao: int = 0) -> str:
     agora = datetime.now(timezone.utc)
     if exp_abs is None:
         exp_abs = (agora + timedelta(hours=settings.TOKEN_EXPIRA_HORAS)).timestamp()
     exp = min(agora + timedelta(hours=settings.TOKEN_IDLE_HORAS),
              datetime.fromtimestamp(exp_abs, tz=timezone.utc))
-    payload = {"sub": str(usuario_id), "exp": exp, "exp_abs": exp_abs}
+    payload = {"sub": str(usuario_id), "exp": exp, "exp_abs": exp_abs, "tv": token_versao}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=_ALG)
 
 
@@ -113,8 +126,8 @@ def _payload_do_token(token: str) -> dict | None:
         return None
 
 
-def cookie_sessao(resp: Response, usuario_id: int, exp_abs: float | None = None):
-    token = criar_token(usuario_id, exp_abs)
+def cookie_sessao(resp: Response, usuario_id: int, exp_abs: float | None = None, token_versao: int = 0):
+    token = criar_token(usuario_id, exp_abs, token_versao)
     seguro = settings.APP_BASE_URL.startswith("https")
     resp.set_cookie(COOKIE_NOME, token, httponly=True, samesite="lax",
                     secure=seguro, max_age=settings.TOKEN_IDLE_HORAS * 3600,
@@ -135,7 +148,10 @@ def _renovar_cookie_se_preciso(resp: Response, uid: int, payload: dict):
         # o "exp" original do token, validado logo acima por jwt.decode,
         # ainda estava no futuro.
         exp_abs = datetime.now(timezone.utc).timestamp()
-    cookie_sessao(resp, uid, exp_abs)
+    # mesma "tv" do token atual (já validada em get_current_user contra
+    # user.token_versao antes de chegar aqui) -- a renovação por
+    # inatividade nunca muda a versão, só troca/senha faz isso.
+    cookie_sessao(resp, uid, exp_abs, payload.get("tv", 0))
 
 
 # ---------------- Dependências ----------------
@@ -164,6 +180,14 @@ def get_current_user(request: Request, response: Response,
         raise HTTPException(401, "Não autenticado")
     user = db.get(Usuario, uid)
     if not user or not user.ativo:
+        raise HTTPException(401, "Sessão inválida")
+    # token emitido ANTES da senha atual ser definida (troca de senha ou
+    # redefinição por e-mail incrementam Usuario.token_versao) -- qualquer
+    # sessão aberta antes disso, inclusive uma roubada, para de valer na
+    # próxima requisição. "tv" ausente (token de antes desse campo existir)
+    # equivale a 0, igual ao valor padrão de um usuário que nunca trocou a
+    # senha -- não desloga a base toda no deploy desta mudança.
+    if payload.get("tv", 0) != (user.token_versao or 0):
         raise HTTPException(401, "Sessão inválida")
     if not user.email_verificado:
         raise HTTPException(403, "E-mail ainda não verificado")

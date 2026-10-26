@@ -102,15 +102,42 @@ def test_analisar_por_partes_junta_tudo_e_ignora_autorrelato_de_incompleta(monke
     assert len(r["lotes"][0]["itens"]) == 2 * r["partes_analisadas"]  # com os itens de todas as partes
 
 
-def test_parte_que_falha_derruba_a_analise_com_indicacao_de_onde(monkeypatch):
+# ---------------------------------------------------------------------------
+# Achado real (auditoria de performance pedida pelo usuário): até a versão
+# anterior, UMA parte falhando (mesmo após 1 retentativa) descartava as
+# outras N-1 já analisadas e PAGAS -- a análise inteira virava erro. Agora
+# mescla o que teve sucesso e marca analise_incompleta=True com o trecho
+# que faltou, em vez de jogar tudo fora.
+# ---------------------------------------------------------------------------
+
+def test_parte_que_falha_nao_descarta_as_outras_que_tiveram_sucesso(monkeypatch):
     def falso(objeto, texto_parte, api_key, permitir_groq=True):
         if "TRECHO 2 de" in texto_parte:
             return {"status": "erro_ia", "detalhe": "http_503"}
-        return _resultado()
+        n = int(re.search(r"TRECHO (\d+) de", texto_parte).group(1))
+        r = _resultado()
+        r["documentos_habilitacao"]["juridica"] = [f"Doc jurídico do trecho {n}"]
+        return r
 
     monkeypatch.setattr(ae, "_analisar_texto_unico", falso)
     r = ae._analisar_por_partes("o", _edital_grande(), "k")
-    assert r["status"] == "erro_ia" and r["parte_com_falha"].startswith("2/")
+
+    assert r["status"] == "ok"   # as outras partes tiveram sucesso -- não é erro puro
+    assert r["analise_incompleta"] is True
+    assert r["partes_com_falha"] == ["2/9 (Edital.pdf págs. 20-38)"]
+    assert any("2/9" in a for a in r["pontos_atencao"])
+    # dado das partes que DERAM CERTO continua presente, não foi descartado
+    assert any("trecho 1" in d for d in r["documentos_habilitacao"]["juridica"])
+    assert any("trecho 3" in d for d in r["documentos_habilitacao"]["juridica"])
+    assert "trecho 2" not in " ".join(r["documentos_habilitacao"]["juridica"])
+
+
+def test_todas_as_partes_falhando_devolve_erro_puro_sem_nada_pra_mesclar(monkeypatch):
+    monkeypatch.setattr(ae, "_analisar_texto_unico",
+                        lambda *a, **k: {"status": "erro_ia", "detalhe": "http_503"})
+    r = ae._analisar_por_partes("o", _edital_grande(), "k")
+    assert r["status"] == "erro_ia"
+    assert len(r["partes_com_falha"]) == len(ap.dividir_em_partes(_edital_grande()))
 
 
 def test_parte_que_falha_uma_vez_e_ok_na_retentativa(monkeypatch):

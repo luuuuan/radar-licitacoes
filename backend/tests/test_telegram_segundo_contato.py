@@ -89,6 +89,63 @@ def test_webhook_start_com_codigo_do_slot2_vincula_chat_id_2(monkeypatch):
         assert u.notif_telegram is True
 
 
+# --------- achados reais (auditoria de segurança pedida pelo usuário): --------- #
+# --------- segredo do webhook comparado com != (não resistente a timing) --------- #
+# --------- e código de vínculo nunca consumido (reutilizável pra sempre) --------- #
+
+def test_webhook_com_segredo_errado_da_404(monkeypatch):
+    monkeypatch.setattr(app_main.settings, "TELEGRAM_WEBHOOK_SECRET", "segredo-certo")
+    db = _sessao()
+    req = _ReqFake({"message": {"text": "/start qualquer", "chat": {"id": 1}}})
+    with pytest.raises(Exception) as exc:
+        asyncio.run(telegram_webhook("segredo-errado", req, db))
+    assert "404" in str(exc.value)
+
+
+def test_webhook_com_segredo_de_tamanho_diferente_nao_quebra(monkeypatch):
+    """secrets.compare_digest com strings de tamanho diferente não levanta
+    -- só devolve False. Confirma que não vira 500 em vez de 404."""
+    monkeypatch.setattr(app_main.settings, "TELEGRAM_WEBHOOK_SECRET", "segredo-bem-mais-longo-que-isso")
+    db = _sessao()
+    req = _ReqFake({"message": {"text": "/start qualquer", "chat": {"id": 1}}})
+    with pytest.raises(Exception) as exc:
+        asyncio.run(telegram_webhook("x", req, db))
+    assert "404" in str(exc.value)
+
+
+def test_webhook_start_consome_o_codigo_depois_de_vincular(monkeypatch):
+    monkeypatch.setattr(app_main.settings, "TELEGRAM_WEBHOOK_SECRET", "segredo")
+    with patch("app.notifications.telegram.enviar_para_chat"):
+        db = _sessao()
+        u = _usuario(db, telegram_codigo="cod-principal")
+
+        req = _ReqFake({"message": {"text": "/start cod-principal", "chat": {"id": 111}}})
+        asyncio.run(telegram_webhook("segredo", req, db))
+
+        db.refresh(u)
+        assert u.telegram_chat_id == "111"
+        assert u.telegram_codigo is None   # consumido -- não pode ser reusado
+
+
+def test_webhook_start_com_codigo_ja_consumido_nao_revincula_outro_chat(monkeypatch):
+    """O cenário real do achado: alguém que obteve o código antigo (link
+    encaminhado, print) não consegue mais usá-lo pra vincular o PRÓPRIO
+    chat depois que o dono já vinculou e o código foi consumido."""
+    monkeypatch.setattr(app_main.settings, "TELEGRAM_WEBHOOK_SECRET", "segredo")
+    with patch("app.notifications.telegram.enviar_para_chat"):
+        db = _sessao()
+        u = _usuario(db, telegram_codigo="cod-principal")
+
+        req1 = _ReqFake({"message": {"text": "/start cod-principal", "chat": {"id": 111}}})
+        asyncio.run(telegram_webhook("segredo", req1, db))
+
+        req2 = _ReqFake({"message": {"text": "/start cod-principal", "chat": {"id": 999}}})
+        asyncio.run(telegram_webhook("segredo", req2, db))
+
+        db.refresh(u)
+        assert u.telegram_chat_id == "111"   # continua vinculado ao chat original, não ao 999
+
+
 def test_webhook_callback_resolve_usuario_pelo_chat_id_2_e_responde_pra_ele(monkeypatch):
     monkeypatch.setattr(app_main.settings, "TELEGRAM_WEBHOOK_SECRET", "segredo")
     db = _sessao()

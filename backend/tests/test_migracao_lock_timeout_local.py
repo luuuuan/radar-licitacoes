@@ -36,6 +36,12 @@ class _ConexaoFalsa:
     def rollback(self):
         pass
 
+    def execution_options(self, **kwargs):
+        # usado pela conexão em autocommit do CREATE/DROP INDEX CONCURRENTLY
+        # (_criar_indices_concurrently) -- a mesma conexão falsa serve tanto
+        # pro caminho transacional quanto pro autocommit.
+        return self
+
     def __enter__(self):
         return self
 
@@ -72,16 +78,25 @@ def test_migrar_colunas_novas_so_usa_set_local(monkeypatch):
         )
 
 
-def test_migrar_indices_novos_so_usa_set_local(monkeypatch):
+def test_migrar_indices_novos_nunca_vaza_set_sem_local(monkeypatch):
+    """Achado real #4 (auditoria de banco pedida pelo usuário): os CREATE/
+    DROP INDEX de _migrar_indices_novos passaram a usar CONCURRENTLY, que
+    não bloqueia leitura/escrita -- o lock_timeout (que só protegia contra
+    uma ESPERA longa pelo lock de um CREATE INDEX comum) deixou de ser
+    necessário aqui e não é mais emitido. O guard que continua valendo:
+    nenhum comando emitido por esta função pode ser um "SET" de SESSÃO
+    inteira (sem LOCAL) -- isso vazaria pra qualquer requisição futura que
+    reusasse a mesma conexão do pool (mesmo achado de _migrar_colunas_novas,
+    ver teste acima)."""
     conexao = _ConexaoFalsa()
     monkeypatch.setattr(db_module, "engine", _EngineFalsa(conexao))
 
     db_module._migrar_indices_novos()
 
-    comandos_timeout = _comandos_de_lock_timeout(conexao.comandos)
-    assert comandos_timeout, "esperava pelo menos 1 SET de lock_timeout (postgres, índices)"
-    for c in comandos_timeout:
-        assert c.strip().upper().startswith("SET LOCAL"), (
-            f"vazamento de sessão: {c!r} não usa LOCAL -- fica valendo além desta "
-            "transação, contaminando a próxima requisição que reusar a conexão do pool"
-        )
+    for c in conexao.comandos:
+        texto = c.strip().upper()
+        if texto.startswith("SET ") and not texto.startswith("SET LOCAL"):
+            raise AssertionError(
+                f"vazamento de sessão: {c!r} não usa LOCAL -- fica valendo além desta "
+                "transação, contaminando a próxima requisição que reusar a conexão do pool"
+            )

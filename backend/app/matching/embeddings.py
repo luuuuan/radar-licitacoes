@@ -26,6 +26,7 @@ import hashlib
 import logging
 import math
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -35,8 +36,39 @@ from ..config import settings
 log = logging.getLogger("ia.embeddings")
 
 _DEEPINFRA_URL = "https://api.deepinfra.com/v1/openai/embeddings"
+
+
+class _CacheLimitado(OrderedDict):
+    """dict com teto de ENTRADAS -- quando passa do limite, descarta a mais
+    antiga por ordem de uso (quem não é acessado há mais tempo sai primeiro,
+    mesmo espírito de uma LRU). Achado real (auditoria de arquitetura
+    pedida pelo usuário): _cache_deepinfra era um dict comum, sem teto nem
+    expurgo -- um processo de vida longa (worker/API rodando dias) só
+    cresce, nunca encolhe; um documento de texto extraído de 469k chars
+    gera ~188 chunks (cada vetor BGE-M3 tem 1024 floats, ~30KB em objetos
+    Python), e processar editais grandes em série acumula isso sem limite
+    -- já foi a causa raiz de uma migração anterior por OOM (ver
+    render.yaml, comentário de depreciação). `.get()` conta como uso
+    (atualiza a posição), igual um acesso de leitura numa LRU de verdade."""
+    def __init__(self, maxsize: int):
+        super().__init__()
+        self._maxsize = maxsize
+
+    def get(self, key, default=None):
+        if key in self:
+            self.move_to_end(key)
+        return super().get(key, default)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
 # cache simples em memória: texto -> vetor (evita re-embeddar o mesmo texto).
-_cache_deepinfra: dict[str, list[float]] = {}
+_CACHE_DEEPINFRA_MAX = 10_000  # ~10k vetores BGE-M3 (~30KB cada) -- teto de ~300-350MB no pior caso
+_cache_deepinfra: dict[str, list[float]] = _CacheLimitado(maxsize=_CACHE_DEEPINFRA_MAX)
 
 # disjuntor: por CHAVE (cada usuário tem sua própria cota no free tier).
 # epoch (segundos) até quando as chamadas daquela chave ficam pausadas.

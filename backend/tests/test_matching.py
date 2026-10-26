@@ -139,6 +139,60 @@ def test_reranker_indisponivel_nao_quebra(monkeypatch):
     assert r.detalhe == []
 
 
+# --------- cache de reranker por instância (achado real, auditoria de --------- #
+# --------- performance pedida pelo usuário: ~1,7M chamadas evitáveis num --------- #
+# --------- recálculo completo, por descrição de item repetida) --------- #
+
+def test_mesmo_texto_de_item_nao_chama_o_reranker_de_novo(monkeypatch):
+    chamadas = []
+
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
+        chamadas.append(query)
+        return [0.95, 0.0, 0.0]
+    monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True)
+    # mesma descrição de item em dois editais DIFERENTES avaliados pela
+    # MESMA engine (o padrão real: service._gerar_matches_usuario cria uma
+    # engine só e chama avaliar() em loop pra todos os editais do usuário)
+    eng.avaliar("Edital 1", [ItemEdt(1, "Papel sulfite A4 75g resma")])
+    eng.avaliar("Edital 2", [ItemEdt(1, "Papel sulfite A4 75g resma")])
+
+    assert len(chamadas) == 1   # só a 1ª chamada bateu na rede
+
+
+def test_cache_de_reranker_nao_e_compartilhado_entre_engines_diferentes(monkeypatch):
+    """O cache é por INSTÂNCIA -- engines de catálogos diferentes (ex.: dois
+    usuários) não podem compartilhar/misturar score entre si."""
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
+        return [0.95, 0.0, 0.0]
+    monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
+
+    eng1 = MatchingEngine(_catalogo(), usar_ia=True)
+    eng2 = MatchingEngine(_catalogo(), usar_ia=True)
+    eng1.avaliar("Edital", [ItemEdt(1, "Papel sulfite A4 75g resma")])
+
+    assert eng1._cache_rerank and not eng2._cache_rerank
+
+
+def test_falha_do_reranker_nao_fica_em_cache(monkeypatch):
+    """Um None (falha) não pode "travar" pra sempre: se o mesmo texto
+    reaparecer depois que a chamada voltar a funcionar, tenta de novo em
+    vez de repetir a falha antiga guardada em cache. Chama _reranker_scores
+    direto (em vez de avaliar()) pra isolar só o comportamento do cache --
+    avaliar()/_score_item têm sua própria lógica de fallback quando o
+    reranker devolve None, que não é o que este teste quer exercitar."""
+    respostas = [None, [0.95, 0.0, 0.0]]
+
+    def _fake_rerank(query, documentos, timeout=30, api_key=None, tentativas=2, modelo=None):
+        return respostas.pop(0)
+    monkeypatch.setattr(engine_mod, "_rerank", _fake_rerank)
+
+    eng = MatchingEngine(_catalogo(), usar_ia=True)
+    assert eng._reranker_scores("Papel sulfite A4 75g resma") is None
+    assert eng._reranker_scores("Papel sulfite A4 75g resma") == [0.95, 0.0, 0.0]
+
+
 def test_regra_exclusao_por_termo():
     ignora = aplicar_regras_exclusao(
         "Contratação de empresa de engenharia para reforma", [],
@@ -192,6 +246,56 @@ def test_score_alto_com_folga_do_2o_colocado_continua_confianca_alta(monkeypatch
     ]
     eng = _engine(catalogo, monkeypatch, {0: 0.98, 1: 0.3})
     r = eng.avaliar("Material de escritório", [ItemEdt(1, "Grampeador de mesa 20 folhas")])
+    assert r.detalhe[0]["confianca"] == "alta"
+
+
+# ---------------------------------------------------------------------------
+# Pendência crítica da validação técnica (matching/validacao.py) rebaixa a
+# confiança automática -- achado real: item "Papel A4 75g/m²" e produto
+# "Papel A4 180g/m²" são quase o mesmo texto (reranker dá score alto, sem
+# empate com ninguém), mas a especificação diverge de verdade. Vale pra
+# QUALQUER atributo (peso, dimensão, grampo...), não só papel.
+# ---------------------------------------------------------------------------
+def test_pendencia_critica_de_atributo_rebaixa_confianca_alta_para_media(monkeypatch):
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
+    item = r.detalhe[0]
+    assert item["produto_id"] == 1   # continua sendo a sugestão -- só não confia automático
+    assert item["confianca"] == "media"
+
+
+def test_pendencia_critica_de_atributo_rebaixa_mesmo_com_codigo_exato_corroborado(monkeypatch):
+    """A regra vale mesmo quando o motivo do match foi código fiscal exato
+    corroborado pelo reranker -- código certo não é garantia de gramatura
+    certa."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca", ncm="48025590")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.9})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2", ncm="4802.55.90")])
+    item = r.detalhe[0]
+    assert item["motivo"].startswith("código")
+    assert item["confianca"] == "media"
+
+
+def test_sem_pendencia_critica_de_atributo_mantem_confianca_alta(monkeypatch):
+    """Controle: mesma gramatura dos dois lados -- não há motivo pra rebaixar."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 75g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
+    assert r.detalhe[0]["confianca"] == "alta"
+
+
+def test_erro_na_validacao_tecnica_nao_derruba_avaliar(monkeypatch):
+    """Achado real (error-detective): a checagem de pendência crítica roda
+    em BackgroundTasks, por item, pra todo edital de todo usuário -- uma
+    exceção nela (bug futuro, dado malformado) não pode propagar e perder a
+    avaliação do edital inteiro. Falha aberta: mantém a confiança já
+    calculada em vez de propagar."""
+    catalogo = [ProdutoCat(id=1, descricao="Papel A4 180g/m2 resma branca")]
+    eng = _engine(catalogo, monkeypatch, {0: 0.95})
+    monkeypatch.setattr(engine_mod, "_validar_tecnico",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = eng.avaliar("Aquisição de papel", [ItemEdt(1, "Papel A4 75g/m2")])
     assert r.detalhe[0]["confianca"] == "alta"
 
 

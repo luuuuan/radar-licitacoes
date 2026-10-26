@@ -101,6 +101,18 @@ class Usuario(Base):
     # main.py:_anexar_verificacao_ia_documentos/_anexar_comparacao_catalogo_ia).
     versao_catalogo: Mapped[int] = mapped_column(Integer, default=0)
     versao_documentos: Mapped[int] = mapped_column(Integer, default=0)
+    # versão da sessão, embutida no JWT ("tv") e conferida em
+    # auth.get_current_user -- achado real (auditoria de segurança pedida
+    # pelo usuário): nem a troca de senha nem o reset por e-mail
+    # invalidavam sessões já abertas (o JWT não guardava nada que mudasse
+    # com a senha), então uma conta comprometida continuava acessível por
+    # até TOKEN_IDLE_HORAS/TOKEN_EXPIRA_HORAS mesmo depois da vítima trocar
+    # a senha -- justo o cenário em que a troca deveria expulsar o invasor.
+    # Incrementado em trocar_senha/auth_redefinir_senha; qualquer token já
+    # emitido com "tv" antigo (ou sem o campo, de antes dessa versão) para
+    # de bater com o valor atual e a sessão vira inválida na próxima
+    # requisição, sem precisar de uma tabela de tokens revogados.
+    token_versao: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Fornecedor(Base):

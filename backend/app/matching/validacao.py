@@ -5,9 +5,14 @@ candidato do catálogo.
 O matching semântico/textual (engine.py) responde "este produto é sobre o
 mesmo assunto que o item?". Isso NÃO basta: "impressora bivolt, 32 ppm" e
 "impressora bivolt, 18 ppm" são quase idênticas em texto e incompatíveis na
-especificação. Este módulo roda DEPOIS que engine.py (ou o ranking
-semântico) já escolheu um candidato, e decide se ele de fato CUMPRE o item
-— podendo reprovar um candidato mesmo com similaridade 1.0.
+especificação. Este módulo roda DEPOIS que o candidato já foi escolhido
+(por código exato ou reranker) e decide se ele de fato CUMPRE o item —
+podendo reprovar um candidato mesmo com similaridade 1.0. Chamado de dois
+lugares, com propósitos diferentes: de dentro de `engine.py:avaliar()`,
+pra decidir se a confiança do match pode ficar automática ("alta") ou
+precisa de confirmação manual; e de novo em `main.py`, só pra exibir as
+pendências (críticas/avisos) na tela — mesmo mecanismo determinístico,
+chamadas independentes, sem cache compartilhado entre as duas.
 
 Pendência CRÍTICA reprova o produto (vira "Não atende" independente do
 score). Pendência de AVISO só sinaliza para conferência manual: a ausência
@@ -15,6 +20,7 @@ de uma informação na descrição do produto não é prova de que ele não tem
 aquele atributo, só que o catálogo não descreve.
 """
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 
 from .atributos import AtributoNumerico, AtributosTecnicos, estado_caracteristica, extrair_atributos, familia_unidade
@@ -93,8 +99,15 @@ def _corrigir_por_embalagem(atributos: list[AtributoNumerico], itens_por_unidade
     em pacote de 4 BLOCOS, itens_por_unidade=4, cada bloco com 50 folhas)
     ele conta uma granularidade diferente (blocos, não folhas) — não dá pra
     saber com segurança o total de folhas só com esse número, então não
-    mexe (mantém o comportamento conservador de antes)."""
-    if not itens_por_unidade or itens_por_unidade <= 0:
+    mexe (mantém o comportamento conservador de antes).
+
+    Defesa em profundidade (achado real de error-detective): `inf`/`nan`
+    passa a checagem de truthy/`> 0` acima (`inf > 0` é True) e quebra
+    `_formatar_qtd` mais abaixo (`int(float('inf'))` -> OverflowError). A
+    entrada principal (importação de planilha, `main.py:_num_br`) já
+    rejeita isso antes de persistir, mas um valor inválido que chegue aqui
+    por qualquer outro caminho não pode travar a validação inteira."""
+    if not itens_por_unidade or itens_por_unidade <= 0 or not math.isfinite(itens_por_unidade):
         return atributos
     corrigidos = []
     for a in atributos:
@@ -211,7 +224,47 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
     contra o que o produto oferece — em vez de cada valor procurar seu
     "melhor" candidato isoladamente (o que gerava uma pendência de
     "múltiplos valores" REPETIDA pra cada valor exigido: um par 2x2 virava 4
-    mensagens pra dizer a mesma coisa duas vezes)."""
+    mensagens pra dizer a mesma coisa duas vezes).
+
+    Dois achados reais (auditoria de performance pedida pelo usuário), os
+    dois corrigidos aqui:
+
+    1) O operador de cada exigido (">=" "no mínimo", "<=" "no máximo", "=="
+       exato) era IGNORADO -- comparava só por igualdade de conjunto. Item
+       "no mínimo 20x30cm" reprovava um produto "25x35cm" (maior nos dois
+       lados, atende com folga) só porque [20,30] != [25,35]. Agora ordena
+       os dois lados por VALOR (preservando o operador de cada exigido) e
+       compara par a par -- correto mesmo com reordenação ("38x51" bate com
+       "51x38"): ordenar os dois lados e comparar na mesma posição é
+       necessário E suficiente pra "existe uma forma de casar os dois lados
+       satisfazendo todas as comparações?" QUANDO todo o grupo compartilha
+       o MESMO operador (contraexemplo se não: exigidos {10>=, 20<=} batem
+       com ofertados {15,25} por um pareamento cruzado -- 25>=10 e 15<=20 --
+       que a ordenação simples não acha). Isso nunca é alcançável hoje: todo
+       membro de uma MESMA cadeia_id herda o operador do 1º membro (ver
+       atributos.py, achado relacionado), e o único outro jeito de um grupo
+       ter mais de 1 exigido (campo_estruturado, ex. comprimento/largura)
+       é sempre `inferido=True`, que já rebaixa qualquer falha pra aviso
+       (abaixo) -- mas é uma garantia de QUEM CHAMA esta função hoje, não
+       desta função sozinha; se um dia um novo caminho criar um grupo com
+       operadores diferentes e não-inferido, a ordenação simples pode
+       aceitar um pareamento que não existe de verdade.
+    2) `candidatos` podia ser QUALQUER número da mesma família no texto do
+       produto, não só os que formam a MESMA cadeia "AxB" no lado ofertado
+       -- "Bloco Adesivo 38mm x 51mm, caixa com 100mm de largura" tem um
+       3º número (100) solto, sem relação com a cadeia "38x51" do próprio
+       produto; comparar os 3 contra o par exigido reprovava um produto
+       que, na cadeia que de fato corresponde, atendia certinho. Agora
+       tenta CADA cadeia ofertada do mesmo tamanho do grupo exigido (não só
+       a primeira que aparece no texto -- achado do code-reviewer: um
+       produto com DUAS cadeias do mesmo tamanho, ex. "20x25, também na
+       versão 38x51", escolhia sempre a 1ª mesmo quando a 2ª batia em cheio)
+       e aceita se QUALQUER uma satisfizer a comparação. Só cai nos números
+       soltos (todos os candidatos da família) quando não há cadeia alguma
+       do tamanho certo -- e, nesse caso, só tenta comparar quando a
+       quantidade solta bate; quantidade diferente é genuinamente ambíguo
+       (não dá pra saber quais números correspondem) e vira aviso, nunca
+       crítica."""
     bruto_exigido = _bruto_grupo(exigidos)
     if not candidatos:
         sufixo = " (medida estimada, não confirmada no texto do edital — verificar manualmente)" if any(e.inferido for e in exigidos) else ""
@@ -220,13 +273,52 @@ def _validar_grupo_dimensao(exigidos: list, candidatos: list) -> list[Pendencia]
             f"item exige {bruto_exigido}{sufixo} — produto não informa a medida na descrição",
             critico=False,
         )]
-    # ordena os dois lados e compara como conjunto — "38 x 51" bate com
-    # "51 x 38" (ordem de largura/altura é ambígua na notação "AxB").
-    valores_exigidos = sorted(familia_unidade(e.unidade, e.valor)[1] for e in exigidos)
-    valores_ofertados = sorted(familia_unidade(c.unidade, c.valor)[1] for c in candidatos)
-    if valores_exigidos == valores_ofertados:
+
+    # ordena os exigidos por VALOR, preservando o operador de cada um na
+    # posição em que caiu -- "38 x 51" bate com "51 x 38" (ordem de
+    # largura/altura é ambígua na notação "AxB"), mas cada exigido continua
+    # comparado com o OPERADOR que tinha (ver achado 1 acima).
+    pares_exigidos = sorted(
+        (familia_unidade(e.unidade, e.valor)[1], e.operador) for e in exigidos)
+
+    def _atende_com(grupo_ofertado: list) -> bool:
+        valores_ofertados = sorted(familia_unidade(c.unidade, c.valor)[1] for c in grupo_ofertado)
+        return all(_compara(of_v, op, ex_v)
+                  for (ex_v, op), of_v in zip(pares_exigidos, valores_ofertados))
+
+    cadeias_ofertadas: dict[int, list] = {}
+    for c in candidatos:
+        if c.cadeia_id is not None:
+            cadeias_ofertadas.setdefault(c.cadeia_id, []).append(c)
+    cadeias_do_tamanho_certo = [g for g in cadeias_ofertadas.values() if len(g) == len(exigidos)]
+
+    # achado 2: testa TODAS as cadeias do tamanho certo, não só a 1ª -- um
+    # produto pode listar mais de um tamanho disponível, e só UMA delas
+    # precisa bater pra atender.
+    if any(_atende_com(g) for g in cadeias_do_tamanho_certo):
         return []
-    bruto_ofertado = _bruto_grupo(candidatos)
+
+    # nenhuma cadeia bateu (ou não há cadeia nenhuma do tamanho certo) --
+    # usa a 1ª cadeia do tamanho certo pra mensagem de erro (se existir) ou
+    # cai nos números soltos (todos os candidatos da família), mesmo
+    # comportamento de antes de existir cadeia no lado ofertado.
+    usados = cadeias_do_tamanho_certo[0] if cadeias_do_tamanho_certo else candidatos
+    bruto_ofertado = _bruto_grupo(usados)
+
+    if len(usados) != len(exigidos):
+        # nenhuma cadeia ofertada do tamanho certo, e a quantidade solta
+        # também não bate com o exigido -- não dá pra montar o pareamento
+        # com segurança (mesma filosofia de "múltiplos valores" dos casos
+        # soltos: sem como saber qual número corresponde a qual dimensão).
+        return [Pendencia(
+            "numerico",
+            f"item exige {bruto_exigido} — produto menciona {bruto_ofertado} "
+            "(quantidade de medidas diferente — confirmar manualmente)",
+            critico=False,
+        )]
+
+    if _atende_com(usados):
+        return []
     if any(e.inferido for e in exigidos):
         # mesma lógica do caso simples: unidade assumida (sem estar no
         # texto) não pode reprovar sozinha, só virar aviso.

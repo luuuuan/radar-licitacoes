@@ -21,6 +21,11 @@ Importante: aqui NÃO reaproveitamos normalizar()/preparar() de engine.py.
 Aquele pipeline remove pontuação (letra "/", aspas, vírgula decimal) e
 aplica stemming — ótimo para TF-IDF, mas destrói exatamente a informação que
 precisamos aqui ("26/6", "110/220V", "15\"", "2,5 l").
+
+Direção da dependência dentro de matching/: engine.py -> validacao.py ->
+atributos.py (este módulo), nunca o contrário — este arquivo não importa
+nem conhece engine.py, mesmo rodando "do lado de dentro" de
+MatchingEngine.avaliar() hoje.
 """
 from __future__ import annotations
 import re
@@ -110,7 +115,34 @@ def _e_marca_3m(unidade: str, valor: float, bruto: str) -> bool:
 # com PONTO fora do padrão BR mas comum em ficha técnica copiada de fora
 # ("1.0mm", só 1-2 dígitos depois do ponto — 3 dígitos é sempre milhar, nunca
 # decimal) -> dígitos simples com vírgula decimal opcional ("2,5" ou "250").
-_NUM = r"(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+\.\d{1,2}(?!\d)|\d+(?:,\d+)?)"
+#
+# Achado real (auditoria de error-detective, confirmado por execução): os
+# "\d+" das alternativas 2 e 3 eram ilimitados -- uma sequência longa de
+# dígitos puros SEM ponto/vírgula (ex.: número de processo/EAN colado sem
+# pontuação, lixo de scraping do PNCP) faz o motor de regex consumir tudo
+# com o "\d+" e backtrackear um dígito por vez procurando o separador que
+# não existe, a partir de CADA posição de início testada por
+# re.finditer -- O(N²) por unidade, vezes ~20 unidades em _UNIDADES. 1200
+# dígitos já travava ~3,7s numa chamada só; texto real pode ter dígitos
+# suficientes pra travar o processo por minutos. Nenhum número de
+# especificação real passa de 15 dígitos inteiros -- limitar o tamanho do
+# "\d+" com {1,15} (e a parte decimal com {1,6}) elimina o backtracking sem
+# mudar o que é reconhecido como número válido na prática.
+#
+# 2º achado real (auditoria de performance-engineer, confirmado por
+# execução, DEPOIS do limite {1,15} acima): a 1ª alternativa continuava
+# O(N²) numa cadeia LONGA de grupos de milhar ("1.000.000...000Z") -- o
+# "(?:\.\d{3})+" é ilimitado e, pra cada posição inicial testada por
+# re.finditer, casa a cadeia inteira e depois backtrackeia grupo por grupo
+# procurando a unidade que não vem. 3,2 KB de cadeia pontuada já travava
+# ~5,3s numa chamada só. O "(?<![\d.,])" abaixo faz qualquer posição NO
+# MEIO de uma cadeia (precedida por dígito/ponto/vírgula) falhar em O(1)
+# em vez de tentar casar a cadeia inteira de novo -- só a posição de
+# início real da cadeia tenta o match completo, tornando a varredura
+# linear. Verificado sem mudar nenhum atributo reconhecido (marca 3M,
+# "2 M/MIN", decimal "1.0mm", milhar "2.500", campos estruturados, "26/6",
+# "15\"", "2,5 l" vs "2000 ml").
+_NUM = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d{1,6})?|\d{1,15}\.\d{1,2}(?!\d)|\d{1,15}(?:,\d{1,6})?)"
 
 
 def _parse_numero(bruto: str) -> float:
@@ -322,18 +354,36 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
 
     achados: list[AtributoNumerico] = []
     fim_anterior = 0
+    # Achado real (auditoria de performance pedida pelo usuário): o corte da
+    # janela em fim_anterior (abaixo) é certo pra não deixar "no mínimo"
+    # vazar pra um número de OUTRA cláusula -- mas isso também cortava a
+    # janela do 2º+ membro de uma MESMA cadeia "AxB"/"AxBxC" (o fim do 1º
+    # número fica a só uns poucos chars do início do 2º), nunca alcançando
+    # o "no mínimo"/"no máximo" que está ANTES do 1º número e vale pro par
+    # inteiro: "no mínimo 20x30cm" extraía operador=">=" só pro 20, e "=="
+    # (padrão) pro 30 -- validacao.py passou a respeitar o operador de cada
+    # exigido, mas a cadeia continuava com só a metade certa. Guarda o
+    # operador já resolvido POR cadeia_id: o 1º membro deriva do contexto
+    # normalmente, os seguintes da MESMA cadeia herdam o mesmo operador em
+    # vez de recalcular numa janela que não alcança mais o qualificador.
+    operador_por_cadeia: dict[int, str] = {}
     for inicio, fim, unidade, valor, bruto, cadeia_id in brutos:
-        janela = texto_norm[max(0, inicio - _JANELA_CONTEXTO, fim_anterior):inicio]
-        # também corta na última pontuação de separação de cláusula dentro
-        # da janela (reforça o corte acima quando há vírgula/ponto no meio).
-        pos_sep = max(janela.rfind(","), janela.rfind(";"), janela.rfind("."))
-        contexto = janela[pos_sep + 1:] if pos_sep != -1 else janela
-        if re.search(_OPERADOR_MIN, contexto):
-            operador = ">="
-        elif re.search(_OPERADOR_MAX, contexto):
-            operador = "<="
+        if cadeia_id is not None and cadeia_id in operador_por_cadeia:
+            operador = operador_por_cadeia[cadeia_id]
         else:
-            operador = "=="
+            janela = texto_norm[max(0, inicio - _JANELA_CONTEXTO, fim_anterior):inicio]
+            # também corta na última pontuação de separação de cláusula dentro
+            # da janela (reforça o corte acima quando há vírgula/ponto no meio).
+            pos_sep = max(janela.rfind(","), janela.rfind(";"), janela.rfind("."))
+            contexto = janela[pos_sep + 1:] if pos_sep != -1 else janela
+            if re.search(_OPERADOR_MIN, contexto):
+                operador = ">="
+            elif re.search(_OPERADOR_MAX, contexto):
+                operador = "<="
+            else:
+                operador = "=="
+            if cadeia_id is not None:
+                operador_por_cadeia[cadeia_id] = operador
         inferido = any(inicio < s_fim and fim > s_inicio for s_inicio, s_fim in spans_inferidos)
         # quando a unidade é SUPOSTA (campo estruturado tipo "comprimento:
         # 13" virou "13 mm" internamente pra reaproveitar o scan normal),
@@ -345,18 +395,29 @@ def _extrair_numericos(texto_norm: str, spans_inferidos: list[tuple[int, int]] =
         achados.append(AtributoNumerico(unidade, valor, operador, bruto_exibido, inferido, cadeia_id))
         fim_anterior = fim
 
-    # dedup por (unidade, valor, operador): texto de edital real costuma
-    # repetir a mesma especificação em mais de uma frase — sem isso, cada
-    # menção virava uma pendência duplicada na validação. Quando a mesma
-    # ocorrência é achada pelos dois caminhos (o último número de uma cadeia
-    # "AxBxC" que também tem unidade colada, ex.: o "7cm" de "28 x 16 x 7cm",
-    # bate tanto no scan de par/trio quanto no scan solto por unidade),
-    # prefere a versão com cadeia_id — perder essa marca faria esse membro
-    # "cair" da cadeia e virar um valor solto por engano.
+    # dedup por (unidade, valor): texto de edital real costuma repetir a
+    # mesma especificação em mais de uma frase — sem isso, cada menção
+    # virava uma pendência duplicada na validação. Quando a mesma ocorrência
+    # é achada pelos dois caminhos (o último número de uma cadeia "AxBxC"
+    # que também tem unidade colada, ex.: o "7cm" de "28 x 16 x 7cm", bate
+    # tanto no scan de par/trio quanto no scan solto por unidade), prefere a
+    # versão com cadeia_id — perder essa marca faria esse membro "cair" da
+    # cadeia e virar um valor solto por engano.
+    #
+    # Chave NÃO inclui operador (antes incluía): desde que o 2º+ membro de
+    # uma cadeia passou a HERDAR o operador do 1º (ver loop acima), a mesma
+    # ocorrência física vinda do scan solto (sem herança, calcula o próprio
+    # operador numa janela que não alcança o qualificador) e do scan de
+    # cadeia podem resolver operadores DIFERENTES pro mesmo número -- com
+    # operador na chave, as duas deixavam de colidir e a duplicata
+    # sobrevivia. Risco aceito, já existente antes desta mudança (a chave
+    # nunca teve a POSIÇÃO/cadeia_id do número): duas cadeias DIFERENTES que
+    # por coincidência compartilham um valor igual na mesma unidade também
+    # colapsam numa só -- mesmo trade-off de sempre, não introduzido agora.
     vistos: dict[tuple, AtributoNumerico] = {}
     ordem: list[tuple] = []
     for a in achados:
-        chave = (a.unidade, a.valor, a.operador)
+        chave = (a.unidade, a.valor)
         if chave not in vistos:
             vistos[chave] = a
             ordem.append(chave)

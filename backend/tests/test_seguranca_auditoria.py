@@ -11,17 +11,20 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException, Response
+from fastapi.routing import APIRoute
 from starlette.requests import Request
 
+from app import auth as _auth_mod
 from app import main as app_main
 from app.main import (
     _urls_documentacao, _checar_rate_limit_geral, _aplicar_cabecalhos_seguranca,
-    _verificar_turnstile, turnstile_config,
+    _verificar_turnstile, turnstile_config, _exigir_cron_key, verificar_lembretes,
+    _ROTAS_PUBLICAS, _PREFIXOS_PUBLICOS, _ROTAS_PROTEGIDAS_POR_CRON_KEY,
 )
 
 
 def _req(ip="1.2.3.4"):
-    return Request({"type": "http", "headers": [], "client": (ip, 12345)})
+    return Request({"type": "http", "headers": [], "client": (ip, 12345), "query_string": b""})
 
 
 # --------- item 15: /docs, /redoc, /openapi.json desligados em produção --------- #
@@ -182,6 +185,158 @@ def test_cadastro_aceita_com_captcha_valido_quando_turnstile_configurado(monkeyp
                           _req("20.20.20.2"), Response(), BackgroundTasks(), db)
     assert r["ok"] is True
     assert db.execute(select(Usuario)).scalars().first() is not None
+
+
+# --------- achado real: /api/lembretes/verificar sem proteção nenhuma --------- #
+# (toda a base recebia notificação de qualquer requisição não autenticada) #
+
+def test_lembretes_verificar_exige_chave_de_cron(monkeypatch):
+    from fastapi import BackgroundTasks
+    monkeypatch.setattr(app_main.settings, "CRON_SECRET", "segredo-do-cron")
+    with pytest.raises(HTTPException) as exc:
+        verificar_lembretes(BackgroundTasks(), _req())   # sem X-Cron-Key
+    assert exc.value.status_code == 403
+
+
+def test_lembretes_verificar_aceita_com_chave_certa(monkeypatch):
+    from fastapi import BackgroundTasks
+    monkeypatch.setattr(app_main.settings, "CRON_SECRET", "segredo-do-cron")
+    req = Request({"type": "http",
+                   "headers": [(b"x-cron-key", b"segredo-do-cron")],
+                   "client": ("1.2.3.4", 12345)})
+    r = verificar_lembretes(BackgroundTasks(), req)
+    assert r["ok"] is True
+
+
+def test_cron_key_na_query_string_nao_funciona_mais(monkeypatch):
+    """Achado real (auditoria de segurança pedida pelo usuário): a chave do
+    cron aceitava vir por ?chave=... na URL, sem nenhum chamador real
+    usando -- query string vaza pra log de acesso de qualquer proxy no
+    caminho. Removido; só o header X-Cron-Key funciona agora."""
+    from fastapi import BackgroundTasks
+    monkeypatch.setattr(app_main.settings, "CRON_SECRET", "segredo-do-cron")
+    req = Request({"type": "http", "headers": [],
+                   "client": ("1.2.3.4", 12345), "query_string": b"chave=segredo-do-cron"})
+    with pytest.raises(HTTPException) as exc:
+        verificar_lembretes(BackgroundTasks(), req)
+    assert exc.value.status_code == 403
+
+
+def test_lembretes_verificar_desligado_sem_cron_secret_configurado(monkeypatch):
+    from fastapi import BackgroundTasks
+    monkeypatch.setattr(app_main.settings, "CRON_SECRET", "")
+    with pytest.raises(HTTPException) as exc:
+        verificar_lembretes(BackgroundTasks(), _req())
+    assert exc.value.status_code == 503
+
+
+# --------- "negar por padrão": toda rota /api/* exige login ou está numa --------- #
+# --------- allowlist explícita e revisada (achado real: as duas listas --------- #
+# --------- abaixo existiam só como documentação, sem nada as conferir) --------- #
+
+def _rotas_api():
+    for route in app_main.app.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/api/"):
+            yield route
+
+
+def _exige_login(route: APIRoute) -> bool:
+    # só olha dependência DIRETA -- não há hoje nenhuma rota que exija login
+    # por trás de uma dependência indireta (ex.: um get_admin_user que por
+    # sua vez depende de get_current_user); se isso passar a existir, este
+    # teste vai marcar a rota como "sem proteção" por falso-negativo -- o
+    # conserto certo é ensinar esta função a reconhecer a nova dependência,
+    # NUNCA adicionar a rota à allowlist pública/cron pra calar o teste.
+    return any(dep.call is _auth_mod.get_current_user for dep in route.dependant.dependencies)
+
+
+def test_toda_rota_api_exige_login_ou_esta_na_allowlist():
+    """Se uma rota /api/* nova esquecer Depends(get_current_user), este
+    teste tem que falhar -- foi exatamente essa classe de bug que deixou
+    /api/lembretes/verificar exposta sem proteção. Rota legitimamente
+    pública (fluxo de auth, página estática) ou protegida por X-Cron-Key
+    em vez de cookie precisa entrar explicitamente numa das allowlists
+    abaixo -- nunca ficar de fora calada.
+
+    Limitação conhecida: a allowlist casa por `route.path` sozinho, não por
+    (path, método) -- hoje nenhum path tem um 2º método "escondido" sem
+    proteção, mas um GET de debug adicionado depois num path já
+    allowlisted (ex.: /api/lembretes/verificar) herdaria a isenção sem
+    este teste notar. Não vale a complexidade de corrigir até isso
+    acontecer de verdade; registrado aqui pra quem for depurar o próximo
+    falso-negativo."""
+    sem_protecao = []
+    for route in _rotas_api():
+        if route.path in _ROTAS_PUBLICAS or route.path in _ROTAS_PROTEGIDAS_POR_CRON_KEY:
+            continue
+        if route.path.startswith(_PREFIXOS_PUBLICOS):
+            continue
+        if route.path.startswith("/api/telegram/webhook/"):   # autenticado pelo secret no path
+            continue
+        if not _exige_login(route):
+            sem_protecao.append((route.path, sorted(route.methods)))
+    assert sem_protecao == [], (
+        f"Rota(s) /api/* sem Depends(get_current_user) e fora de toda "
+        f"allowlist de rota pública/cron: {sem_protecao}"
+    )
+
+
+# --------- achado real (item 8): subir em produção sem APP_ENCRYPTION_KEY --------- #
+# --------- deixava a cifra de dado sensível acoplada à SECRET_KEY --------- #
+
+async def _tentar_lifespan():
+    async with app_main.lifespan(app_main.app):
+        pass
+
+
+def test_lifespan_recusa_producao_sem_app_encryption_key(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(app_main.settings, "APP_BASE_URL", "https://app.exemplo.com")
+    monkeypatch.setattr(app_main.settings, "SECRET_KEY", "uma-chave-propria-bem-forte-123456")
+    monkeypatch.setattr(app_main.settings, "APP_ENCRYPTION_KEY", "")
+    with pytest.raises(RuntimeError, match="APP_ENCRYPTION_KEY"):
+        asyncio.run(_tentar_lifespan())
+
+
+def test_lifespan_sobe_em_producao_com_app_encryption_key_configurada(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(app_main.settings, "APP_BASE_URL", "https://app.exemplo.com")
+    monkeypatch.setattr(app_main.settings, "SECRET_KEY", "uma-chave-propria-bem-forte-123456")
+    monkeypatch.setattr(app_main.settings, "APP_ENCRYPTION_KEY", "uma-chave-de-cifra-propria")
+    monkeypatch.setattr(app_main, "init_db", lambda: None)   # não bate em banco real neste teste
+    asyncio.run(_tentar_lifespan())   # não deve levantar
+
+
+def test_lifespan_nao_exige_app_encryption_key_fora_de_producao(monkeypatch):
+    """Local/dev (sem APP_BASE_URL https) continua liberado sem nenhuma das
+    duas chaves -- mesmo padrão já valido pra SECRET_KEY."""
+    import asyncio
+    monkeypatch.setattr(app_main.settings, "APP_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr(app_main.settings, "APP_ENCRYPTION_KEY", "")
+    monkeypatch.setattr(app_main, "init_db", lambda: None)
+    asyncio.run(_tentar_lifespan())   # não deve levantar
+
+
+def test_rotas_protegidas_por_cron_key_de_fato_chamam_exigir_cron_key():
+    """Garante que a allowlist de cron-key não vira uma forma de 'esconder'
+    uma rota insegura do teste acima -- cada uma precisa CHAMAR
+    _exigir_cron_key de verdade, não só constar na allowlist (achado real
+    do code-reviewer na 1ª versão deste teste: ele só conferia que os paths
+    existiam, nunca que a view function de fato invoca a checagem -- uma
+    4ª rota cadastrada em _ROTAS_PROTEGIDAS_POR_CRON_KEY sem chamar
+    _exigir_cron_key passava igual, escondida DENTRO da allowlist em vez de
+    fora dela). Inspeciona o código-fonte da view function em vez de
+    executá-la (mesmo risco de falso-negativo que qualquer checagem
+    estática: só pega a chamada direta, não via uma função wrapper)."""
+    import inspect
+    rotas = {r.path: r for r in _rotas_api() if r.path in _ROTAS_PROTEGIDAS_POR_CRON_KEY}
+    assert set(rotas) == _ROTAS_PROTEGIDAS_POR_CRON_KEY
+    for path, route in rotas.items():
+        codigo = inspect.getsource(route.endpoint)
+        assert "_exigir_cron_key(" in codigo, (
+            f"{path}: está em _ROTAS_PROTEGIDAS_POR_CRON_KEY mas a view "
+            f"function não chama _exigir_cron_key(...)"
+        )
 
 
 def test_verificar_turnstile_trata_falha_de_rede_como_recusa(monkeypatch):

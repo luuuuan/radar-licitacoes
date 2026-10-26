@@ -1,3 +1,13 @@
+# Achado real (auditoria de arquitetura pedida pelo usuário, 2026-10): este
+# compose chegou a ter serviços `redis`/`worker`/`beat` rodando
+# `celery -A app.celery_app.celery` -- um plano de arquitetura que nunca foi
+# implementado (não existe app/celery_app.py nem app/tasks.py, `celery` nunca
+# esteve em requirements.txt). Esses 3 serviços morriam com ModuleNotFoundError
+# no primeiro start; removidos. A coleta diária de verdade é um Cron Job
+# nativo da Railway chamando POST /api/coletar-cron (ver
+# .github/workflows/coleta-diaria.yml) -- não tem fila nem worker separado,
+# tudo roda em BackgroundTasks dentro do próprio processo da API. Este
+# compose serve só pra subir Postgres+pgvector e a API localmente.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -15,38 +25,15 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
   api:
     build: ./backend
     env_file: .env
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started
     ports:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-  worker:
-    build: ./backend
-    env_file: .env
-    depends_on:
-      - db
-      - redis
-    command: celery -A app.celery_app.celery worker --loglevel=info
-
-  beat:
-    build: ./backend
-    env_file: .env
-    depends_on:
-      - db
-      - redis
-    command: celery -A app.celery_app.celery beat --loglevel=info
 
 volumes:
   pgdata:

@@ -32,14 +32,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
-    """Cria a extensão pgvector (se disponível) e todas as tabelas."""
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
-        except Exception:
-            # pgvector é opcional para o MVP (matching textual funciona sem ele)
-            conn.rollback()
+    """Cria as tabelas (e migra o que falta num banco já existente)."""
     Base.metadata.create_all(engine)
     _migrar_colunas_novas()
     _migrar_indices_novos()
@@ -99,6 +92,7 @@ _COLUNAS_NOVAS["usuarios"] = [
     ("telegram_codigo_2", "VARCHAR(32)"),
     ("token_verificacao_expira", "TIMESTAMP"),
     ("notificacoes_lidas_em", "DATE"),
+    ("token_versao", "INTEGER DEFAULT 0"),
 ]
 _COLUNAS_NOVAS.setdefault("matches", [])
 for _c in (("abertura_avisada", "BOOLEAN DEFAULT FALSE"),
@@ -235,6 +229,52 @@ def _migrar_colunas_novas() -> None:
                     log.warning("Migração editais.%s (DATE -> TIMESTAMP): %s", coluna, e)
 
 
+def _criar_indices_concurrently(itens: list[tuple[str, str, str]]) -> None:
+    """Roda cada DDL de índice (CREATE/DROP INDEX CONCURRENTLY) do Postgres
+    fora de uma transação -- exigência do próprio Postgres pra CONCURRENTLY
+    (`CREATE INDEX CONCURRENTLY cannot run inside a transaction block`),
+    daí a conexão em modo autocommit em vez de engine.connect() normal.
+    `itens`: lista de (nome_do_indice, tabela, sql) só pra log/diagnóstico.
+
+    Limpa antes um índice que ficou INVÁLIDO por um build CONCURRENTLY
+    anterior ter sido interrompido no meio (ex.: deploy matou o processo) --
+    sem isso, esse nome fica morto pra sempre: CREATE INDEX CONCURRENTLY IF
+    NOT EXISTS vê que "já existe" (mesmo inválido) e nunca tenta de novo, e
+    a aplicação segue sem o índice indefinidamente, calado.
+
+    Achado real (auditoria do agente database-optimizer): indisvalid=false
+    também é o estado de um índice com um build CONCURRENTLY SAUDÁVEL e EM
+    ANDAMENTO (só vira true no fim) -- sem o filtro por
+    pg_stat_progress_create_index abaixo, duas instâncias subindo em
+    paralelo (deploy comum, não só crash) faziam a 2ª "limpar" o índice que
+    a 1ª ainda estava construindo: o DROP CONCURRENTLY da 2ª fica na fila
+    atrás do lock da 1ª (CONCURRENTLY na mesma tabela serializa) e executa
+    DEPOIS que a 1ª termina, apagando um índice recém-pronto. Só considera
+    "abandonado" (e dropa) um índice inválido que NÃO tem nenhum build em
+    andamento agora -- se houver, só espera (o CREATE abaixo fica na fila
+    atrás do lock, vê "já existe" quando a vez dele chegar e não faz nada;
+    o boot desta 2ª instância fica mais lento enquanto isso, mas nunca
+    bloqueia tráfego da aplicação -- é só o startup, não um request)."""
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        for nome, tabela, sql in itens:
+            try:
+                invalido = conn.execute(text(
+                    "SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+                    "WHERE c.relnamespace = 'public'::regnamespace AND c.relname = :nome "
+                    "AND NOT i.indisvalid "
+                    "AND NOT EXISTS (SELECT 1 FROM pg_stat_progress_create_index p "
+                                    "WHERE p.index_relid = c.oid)"
+                ), {"nome": nome}).first()
+                if invalido:
+                    conn.execute(text(f"DROP INDEX CONCURRENTLY IF EXISTS {nome}"))
+                    log.info("Migração: índice %s estava inválido e abandonado (build CONCURRENTLY "
+                            "anterior interrompido, nenhum em andamento agora) -- removido antes de recriar", nome)
+                conn.execute(text(sql))
+                log.info("Migração: índice %s (CONCURRENTLY) garantido em %s", nome, tabela)
+            except Exception as e:
+                log.warning("Migração de índice CONCURRENTLY falhou (%s em %s): %s", nome, tabela, e)
+
+
 def _migrar_indices_novos() -> None:
     """Índices adicionados após a 1ª versão (mesma lógica de _migrar_colunas_novas,
     mas pra CREATE INDEX — create_all() não mexe em tabela já existente, então
@@ -267,45 +307,72 @@ def _migrar_indices_novos() -> None:
     sem índice de apoio nenhum. Fica mais importante desde que
     /api/editais/plataformas passou a ser chamado a cada abertura do
     modal de filtro (antes só no boot do app), não só ocasionalmente
-    como GET /api/editais."""
+    como GET /api/editais.
+
+    Achado real #4 (auditoria de banco pedida pelo usuário): no Postgres,
+    um CREATE INDEX comum (sem CONCURRENTLY) toma um lock que BLOQUEIA
+    escrita na tabela pelo tempo inteiro do build -- se o índice ainda não
+    existir nesta instância (banco novo, ou réplica que nunca subiu esta
+    versão), uma tabela escrita o tempo todo (itens_edital, pela coleta)
+    trava pra qualquer INSERT/UPDATE durante a construção. O SET LOCAL
+    lock_timeout de antes só limitava a ESPERA pelo lock, não a DURAÇÃO do
+    build em si -- e quando esse timeout expirava por disputa entre
+    instâncias subindo em paralelo, a exceção só era LOGADA: o processo
+    seguia servindo tráfego acreditando que o índice existia, e o erro de
+    SQL só aparecia no primeiro request real que tocasse a coluna. No
+    Postgres, todo índice aqui agora usa CONCURRENTLY (exige rodar fora de
+    uma transação -- daí a conexão em autocommit) -- nunca bloqueia leitura
+    nem escrita, só custa 2 varreduras da tabela em vez de 1."""
     eh_sqlite = engine.url.get_backend_name() == "sqlite"
     indices = [
-        "CREATE INDEX IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)",
-        "CREATE INDEX IF NOT EXISTS ix_produtos_usuario_id ON produtos (usuario_id)",
-        "CREATE INDEX IF NOT EXISTS ix_produtos_fornecedor_id ON produtos (fornecedor_id)",
-        "CREATE INDEX IF NOT EXISTS ix_matches_usuario_id ON matches (usuario_id)",
-        "CREATE INDEX IF NOT EXISTS ix_documentos_usuario_id ON documentos (usuario_id)",
-        "CREATE INDEX IF NOT EXISTS ix_regras_exclusao_usuario_id ON regras_exclusao (usuario_id)",
-        "CREATE INDEX IF NOT EXISTS ix_propostas_usuario_id ON propostas (usuario_id)",
-        "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo ON usuarios (telegram_codigo)",
-        "CREATE INDEX IF NOT EXISTS ix_usuarios_telegram_codigo_2 ON usuarios (telegram_codigo_2)",
-        "CREATE INDEX IF NOT EXISTS ix_editais_plataforma ON editais (plataforma)",
-        "CREATE INDEX IF NOT EXISTS ix_editais_uf ON editais (uf)",
+        ("ix_itens_edital_edital_id", "itens_edital",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_itens_edital_edital_id ON itens_edital (edital_id)"),
+        ("ix_produtos_usuario_id", "produtos",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_produtos_usuario_id ON produtos (usuario_id)"),
+        ("ix_produtos_fornecedor_id", "produtos",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_produtos_fornecedor_id ON produtos (fornecedor_id)"),
+        ("ix_matches_usuario_id", "matches",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_matches_usuario_id ON matches (usuario_id)"),
+        ("ix_documentos_usuario_id", "documentos",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_documentos_usuario_id ON documentos (usuario_id)"),
+        ("ix_regras_exclusao_usuario_id", "regras_exclusao",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_regras_exclusao_usuario_id ON regras_exclusao (usuario_id)"),
+        ("ix_propostas_usuario_id", "propostas",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_propostas_usuario_id ON propostas (usuario_id)"),
+        ("ix_usuarios_telegram_codigo", "usuarios",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_usuarios_telegram_codigo ON usuarios (telegram_codigo)"),
+        ("ix_usuarios_telegram_codigo_2", "usuarios",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_usuarios_telegram_codigo_2 ON usuarios (telegram_codigo_2)"),
+        ("ix_editais_plataforma", "editais",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_editais_plataforma ON editais (plataforma)"),
+        ("ix_editais_uf", "editais",
+         "CREATE INDEX {conc} IF NOT EXISTS ix_editais_uf ON editais (uf)"),
     ]
-    with engine.connect() as conn:
-        for sql in indices:
-            try:
-                if not eh_sqlite:
-                    # SET LOCAL (não "SET" puro) -- só vale até o próximo
-                    # commit/rollback desta transação. "SET" sem LOCAL é
-                    # por SESSÃO inteira, e como esta conexão volta pro
-                    # pool depois (SQLAlchemy não dá RESET ao devolver), o
-                    # limite vazava pra qualquer requisição futura que
-                    # pegasse essa mesma conexão emprestada -- ver o mesmo
-                    # achado, com mais detalhe, em _migrar_colunas_novas.
-                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-                conn.execute(text(sql))
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                log.warning("Migração de índice falhou (%s): %s", sql, e)
+    if eh_sqlite:
+        # sqlite não suporta CONCURRENTLY (e dev/teste não tem o volume de
+        # dados nem a concorrência pra isso importar) -- mantém CREATE INDEX
+        # comum, dentro de uma transação normal.
+        with engine.connect() as conn:
+            for nome, _tabela, sql_tpl in indices:
+                try:
+                    conn.execute(text(sql_tpl.format(conc="")))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    log.warning("Migração de índice falhou (%s): %s", nome, e)
+    else:
+        _criar_indices_concurrently([(nome, tabela, sql_tpl.format(conc="CONCURRENTLY"))
+                                     for nome, tabela, sql_tpl in indices])
 
-        if not eh_sqlite:
-            # Busca por item usa LIKE '%termo%' (curinga no início — um índice
-            # comum não ajuda nesse padrão). pg_trgm com GIN faz esse tipo de
-            # busca por substring ser rápido de verdade; só existe no Postgres,
-            # por isso fora do loop acima (sqlite do dev/testes não precisa,
-            # o volume de dados local é pequeno o bastante pra não importar).
+        # Busca por item usa LIKE '%termo%' (curinga no início — um índice
+        # comum não ajuda nesse padrão). pg_trgm com GIN faz esse tipo de
+        # busca por substring ser rápido de verdade; só existe no Postgres,
+        # por isso fora do loop acima (sqlite do dev/testes não precisa,
+        # o volume de dados local é pequeno o bastante pra não importar).
+        # CREATE EXTENSION/FUNCTION são operações de metadado (rápidas,
+        # nunca varrem a tabela) -- continuam dentro de uma transação
+        # normal, só os CREATE INDEX em itens_edital (abaixo) são CONCURRENTLY.
+        with engine.connect() as conn:
             try:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
                 conn.commit()
@@ -343,24 +410,24 @@ def _migrar_indices_novos() -> None:
                     $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
                 """))
                 conn.commit()
-                # índice antigo (sem unaccent) fica morto depois desta
-                # migração -- busca.py não gera mais regex pra ele casar
-                # (ver coluna_cmp em condicoes_sql). DROP por nome fixo é
-                # idempotente (IF EXISTS); só roda de fato na 1ª subida
-                # depois desta mudança, nas seguintes já não existe mais.
-                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-                conn.execute(text("DROP INDEX IF EXISTS ix_itens_edital_descricao_trgm"))
-                conn.commit()
-                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-                conn.execute(text(
-                    "CREATE INDEX IF NOT EXISTS ix_itens_edital_descricao_unaccent_trgm "
-                    "ON itens_edital USING gin (unaccent_imutavel(lower(descricao)) gin_trgm_ops)"
-                ))
-                conn.commit()
-                log.info("Migração: índice trigram (sem acento) de itens_edital.descricao garantido")
             except Exception as e:
                 conn.rollback()
-                log.warning("Migração do índice trigram sem acento (unaccent) falhou: %s", e)
+                log.warning("Migração da função unaccent_imutavel falhou: %s", e)
+
+        # índice antigo (sem unaccent) fica morto depois desta migração --
+        # busca.py não gera mais regex pra ele casar (ver coluna_cmp em
+        # condicoes_sql). O índice NOVO é o trigram em itens_edital -- a
+        # mesma tabela "escrita continuamente pela coleta" do achado #4
+        # acima, então os dois (DROP e CREATE) também passam a usar
+        # CONCURRENTLY em vez de rodar dentro de uma transação com
+        # lock_timeout.
+        _criar_indices_concurrently([
+            ("ix_itens_edital_descricao_trgm", "itens_edital",
+             "DROP INDEX CONCURRENTLY IF EXISTS ix_itens_edital_descricao_trgm"),
+            ("ix_itens_edital_descricao_unaccent_trgm", "itens_edital",
+             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_itens_edital_descricao_unaccent_trgm "
+             "ON itens_edital USING gin (unaccent_imutavel(lower(descricao)) gin_trgm_ops)"),
+        ])
 
 
 def get_session():

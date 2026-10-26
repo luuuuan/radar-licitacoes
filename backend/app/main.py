@@ -17,6 +17,7 @@ Rotas principais:
 """
 import csv
 import io
+import math
 import os
 import base64
 import re
@@ -61,6 +62,23 @@ async def lifespan(app: FastAPI):
             "SECRET_KEY está com o valor padrão do código-fonte. Defina uma "
             "SECRET_KEY própria (variável de ambiente) antes de subir em produção."
         )
+    # Achado real (auditoria de segurança pedida pelo usuário, item 8): sem
+    # APP_ENCRYPTION_KEY própria, auth._fernet() cai pra derivar a chave de
+    # cifra (CPF/CNPJ, endereço, dados bancários, chave Gemini do usuário,
+    # cofre de documentos) a partir da MESMA SECRET_KEY que assina sessão --
+    # rotacionar a SECRET_KEY (o que se faz justo depois de um vazamento)
+    # destruiria os dois ao mesmo tempo. Mesmo guard do caso acima, mesma
+    # exceção: confirmado com o usuário que a Railway (produção atual) já
+    # tem APP_ENCRYPTION_KEY configurada, então este guard não quebra o
+    # próximo deploy -- só impede que algum deploy FUTURO suba sem ela.
+    if settings.APP_BASE_URL.startswith("https") and not settings.APP_ENCRYPTION_KEY:
+        raise RuntimeError(
+            "APP_ENCRYPTION_KEY não está definida. Sem ela, a cifra de CPF/CNPJ, "
+            "endereço, dados bancários e chave Gemini do usuário fica acoplada à "
+            "SECRET_KEY (qualquer rotação futura da SECRET_KEY destruiria esses "
+            "dados). Defina uma APP_ENCRYPTION_KEY própria (variável de ambiente) "
+            "antes de subir em produção."
+        )
     init_db()
     yield
 
@@ -94,6 +112,39 @@ app = FastAPI(
 # Rotas liberadas sem login (auth, health, cron, página de login e estáticos)
 _ROTAS_PUBLICAS = {"/health", "/api/coletar-cron", "/login", "/cadastro", "/verificar", "/redefinir-senha"}
 _PREFIXOS_PUBLICOS = ("/api/auth/", "/static/", "/assets/")
+
+# Rotas /api/* que não exigem login porque são chamadas por um agendador
+# externo (GitHub Actions/Railway), autenticadas por X-Cron-Key em vez de
+# cookie de sessão -- ver _exigir_cron_key. Junto com _ROTAS_PUBLICAS/
+# _PREFIXOS_PUBLICOS acima, formam a allowlist conferida por
+# test_toda_rota_api_exige_login_ou_esta_na_allowlist (test_seguranca_
+# auditoria.py): achado real, essas duas constantes existiam só como
+# documentação (nada no código as lia) quando /api/lembretes/verificar foi
+# criada sem NENHUMA proteção e passou despercebida -- agora um teste
+# percorre toda rota /api/* e falha se a rota não tiver Depends(
+# get_current_user) nem estiver numa destas listas, pra essa classe de bug
+# (rota nova sem proteção) não voltar a passar em branco.
+_ROTAS_PROTEGIDAS_POR_CRON_KEY = {
+    "/api/coletar-cron", "/api/cron/backfill-datas-pncp", "/api/lembretes/verificar",
+}
+
+# Contas com acesso a operações administrativas (afetam a base inteira, não
+# só a própria conta: faxina de editais órfãos, backfill em lote, config
+# global de coleta). Achado real (auditoria de arquitetura pedida pelo
+# usuário): as rotas /api/admin/*, POST /api/config exigiam só login --
+# qualquer conta criada pelo cadastro público conseguia apagar editais de
+# todo mundo ou mudar o que o app inteiro coleta. Mesmo padrão já usado em
+# _USUARIOS_SELETOR_RERANKER (acima, no recálculo) pra restringir um recurso
+# a uma conta específica -- intencionalmente um id fixo, não uma coluna
+# "admin" no banco: não há hoje mais de uma conta operadora, e um sistema de
+# papéis completo seria over-engineering pra esse caso. Confirmado com o
+# usuário: user id 5 é a conta operadora.
+_USUARIOS_ADMIN = {5}
+
+
+def _exigir_admin(user: "Usuario") -> None:
+    if user.id not in _USUARIOS_ADMIN:
+        raise HTTPException(403, "Ação restrita à administração do sistema.")
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +361,14 @@ class LoginIn(BaseModel):
     senha: str
 
 
-def _set_cookie_sessao(resp: _Resp, usuario_id: int):
+def _set_cookie_sessao(resp: _Resp, user: Usuario):
     """Cookie de um login novo -- sempre abre um teto absoluto novo de
     TOKEN_EXPIRA_HORAS (exp_abs=None). Renovação por atividade dentro de uma
     sessão já aberta é outro caminho (ver auth.get_current_user), que
-    carrega o exp_abs original em vez de recriar um."""
-    _auth.cookie_sessao(resp, usuario_id)
+    carrega o exp_abs original em vez de recriar um. Embute a token_versao
+    ATUAL do usuário -- se uma troca/redefinição de senha a incrementou
+    antes deste login, o cookie novo já nasce com a versão certa."""
+    _auth.cookie_sessao(resp, user.id, token_versao=user.token_versao or 0)
 
 
 # campos válidos do JSON cifrado de dados complementares — filtra chave
@@ -415,7 +468,7 @@ def auth_cadastro(dados: CadastroIn, request: Request, resp: _Resp, bg: Backgrou
                 "mensagem": "Enviamos um link de confirmação para o seu e-mail. "
                             "Confira também a caixa de spam."}
 
-    _set_cookie_sessao(resp, u.id)
+    _set_cookie_sessao(resp, u)
     return {"ok": True, "verificar_email": False}
 
 
@@ -447,7 +500,7 @@ def auth_login(dados: LoginIn, request: Request, resp: _Resp, db: Session = Depe
     # varredura contra várias contas, não deve resetar por causa de UM
     # login certo no meio.
     _rl.limpar(f"login-email:{email}")
-    _set_cookie_sessao(resp, u.id)
+    _set_cookie_sessao(resp, u)
     return {"ok": True}
 
 
@@ -655,6 +708,12 @@ def auth_redefinir_senha(dados: RedefinirSenhaIn, request: Request, db: Session 
     u.senha_hash = _auth.hash_senha(dados.senha)
     u.token_reset_senha = None
     u.token_reset_expira = None
+    # mesmo motivo de trocar_senha: invalida qualquer sessão aberta com a
+    # senha antiga -- "esqueci minha senha" é justamente o caminho usado
+    # depois de uma conta comprometida, não pode deixar o invasor logado.
+    # Esta rota não loga de volta (sem cookie novo aqui de propósito): o
+    # fluxo manda pra tela de login depois do reset.
+    u.token_versao = (u.token_versao or 0) + 1
     db.commit()
     return {"ok": True}
 
@@ -740,7 +799,7 @@ class TrocarSenhaIn(BaseModel):
 
 
 @app.post("/api/perfil/senha")
-def trocar_senha(dados: TrocarSenhaIn, bg: BackgroundTasks,
+def trocar_senha(dados: TrocarSenhaIn, bg: BackgroundTasks, resp: _Resp,
                  user: Usuario = Depends(_auth.get_current_user),
                  db: Session = Depends(get_session)):
     if not _auth.conferir_senha(dados.senha_atual, user.senha_hash):
@@ -749,7 +808,13 @@ def trocar_senha(dados: TrocarSenhaIn, bg: BackgroundTasks,
     if erro:
         raise HTTPException(400, erro)
     user.senha_hash = _auth.hash_senha(dados.senha_nova)
+    # invalida qualquer sessão aberta com a senha antiga (ex.: roubada) --
+    # ver Usuario.token_versao. Reemite o cookie da requisição ATUAL com a
+    # versão nova na hora, pra quem está trocando a própria senha não ser
+    # deslogado pelo próprio ato de trocar.
+    user.token_versao = (user.token_versao or 0) + 1
     db.commit()
+    _set_cookie_sessao(resp, user)
     if _email_mod.smtp_configurado():
         corpo = (f"Olá, {user.nome}!\n\nA senha da sua conta no Minha Licitação foi alterada "
                  "agora há pouco.\n\nSe não foi você, use a opção \"Esqueci minha senha\" na "
@@ -832,7 +897,11 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
     /start CÓDIGO, vincula o chat_id daquele usuário. Quando toca num botão
     do menu de avisos, manda os editais/documentos da categoria escolhida
     (ver telegram_menu.py). Protegido por um segredo na URL."""
-    if not settings.TELEGRAM_WEBHOOK_SECRET or secret != settings.TELEGRAM_WEBHOOK_SECRET:
+    # Achado real (auditoria de segurança pedida pelo usuário): comparação
+    # com != não é resistente a timing -- trocado por secrets.compare_digest,
+    # mesmo padrão já usado em _exigir_cron_key.
+    if not settings.TELEGRAM_WEBHOOK_SECRET or not secrets.compare_digest(
+            secret, settings.TELEGRAM_WEBHOOK_SECRET):
         raise HTTPException(404, "not found")
     try:
         update = await req.json()
@@ -872,13 +941,22 @@ async def telegram_webhook(secret: str, req: Request, db: Session = Depends(get_
         codigo = partes[1].strip() if len(partes) > 1 else ""
         if codigo:
             u = db.execute(select(Usuario).where(Usuario.telegram_codigo == codigo)).scalars().first()
-            campo_chat = "telegram_chat_id"
+            campo_chat, campo_codigo = "telegram_chat_id", "telegram_codigo"
             if not u:
                 u = db.execute(select(Usuario).where(Usuario.telegram_codigo_2 == codigo)).scalars().first()
-                campo_chat = "telegram_chat_id_2"
+                campo_chat, campo_codigo = "telegram_chat_id_2", "telegram_codigo_2"
             if u:
                 setattr(u, campo_chat, chat_id)
                 u.notif_telegram = True
+                # Achado real (auditoria de segurança pedida pelo usuário):
+                # o código nunca era limpo depois de vinculado -- continuava
+                # válido pra sempre, então quem obtivesse esse código uma vez
+                # (link encaminhado, print, histórico do Telegram) conseguia
+                # re-vincular o PRÓPRIO chat a ele e passar a receber os
+                # avisos deste usuário. Consumido aqui: a próxima visita a
+                # "Meu perfil" gera um código novo (telegram_vinculo já faz
+                # isso quando o campo está vazio).
+                setattr(u, campo_codigo, None)
                 db.commit()
                 from .notifications import telegram as _tg
                 _tg.enviar_para_chat(
@@ -1131,10 +1209,17 @@ def exportar_produtos(user: Usuario = Depends(_auth.get_current_user),
     # telefone do fornecedor vinculado (se houver) — é o que a importação usa
     # pra religar automaticamente ao mesmo Fornecedor (por isso fica só nessa
     # coluna, não persistido direto no Produto: ver comentário no modelo.xlsx).
+    # defesa em profundidade: com _validar_fornecedor_id em criar_produto/
+    # atualizar_produto, todo fornecedor_id aqui já é do próprio usuário --
+    # mas filtra de novo mesmo assim (mesmo raciocínio do achado de IDOR:
+    # um dado legado ou um caminho futuro de escrita não deve conseguir
+    # vazar telefone de fornecedor de outro tenant através deste export).
     fornecedor_ids = {p.fornecedor_id for p in produtos if p.fornecedor_id}
     telefones = {}
     if fornecedor_ids:
-        for f in db.execute(select(Fornecedor).where(Fornecedor.id.in_(fornecedor_ids))).scalars():
+        for f in db.execute(select(Fornecedor).where(
+                Fornecedor.usuario_id == user.id,
+                Fornecedor.id.in_(fornecedor_ids))).scalars():
             telefones[f.id] = f.telefone or ""
 
     wb = openpyxl.Workbook()
@@ -1176,9 +1261,26 @@ def obter_produto(produto_id: int, user: Usuario = Depends(_auth.get_current_use
     return _produto_dict(_produto_do_usuario(db, produto_id, user))
 
 
+def _validar_fornecedor_id(db, fornecedor_id: int | None, user: Usuario) -> None:
+    """Levanta 404 se `fornecedor_id` vier preenchido mas não for um
+    Fornecedor do próprio usuário. Achado real (auditoria de segurança
+    pedida pelo usuário): ProdutoIn.fornecedor_id é um campo livre do corpo
+    da requisição, e criar_produto/atualizar_produto gravavam esse valor
+    direto, sem a mesma checagem de posse que _fornecedor_do_usuario já
+    aplica em toda rota de fornecedor -- um usuário podia apontar seu
+    próprio produto pra um Fornecedor de OUTRO tenant e, dali,
+    exportar_produtos devolvia o telefone desse fornecedor estranho na
+    planilha (vazamento de dado entre contas). Reaproveita
+    _fornecedor_do_usuario (mesma função usada em GET/PUT/DELETE de
+    fornecedor) em vez de duplicar a checagem."""
+    if fornecedor_id is not None:
+        _fornecedor_do_usuario(db, fornecedor_id, user)
+
+
 @app.post("/api/produtos")
 def criar_produto(dados: ProdutoIn, user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
+    _validar_fornecedor_id(db, dados.fornecedor_id, user)
     p = Produto(**dados.model_dump(), usuario_id=user.id)
     db.add(p)
     user.versao_catalogo += 1
@@ -1192,6 +1294,7 @@ def atualizar_produto(produto_id: int, dados: ProdutoIn,
                       user: Usuario = Depends(_auth.get_current_user),
                       db: Session = Depends(get_session)):
     p = _produto_do_usuario(db, produto_id, user)
+    _validar_fornecedor_id(db, dados.fornecedor_id, user)
     for campo, valor in dados.model_dump().items():
         setattr(p, campo, valor)
     user.versao_catalogo += 1
@@ -1229,18 +1332,61 @@ _LOTE_COMMIT_IMPORT = 200  # commita a cada N linhas (ver comentário no loop de
 
 
 def _num_br(v):
-    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None."""
+    """Converte '18,90' / '1.234,56' / 18.9 em float; vazio -> None.
+
+    Achado real (auditoria de error-detective): `float()` do Python aceita
+    de bom grado as strings "inf"/"Infinity"/"nan" (qualquer caixa) sem
+    lançar -- uma célula digitada errado numa planilha de importação de
+    catálogo (coluna itens_por_unidade) virava `float('inf')` persistido
+    sem aviso, e mais tarde explodia como OverflowError bem depois, dentro
+    de `matching/validacao.py:_formatar_qtd` (`int(float('inf'))`), numa
+    chamada que nem parece relacionada. Rejeita aqui, na borda de entrada,
+    em vez de confiar que todo consumidor desse campo vai lidar com
+    infinito/NaN."""
     if v is None or v == "":
         return None
     if isinstance(v, (int, float)):
-        return float(v)
+        return float(v) if math.isfinite(v) else None
     s = str(v).strip().replace("R$", "").replace(" ", "")
     if "," in s:                       # formato BR: ponto = milhar, vírgula = decimal
         s = s.replace(".", "").replace(",", ".")
     try:
-        return float(s)
+        n = float(s)
     except ValueError:
         return None
+    return n if math.isfinite(n) else None
+
+
+async def _ler_upload_limitado(arquivo: UploadFile, limite_bytes: int, mensagem_erro: str) -> bytes:
+    """Lê um UploadFile em blocos, abortando assim que passar do limite --
+    nunca aloca o arquivo inteiro antes de checar o tamanho. Achado real
+    (auditoria de segurança pedida pelo usuário): tanto aqui (planilha de
+    produtos) quanto no cofre de documentos, o código antigo fazia
+    `conteudo = await arquivo.read()` (lê TUDO) e só checava o tamanho
+    DEPOIS -- um POST de qualquer tamanho (a validação nem olha o
+    Content-Type antes) ficava inteiro na RAM antes do erro ser devolvido,
+    o que em hospedagem com pouca memória derruba o processo bem antes do
+    "arquivo muito grande" aparecer pro usuário."""
+    pedacos = []
+    total = 0
+    while True:
+        pedaco = await arquivo.read(1024 * 1024)
+        if not pedaco:
+            break
+        total += len(pedaco)
+        if total > limite_bytes:
+            raise HTTPException(400, mensagem_erro)
+        pedacos.append(pedaco)
+    return b"".join(pedacos)
+
+
+_TAMANHO_MAX_UPLOAD_PLANILHA = 10 * 1024 * 1024  # 10 MB (arquivo .xlsx como veio, comprimido)
+# defesa contra "zip bomb": um .xlsx é um zip -- um arquivo de poucos KB
+# pode anunciar um conteúdo descompactado de vários GB. openpyxl(read_only)
+# já ajuda (não monta o DOM inteiro em memória), mas ainda assim percorre
+# o XML descompactado -- confere o tamanho ANUNCIADO pelo próprio zip antes
+# de deixar o openpyxl abrir, sem precisar descompactar de fato pra isso.
+_TAMANHO_MAX_DESCOMPACTADO_PLANILHA = 200 * 1024 * 1024  # 200 MB
 
 
 @app.post("/api/produtos/importar")
@@ -1250,7 +1396,16 @@ async def importar_produtos(arquivo: UploadFile = File(...),
     """Importa produtos de uma planilha .xlsx. Atualiza quando a descrição já
     existe; caso contrário, cria. Retorna um resumo do que foi feito."""
     import openpyxl
-    conteudo = await arquivo.read()
+    import zipfile
+    conteudo = await _ler_upload_limitado(
+        arquivo, _TAMANHO_MAX_UPLOAD_PLANILHA, "Planilha muito grande (máximo 10 MB).")
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            tamanho_descompactado = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Arquivo inválido. Envie uma planilha .xlsx.")
+    if tamanho_descompactado > _TAMANHO_MAX_DESCOMPACTADO_PLANILHA:
+        raise HTTPException(400, "Arquivo inválido. Envie uma planilha .xlsx.")
     try:
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
     except Exception:
@@ -2045,6 +2200,32 @@ def listar_modalidades(
     return {"modalidades": valores}
 
 
+def _item_match_compativel(d: dict) -> bool:
+    """Compatibilidade "de verdade" de um item de Match.detalhe: confiança
+    ALTA ou confirmado manualmente -- confiança média é só sugestão, não
+    conta até o usuário confirmar. "confianca" ausente do dict é dado
+    ANTERIOR a esse campo existir (ainda não recalculado) -- trata como
+    compatível pra manter o comportamento de antes até a próxima
+    recalculação chegar nele, em vez de reclassificar a base inteira como
+    "incompatível" de uma vez.
+
+    Achado real (auditoria de arquitetura pedida pelo usuário): esta regra
+    estava reimplementada em 5 lugares (lista de editais, /detalhe,
+    cotação/proposta, Inteligência de Preço) e só a cópia da lista de
+    editais tinha o fallback de dado legado acima -- as outras 4 não. Um
+    match antigo, ainda sem "confianca" (não recalculado), contava como
+    compatível no card da lista mas NÃO contava na cotação, na proposta
+    nem na Inteligência de Preço: resultado divergente pro MESMO match,
+    dependendo de qual tela o usuário estava. Centralizado aqui pra não
+    poder divergir de novo -- qualquer rota que decidir "este item é um
+    match confirmado" chama esta função, não reimplementa a condição."""
+    if not d.get("produto_id"):
+        return False
+    if "confianca" in d:
+        return d.get("confianca") == "alta" or bool(d.get("confirmado_manualmente"))
+    return True
+
+
 @app.get("/api/editais")
 def listar_editais(
     nivel: str | None = Query(None),
@@ -2120,23 +2301,9 @@ def listar_editais(
     itens_por_unidade_map: dict[int, float] = {}
     if ids_produto:
         itens_por_unidade_map = dict(db.execute(
-            select(Produto.id, Produto.itens_por_unidade).where(Produto.id.in_(ids_produto))
+            select(Produto.id, Produto.itens_por_unidade)
+            .where(Produto.usuario_id == user.id, Produto.id.in_(ids_produto))
         ).all())
-
-    def _item_conta_como_compativel(it: dict) -> bool:
-        # mesma regra de "compatível de verdade" usada em /detalhe, /cotacao.xlsx
-        # e Inteligência de Preço: confiança alta OU confirmado manualmente —
-        # confiança média é sugestão, não conta até o usuário confirmar (evita
-        # o card da lista anunciar como "compatível" um match que a tela do
-        # edital já trata como precisando de confirmação). `"confianca" not in
-        # it` é dado ANTERIOR a essa faixa existir (ainda não recalculado) —
-        # mantém o comportamento de antes até a próxima recalculação chegar
-        # nele, em vez de anunciar "0 compatível" pra base toda de uma vez.
-        if not it.get("produto_id"):
-            return False
-        if "confianca" in it:
-            return it.get("confianca") == "alta" or bool(it.get("confirmado_manualmente"))
-        return True
 
     out = []
     for match, ed in linhas:
@@ -2158,7 +2325,7 @@ def listar_editais(
         match_avaliado = match is not None and detalhe is not None
         itens_compativeis = match.itens_compativeis if match else 0
         if detalhe and detalhe.get("itens"):
-            itens_compativeis = sum(1 for it in detalhe["itens"] if _item_conta_como_compativel(it))
+            itens_compativeis = sum(1 for it in detalhe["itens"] if _item_match_compativel(it))
             # cópia (não mutar o dict rastreado pelo ORM) — só os 4 primeiros
             # itens porque é só isso que o card da lista mostra (_corpoItensEdital
             # já não usa esse "detalhe" resumido, usa /detalhe com o catálogo
@@ -2709,7 +2876,8 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
     produtos = {}
     if prod_ids:
         produtos = {p.id: p for p in db.execute(
-            select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
+            select(Produto).where(Produto.usuario_id == user.id,
+                                  Produto.id.in_(prod_ids))).scalars()}
 
     precos_cotacao = _preco_cotacao_por_numero(edital_id, user, db)
     embalagem_override = _embalagem_override_por_numero(edital_id, user, db)
@@ -2720,11 +2888,11 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
         confianca = d.get("confianca")
         confirmado = bool(d.get("confirmado_manualmente"))
         # "compatível" de verdade (entra em cotação/margem/Inteligência de
-        # Preço) exige confiança alta OU confirmação manual — confiança
-        # média é SUGESTÃO, não vira fato até o usuário confirmar (é
-        # exatamente a faixa onde viviam os bugs reais de matching achados
-        # em auditoria de produção).
-        compativel = prod is not None and (confianca == "alta" or confirmado)
+        # Preço) -- mesma regra central de _item_match_compativel (confiança
+        # alta OU confirmação manual, com fallback pra dado legado sem
+        # "confianca"), com a exigência EXTRA de que o produto ainda exista
+        # de fato no catálogo atual do usuário (prod resolvido).
+        compativel = prod is not None and _item_match_compativel(d)
 
         margem_dados = {"margem": None, "margem_pct": None, "custo_comparavel": None,
                         "alerta_unidade": False, "alerta_embalagem": False, "alerta_margem_extrema": False}
@@ -3618,6 +3786,7 @@ def backfill_unidade_medida_endpoint(bg: BackgroundTasks, edital_id: int | None 
     editais com algum item sem essa informação (1 chamada ao PNCP por
     edital, pode demorar bastante numa base grande — acompanhar em
     /api/admin/backfill-unidade-medida/status)."""
+    _exigir_admin(user)
     if edital_id is not None:
         ed = db.get(Edital, edital_id)
         if not ed:
@@ -3633,6 +3802,7 @@ def backfill_unidade_medida_endpoint(bg: BackgroundTasks, edital_id: int | None 
 
 @app.get("/api/admin/backfill-unidade-medida/status")
 def backfill_unidade_medida_status(user: Usuario = Depends(_auth.get_current_user)):
+    _exigir_admin(user)
     return _backfill_unidade_status
 
 
@@ -3662,6 +3832,7 @@ def podar_editais_orfaos_endpoint(bg: BackgroundTasks, user: Usuario = Depends(_
     a base crescer de novo, mas não limpa o que já se acumulou antes dela
     existir). Roda em segundo plano (base grande pode levar um tempo);
     acompanhar em /api/admin/podar-editais-orfaos/status."""
+    _exigir_admin(user)
     if _poda_editais_status["rodando"]:
         return {"ok": False, "mensagem": "Já tem uma poda rodando."}
     bg.add_task(_rodar_poda_editais_bg)
@@ -3670,6 +3841,7 @@ def podar_editais_orfaos_endpoint(bg: BackgroundTasks, user: Usuario = Depends(_
 
 @app.get("/api/admin/podar-editais-orfaos/status")
 def podar_editais_orfaos_status(user: Usuario = Depends(_auth.get_current_user)):
+    _exigir_admin(user)
     return _poda_editais_status
 
 
@@ -4018,11 +4190,26 @@ def _comparar_catalogo_ia_com_cache(resultado: dict, ed: Edital, user: Usuario, 
     return resultado
 
 
-# A flag de cancelamento é por usuário, checada ENTRE as até 3 chamadas de
-# IA que uma análise faz (edital -> documentos -> catálogo). Nunca
-# interrompe uma chamada já em voo — requests.post dentro de
-# analise_edital.py:_gerar() não tem nenhum hook de cancelamento.
-_analise_cancelar: dict[int, bool] = {}
+# A flag de cancelamento é por (usuário, edital) -- NÃO só por usuário --,
+# checada ENTRE as até 3 chamadas de IA que uma análise faz (edital ->
+# documentos -> catálogo). Nunca interrompe uma chamada já em voo —
+# requests.post dentro de analise_edital.py:_gerar() não tem nenhum hook de
+# cancelamento.
+#
+# Achado real (auditoria de arquitetura pedida pelo usuário): até a versão
+# anterior, a chave era só `user.id`. analise_edital() reseta essa flag no
+# seu próprio início ("defensivo: não herdar cancelamento de uma rodada
+# anterior") -- e analise_edital_status() chama analise_edital() de volta
+# quando não há entrada em _analise_status (fallback de cache após reinício
+# do processo, ver comentário logo abaixo). Com a chave por usuário só, um
+# poll de status de QUALQUER OUTRO edital do mesmo usuário (aba diferente,
+# edital diferente) resetava esse mesmo dict e apagava, em silêncio, um
+# cancelamento que o usuário tinha acabado de pedir pra uma análise
+# DIFERENTE, ainda em andamento em segundo plano -- o botão "Cancelar"
+# parecia não fazer nada. Escopar por (usuário, edital) -- mesma chave de
+# _analise_status -- elimina essa interferência entre editais: resetar o
+# flag de um edital nunca mais afeta o de outro.
+_analise_cancelar: dict[tuple[int, int], bool] = {}
 # Achado real: Edital.analise_ia é cache GLOBAL por edital (o resumo é o
 # mesmo pra todo mundo, não depende do usuário) — mas a rota não tinha
 # nenhuma trava. Dois usuários abrindo o MESMO edital ainda sem análise ao
@@ -4044,7 +4231,7 @@ def analise_cancelar(edital_id: int, user: Usuario = Depends(_auth.get_current_u
     tem efeito na PRÓXIMA etapa (documentos/catálogo) ou, se pedido antes de
     a análise-base começar, evita gastar essa chamada — nunca interrompe uma
     chamada à IA já em curso."""
-    _analise_cancelar[user.id] = True
+    _analise_cancelar[(user.id, edital_id)] = True
     return {"ok": True, "mensagem": "Cancelamento solicitado — a análise vai parar assim que possível."}
 
 
@@ -4101,8 +4288,11 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
     if not ed:
         raise HTTPException(404, "Edital não encontrado")
     chave = _auth.decifrar(user.gemini_key_cifrada)
-    _analise_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
-    deve_cancelar = lambda: _analise_cancelar.get(user.id, False)  # noqa: E731
+    # defensivo: não herdar cancelamento de uma rodada anterior PARA ESTE
+    # MESMO edital -- nunca afeta o cancelamento de outro edital (ver
+    # comentário na declaração de _analise_cancelar).
+    _analise_cancelar.pop((user.id, edital_id), None)
+    deve_cancelar = lambda: _analise_cancelar.get((user.id, edital_id), False)  # noqa: E731
 
     def _cache_valido():
         if not ed.analise_ia:
@@ -4215,6 +4405,24 @@ def analise_edital(edital_id: int, forcar: bool = Query(False),
 # outro. Reaproveita a função analise_edital() de cima 100% como está
 # (mesmas travas, mesmo cache) — só passa a rodar em BackgroundTasks.
 _analise_status: dict[tuple[int, int], dict] = {}
+# Teto de segurança pra _analise_status -- achado real (auditoria de
+# arquitetura pedida pelo usuário): cada entrada guarda o RESULTADO
+# INTEIRO da análise (dezenas de KB), e a chave é por (usuário, edital) --
+# cresce com toda combinação já analisada NESTE processo, nunca encolhe
+# (um processo de vida longa só acumula). Ao passar do teto, descarta a
+# entrada mais antiga que já TERMINOU (nunca uma com "rodando": True --
+# apagar o estado de um job em andamento faria o usuário ver "análise
+# travada" sem nunca ter falhado de verdade, só sumiu da memória).
+_MAX_ANALISE_STATUS = 2000
+
+
+def _definir_status_analise(chave: tuple[int, int], status: dict) -> None:
+    _analise_status[chave] = status
+    if len(_analise_status) > _MAX_ANALISE_STATUS:
+        for k, v in _analise_status.items():
+            if not v.get("rodando"):
+                del _analise_status[k]
+                break
 
 
 def _rodar_analise_bg(edital_id: int, user_id: int, forcar: bool):
@@ -4223,17 +4431,17 @@ def _rodar_analise_bg(edital_id: int, user_id: int, forcar: bool):
     try:
         user = db.get(Usuario, user_id)
         if not user:
-            _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": "Usuário não encontrado"}
+            _definir_status_analise((user_id, edital_id), {"rodando": False, "erro": "Usuário não encontrado"})
             return
         resultado = analise_edital(edital_id, forcar=forcar, user=user, db=db)
-        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": None, "resultado": resultado}
+        _definir_status_analise((user_id, edital_id), {"rodando": False, "erro": None, "resultado": resultado})
     except HTTPException as e:
-        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": e.detail}
+        _definir_status_analise((user_id, edital_id), {"rodando": False, "erro": e.detail})
     except Exception as e:
         db.rollback()
         logging.getLogger("analise_edital").exception(
             "Erro ao analisar edital %s (usuário %s)", edital_id, user_id)
-        _analise_status[(user_id, edital_id)] = {"rodando": False, "erro": str(e)}
+        _definir_status_analise((user_id, edital_id), {"rodando": False, "erro": str(e)})
     finally:
         db.close()
 
@@ -4257,8 +4465,8 @@ def analise_edital_iniciar(edital_id: int, bg: BackgroundTasks, forcar: bool = Q
     if _analise_status.get(chave, {}).get("rodando"):
         return {"ok": False, "em_andamento": True,
                 "mensagem": "Já tem uma análise em andamento pra este edital."}
-    _analise_cancelar.pop(user.id, None)   # defensivo: não herdar cancelamento de uma rodada anterior
-    _analise_status[chave] = {"rodando": True, "erro": None}
+    _analise_cancelar.pop((user.id, edital_id), None)   # defensivo, ver comentário na declaração
+    _definir_status_analise(chave, {"rodando": True, "erro": None})
     bg.add_task(_rodar_analise_bg, edital_id, user.id, forcar)
     return {"ok": True, "em_andamento": True}
 
@@ -4481,9 +4689,10 @@ def _linha_cabecalho_cotacao(ed: Edital, analise: dict | None) -> str:
 
 
 def _produtos_confirmados_por_numero(edital_id: int, user: Usuario, db: Session) -> dict[int, Produto]:
-    """Produto CONFIRMADO de fato (confiança alta ou confirmado manualmente
-    -- item de confiança média ainda não confirmado é só sugestão, não
-    entra) por número de item do edital, pro usuário logado. Base do
+    """Produto CONFIRMADO de fato (ver _item_match_compativel: confiança alta,
+    confirmado manualmente, ou dado legado de antes do campo "confianca"
+    existir -- item de confiança média ainda não confirmado é só sugestão,
+    não entra) por número de item do edital, pro usuário logado. Base do
     cruzamento usado tanto pela cotação (_linhas_cotacao) quanto pela
     proposta (fabricante/marca/modelo sempre atuais em _proposta_payload,
     mesmo espírito de "descrição sempre atual" que essa função já tem)."""
@@ -4492,15 +4701,15 @@ def _produtos_confirmados_por_numero(edital_id: int, user: Usuario, db: Session)
     mapa_produto: dict[int, int] = {}
     if match and match.detalhe:
         for d in (match.detalhe.get("itens") or []):
-            if (d.get("item") is not None and d.get("produto_id")
-                    and (d.get("confianca") == "alta" or d.get("confirmado_manualmente"))):
+            if d.get("item") is not None and _item_match_compativel(d):
                 mapa_produto[d["item"]] = d["produto_id"]
 
     prod_ids = set(mapa_produto.values())
     produtos = {}
     if prod_ids:
         produtos = {p.id: p for p in db.execute(
-            select(Produto).where(Produto.id.in_(prod_ids))).scalars()}
+            select(Produto).where(Produto.usuario_id == user.id,
+                                  Produto.id.in_(prod_ids))).scalars()}
 
     return {numero: produtos[pid] for numero, pid in mapa_produto.items() if pid in produtos}
 
@@ -4833,16 +5042,34 @@ def cotacao_fornecedor_edital(edital_id: int, itens: str | None = Query(None),
     return _resposta_xlsx(wb, nome_arquivo)
 
 
+def _exigir_cron_key(request: Request) -> None:
+    """Levanta 503/403 se a requisição não trouxer a X-Cron-Key certa.
+    Extraído numa função só (achado real: esta checagem de 4 linhas estava
+    duplicada idêntica em /api/coletar-cron e /api/cron/backfill-datas-pncp
+    -- e uma 3ª rota, /api/lembretes/verificar, tinha sido criada sem essa
+    proteção nenhuma, porque não havia um único lugar óbvio pra copiar/
+    chamar). Toda rota em _ROTAS_PROTEGIDAS_POR_CRON_KEY deve chamar isto
+    antes de fazer qualquer trabalho.
+
+    Só aceita a chave no HEADER (X-Cron-Key) -- achado real (auditoria de
+    segurança pedida pelo usuário): havia um fallback pra ?chave= na query
+    string, sem nenhum chamador real usando (os dois workflows do GitHub
+    Actions sempre mandaram só o header). Query string vaza pra log de
+    acesso de qualquer proxy no caminho, histórico do navegador e Referer --
+    removido por não ter uso nenhum que justificasse o risco."""
+    if not settings.CRON_SECRET:
+        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
+    enviado = request.headers.get("X-Cron-Key") or ""
+    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
+        raise HTTPException(403, "Chave inválida.")
+
+
 @app.api_route("/api/coletar-cron", methods=["GET", "POST"])
 def coletar_cron(bg: BackgroundTasks, request: Request):
     """Dispara a coleta de DENTRO do Render (que alcança o PNCP), chamado por um
     agendador externo (GitHub Actions). Protegido por CRON_SECRET, já que esta
     rota é isenta do login Basic."""
-    if not settings.CRON_SECRET:
-        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
-    enviado = request.headers.get("X-Cron-Key") or request.query_params.get("chave") or ""
-    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
-        raise HTTPException(403, "Chave inválida.")
+    _exigir_cron_key(request)
     bg.add_task(_rodar_coleta_bg)
     return {"ok": True, "mensagem": "Coleta iniciada (cron)."}
 
@@ -4860,11 +5087,7 @@ def backfill_datas_pncp_cron(request: Request, limite: int = Query(50, ge=1, le=
     chamador precisa do resultado pra saber se ainda sobrou algo; rodar de
     novo enquanto "processados" vier > 0 (idempotente: editais já corrigidos
     não aparecem mais na varredura seguinte)."""
-    if not settings.CRON_SECRET:
-        raise HTTPException(503, "Cron desativado: defina CRON_SECRET no ambiente.")
-    enviado = request.headers.get("X-Cron-Key") or request.query_params.get("chave") or ""
-    if not secrets.compare_digest(enviado, settings.CRON_SECRET):
-        raise HTTPException(403, "Chave inválida.")
+    _exigir_cron_key(request)
     ids = _editais_com_hora_zerada_ids(db, limite)
     corrigidos = 0
     for eid in ids:
@@ -5830,10 +6053,8 @@ async def _ler_upload_documento(arquivo: UploadFile | None) -> bytes:
         raise HTTPException(400, "Envie o arquivo do documento (PDF ou imagem).")
     if arquivo.content_type not in _TIPOS_UPLOAD_DOCUMENTO_PERMITIDOS:
         raise HTTPException(400, "Envie um PDF ou imagem (jpg/png/webp).")
-    conteudo = await arquivo.read()
-    if len(conteudo) > _TAMANHO_MAX_UPLOAD_DOCUMENTO:
-        raise HTTPException(400, "Arquivo muito grande (máximo 15 MB).")
-    return conteudo
+    return await _ler_upload_limitado(
+        arquivo, _TAMANHO_MAX_UPLOAD_DOCUMENTO, "Arquivo muito grande (máximo 15 MB).")
 
 
 def _nome_arquivo_seguro(nome: str) -> str:
@@ -5893,7 +6114,17 @@ def baixar_arquivo_documento(doc_id: int, user: Usuario = Depends(_auth.get_curr
     d = _documento_do_usuario(db, doc_id, user)   # 404 se não for do usuário logado
     if not d.arquivo_cifrado:
         raise HTTPException(404, "Este documento não tem arquivo salvo.")
-    conteudo = base64.b64decode(_auth.decifrar(d.arquivo_cifrado))
+    decifrado = _auth.decifrar(d.arquivo_cifrado)
+    if decifrado is None:
+        # Achado real (auditoria de segurança pedida pelo usuário, item 9):
+        # antes disso, decifrar devolvendo None virava TypeError sem
+        # tratamento (base64.b64decode(None)) -- um 500 genérico pro
+        # usuário, sem dizer que a causa é a chave de cifra (ver
+        # auth.decifrar, que agora loga o aviso).
+        raise HTTPException(
+            500, "Não foi possível ler o arquivo deste documento agora "
+                 "(falha ao decifrar). Fale com o suporte se isso persistir.")
+    conteudo = base64.b64decode(decifrado)
     return Response(content=conteudo, media_type=d.arquivo_tipo or "application/octet-stream",
                     headers={"Content-Disposition":
                              f'attachment; filename="{_nome_arquivo_seguro(d.arquivo_nome)}"'})
@@ -5946,8 +6177,14 @@ def remover_documento(doc_id: int, user: Usuario = Depends(_auth.get_current_use
 
 
 @app.post("/api/lembretes/verificar")
-def verificar_lembretes(bg: BackgroundTasks):
-    """Dispara a verificação de prazos e documentos manualmente."""
+def verificar_lembretes(bg: BackgroundTasks, request: Request):
+    """Dispara a verificação de prazos e documentos (e-mail/Telegram) pra
+    TODOS os usuários -- não é uma ação de um usuário sobre a própria conta,
+    é uma rotina de sistema, então usa a mesma X-Cron-Key das outras rotas
+    de cron, não login. Achado real (auditoria de segurança pedida pelo
+    usuário): esta rota não tinha proteção NENHUMA -- qualquer um na
+    internet conseguia disparar notificação pra toda a base."""
+    _exigir_cron_key(request)
     def _run():
         db = SessionLocal()
         try:
@@ -5984,6 +6221,15 @@ def obter_config(user: Usuario = Depends(_auth.get_current_user),
 @app.post("/api/config")
 def salvar_config(dados: ConfigIn, user: Usuario = Depends(_auth.get_current_user),
                   db: Session = Depends(get_session)):
+    # Achado real (auditoria de arquitetura pedida pelo usuário): esta
+    # config é GLOBAL (tabela configuracoes, sem usuario_id -- ver
+    # app/configuracoes.py) -- qualquer conta comum conseguia mudar o que o
+    # app INTEIRO coleta (UFs, modalidades, horizonte) ou ligar/desligar a
+    # IA semântica pra todo mundo. GET /api/config continua liberado pra
+    # qualquer usuário logado: além dos valores globais, ele devolve
+    # campos calculados DESTE usuário (IA_DISPONIVEL/IA_BLOQUEADA a partir
+    # da própria chave Gemini), usados pela tela normal de configurações.
+    _exigir_admin(user)
     from . import configuracoes
     for chave, valor in dados.model_dump().items():
         if valor is not None:
@@ -6088,10 +6334,12 @@ def inteligencia_preco(user: Usuario = Depends(_auth.get_current_user),
             numero, produto_id = d.get("item"), d.get("produto_id")
             if numero is None or produto_id is None:
                 continue
-            # só entra na estatística o que é confiável (código exato/score
-            # alto) ou confirmado manualmente — sugestão não confirmada não
-            # vira "referência de mercado".
-            if not (d.get("confianca") == "alta" or d.get("confirmado_manualmente")):
+            # só entra na estatística o que é compatível de fato (ver
+            # _item_match_compativel: confiança alta, confirmado manualmente,
+            # ou dado legado de antes do campo "confianca" existir) --
+            # sugestão de confiança média ainda não confirmada não vira
+            # "referência de mercado".
+            if not _item_match_compativel(d):
                 continue
             referencias.append((m.edital_id, numero, produto_id))
             numeros_por_edital.setdefault(m.edital_id, set()).add(numero)
@@ -6153,7 +6401,7 @@ def inteligencia_preco_editais(produto_id: int, user: Usuario = Depends(_auth.ge
     for m in matches:
         for d in (m.detalhe or {}).get("itens", []):
             if (d.get("produto_id") == produto_id and d.get("item") is not None
-                    and (d.get("confianca") == "alta" or d.get("confirmado_manualmente"))):
+                    and _item_match_compativel(d)):
                 referencias.append((m.edital_id, d["item"]))
     if not referencias:
         return []

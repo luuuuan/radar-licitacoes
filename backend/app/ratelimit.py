@@ -34,20 +34,26 @@ _INATIVA_APOS_SEG = 3600
 
 
 def ip_cliente(request: Request) -> str:
-    # Render fica atrás de proxy (e a maioria das instalações, atrás de
-    # Cloudflare também): o IP real do visitante vem em X-Forwarded-For,
-    # não em request.client -- sem isso, todo mundo cairia na mesma chave
-    # (o IP do proxy) e o limite por IP nunca faria sentido.
-    #
-    # Achado real (auditoria do agente code-reviewer): pegava o PRIMEIRO
-    # valor da cadeia -- por convenção, cada proxy confiável ANEXA o IP que
-    # observou ao FINAL da cadeia, então o primeiro valor é o que o próprio
+    # Achado real (auditoria de segurança pedida pelo usuário): o último
+    # valor de X-Forwarded-For só é o IP real do visitante quando há
+    # EXATAMENTE UM proxy confiável na frente (o que a lógica abaixo assumia
+    # implicitamente). Com Cloudflare também na frente da hospedagem (dois
+    # saltos: cliente -> Cloudflare -> hospedagem), a cadeia chega como
+    # "cliente, ip-da-cloudflare" -- o último valor passa a ser o IP da
+    # Cloudflare, IGUAL pra todo visitante, e o limite por IP vira um limite
+    # único compartilhado pela base inteira. CF-Connecting-IP é escrito pela
+    # própria Cloudflare com o IP real do cliente, em QUALQUER topologia por
+    # trás dela (não depende de contar quantos saltos existem) -- checado
+    # primeiro, com o X-Forwarded-For (último valor) como fallback pra
+    # quando não há Cloudflare na frente (só a hospedagem, um salto só).
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    # Por convenção, cada proxy confiável ANEXA o IP que observou ao FINAL
+    # da cadeia de X-Forwarded-For -- o primeiro valor é o que o próprio
     # cliente mandou na requisição original, livremente forjável (um
     # atacante manda um X-Forwarded-For diferente a cada tentativa e
-    # aparenta ser sempre um IP novo, esvaziando o limite por IP). O ÚLTIMO
-    # valor é o que o proxy mais próximo da nossa infraestrutura de fato
-    # observou na conexão -- não é algo que o cliente consiga sobrescrever,
-    # só empurrar pra mais longe na cadeia.
+    # aparenta ser sempre um IP novo, esvaziando o limite por IP).
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[-1].strip()

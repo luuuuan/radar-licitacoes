@@ -40,7 +40,19 @@ def normalizar(texto: str | None) -> str:
         return ""
     t = unicodedata.normalize("NFKD", texto.lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r"(?<=\d)[.,](?=\d)", ".", t)      # 0,7 -> 0.7
+    t = re.sub(r"(?<=\d)[.,](?=\d)", ".", t)      # 0,7 -> 0.7 ; 5,000 -> 5.000
+    # separador de milhar (grupos de EXATAMENTE 3 dígitos, ponto ou vírgula
+    # já normalizados pro passo acima): "5.000"/"1.234.567" -> "5000"/
+    # "1234567". Achado real (fuzzing/revisão pedidos pelo usuário): sem
+    # isso, quem digitava "5000" nunca achava um item cujo texto bruto do
+    # PNCP usa "5.000" (e vice-versa) -- os dois normalizavam pra strings
+    # DIFERENTES ("5000" vs "5.000"), nunca batiam como número. Decimal (1-2
+    # dígitos depois do separador, ex. "0.7", "18.90") não bate neste padrão
+    # (exige grupos de exatamente 3) e continua intacto. condicoes_sql()
+    # trata o resultado sem separador aceitando um separador OPCIONAL contra
+    # o texto bruto da coluna (ver _rx_numero) -- o Python (texto_bate) já
+    # resolve sozinho, já que os dois lados passam por este mesmo normalizar().
+    t = re.sub(r"\b(\d{1,3}(?:\.\d{3})+)\b", lambda m: m.group(0).replace(".", ""), t)
     t = re.sub(r"\b([a-z])-(?=\d)", r"\1", t)     # a-4 -> a4
     t = re.sub(r"(\d)([a-z])", r"\1 \2", t)       # 75g -> 75 g
     t = re.sub(r"[^a-z0-9.\s]", " ", t)
@@ -238,7 +250,26 @@ def _rx(p: str) -> str:
 
 
 def _rx_numero(n: str) -> str:
-    return "[.,]".join(re.escape(x) for x in n.split("."))
+    if "." in n:
+        # separador DECIMAL (ex.: "0.7", "18.90" -- normalizar() só deixa um
+        # ponto sobreviver aqui pra decimal, nunca pra separador de milhar,
+        # que já vem colapsado). A posição exige um separador, podendo ser
+        # qualquer um dos dois símbolos -- texto bruto do PNCP usa
+        # formatação livre.
+        return "[.,]".join(re.escape(x) for x in n.split("."))
+    # inteiro limpo, sem separador (normalizar() colapsa separador de milhar
+    # antes de chegar aqui -- ver comentário lá): o texto BRUTO da coluna
+    # (nunca passou por esse colapso) pode ter o número com ou sem separador
+    # de milhar ("5000", "5.000" ou "5,000") -- agrupa em blocos de 3 a
+    # partir da direita e aceita um separador OPCIONAL entre eles, pra casar
+    # os três jeitos.
+    grupos = []
+    resto = n
+    while len(resto) > 3:
+        grupos.insert(0, resto[-3:])
+        resto = resto[:-3]
+    grupos.insert(0, resto)
+    return "[.,]?".join(re.escape(g) for g in grupos)
 
 
 def _regex_tok(tok: Tok) -> str:

@@ -32,7 +32,7 @@ nada do resto.
 
 ```bash
 cp .env.example .env          # ajuste UFs, e-mail/Telegram se quiser
-docker compose up -d --build  # sobe db (pgvector), redis, api, worker, beat
+docker compose up -d --build  # sobe db (Postgres) + api
 ```
 
 Acesse o dashboard em **http://localhost:8000**
@@ -49,8 +49,11 @@ docker compose exec api python -m scripts.primeira_coleta
 
 Depois é só abrir o dashboard, filtrar por **Match forte** e começar a trabalhar.
 
-> A coleta automática roda **todo dia às 06:00** (Celery Beat). Você também pode
-> disparar manualmente pelo botão **“Coletar agora”** no dashboard.
+> Em produção, a coleta automática roda por um **Cron Job nativo da Railway**
+> chamando `POST /api/coletar-cron` (não há fila/worker separado — tudo roda
+> em BackgroundTasks dentro do próprio processo da API). Localmente (via
+> docker-compose) não há agendamento nenhum; dispare manualmente pelo botão
+> **“Coletar agora”** no dashboard.
 
 ---
 
@@ -117,11 +120,9 @@ radar-licitacoes/
     ├── app/
     │   ├── main.py            # API FastAPI + dashboard
     │   ├── config.py          # configurações (.env)
-    │   ├── database.py        # conexão + criação de tabelas (pgvector)
+    │   ├── database.py        # conexão + criação de tabelas
     │   ├── models.py          # Produto, Edital, ItemEdital, Match, RegraExclusao
     │   ├── service.py         # orquestração: coleta→persiste→casa→notifica
-    │   ├── tasks.py           # tarefa diária (Celery Beat)
-    │   ├── celery_app.py
     │   ├── connectors/
     │   │   ├── base.py        # interface BaseConnector
     │   │   └── pncp.py        # conector do PNCP (pronto)

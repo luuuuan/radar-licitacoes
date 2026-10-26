@@ -2034,19 +2034,29 @@ def _analisar_por_partes(objeto: str, texto: str, api_key: str | None) -> dict |
     (analise_partes.dividir_em_partes), analisa cada uma (até
     _PARALELISMO_PARTES ao mesmo tempo), mescla por código e devolve o mesmo
     formato normalizado de _analisar_texto_unico (status "ok") ou o erro da
-    1ª parte que falhou. Devolve None quando o edital tem partes demais
-    (_MAX_PARTES_ANALISE) -- quem chama cai na recuperação por embeddings.
+    ÚLTIMA parte que falhou, se NENHUMA parte teve sucesso. Devolve None
+    quando o edital tem partes demais (_MAX_PARTES_ANALISE) -- quem chama
+    cai na recuperação por embeddings.
 
     - permitir_groq=False: o Groq corta o prompt em 20000 bytes sem avisar
       (ver _gerar) -- numa parte isso seria perder conteúdo e ainda assim
       parecer sucesso, exatamente o que esta função existe pra evitar.
-    - "analise_incompleta" NÃO vem do autorrelato da IA (cada parte, por
-      definição, termina no meio de uma seção): o código sabe que leu todas
-      as partes, então o valor é False; se uma parte falha, a análise
-      inteira falha (mesma filosofia de "um corte aqui derruba a análise"
-      já usada no fallback sequencial) e o texto fica em cache pra retry.
+    - Achado real (auditoria de performance pedida pelo usuário): até a
+      versão anterior, UMA parte falhando (mesmo após 1 retentativa)
+      descartava as outras N-1 já analisadas (e PAGAS) -- com 12 partes e
+      uma taxa de falha de só ~3% por chamada (503 do Gemini é frequente,
+      ver docstring de _gerar), a chance de perder a análise INTEIRA
+      passava de ~1% pra ~30% por edital, e cada falha custava 12 chamadas
+      novas no retry. Agora mescla só as partes com sucesso e marca
+      "analise_incompleta" (mesmo sinal já usado quando o texto é truncado
+      por tamanho) + um ponto de atenção nomeando exatamente qual trecho
+      não pôde ser lido -- nunca inventa "completo" quando faltou ler uma
+      fatia real do edital, mas também não joga fora o que já deu certo.
+      Só devolve erro puro quando NENHUMA parte teve sucesso (nada pra
+      mesclar).
     - Divergências entre partes (ex.: duas datas de sessão) viram aviso em
-      pontos_atencao (analise_partes.conflitos_entre_partes)."""
+      pontos_atencao (analise_partes.conflitos_entre_partes) -- só entre as
+      partes que tiveram sucesso."""
     partes = analise_partes.dividir_em_partes(texto, max_chars=_TAM_PARTE_ANALISE)
     if not partes or len(partes) > _MAX_PARTES_ANALISE:
         return None
@@ -2058,6 +2068,7 @@ def _analisar_por_partes(objeto: str, texto: str, api_key: str | None) -> dict |
 
     with ThreadPoolExecutor(max_workers=max(1, _PARALELISMO_PARTES)) as ex:
         resultados = list(ex.map(rodar, partes))     # mantém a ORDEM das partes
+    partes_com_falha: list[str] = []
     for i, (parte, r) in enumerate(zip(partes, resultados)):
         if r["status"] != "ok":
             r = rodar(parte)                          # 1 retentativa da parte que falhou
@@ -2065,13 +2076,29 @@ def _analisar_por_partes(objeto: str, texto: str, api_key: str | None) -> dict |
             if r["status"] != "ok":
                 log.warning("analisar(): parte %d/%d (%s) falhou: %s",
                            parte["indice"], parte["total"], parte["cobertura"], r)
-                return {**r, "parte_com_falha": f"{parte['indice']}/{parte['total']} ({parte['cobertura']})"}
+                partes_com_falha.append(f"{parte['indice']}/{parte['total']} ({parte['cobertura']})")
 
-    mesclado = _mesclar_resultados_analise(resultados)
-    mesclado["analise_incompleta"] = False
-    avisos = analise_partes.conflitos_entre_partes(resultados)
-    mesclado["pontos_atencao"] = (avisos + mesclado["pontos_atencao"])[:12]
-    mesclado["partes_analisadas"] = len(partes)
+    resultados_ok = [r for r in resultados if r.get("status") == "ok"]
+    if not resultados_ok:
+        # nenhuma parte teve sucesso -- não há nada pra mesclar, mesmo
+        # contrato de antes: quem chama trata como falha completa (o texto
+        # fica em cache pra retry, ver _gerar).
+        return {**resultados[-1], "partes_com_falha": partes_com_falha}
+
+    mesclado = _mesclar_resultados_analise(resultados_ok)
+    mesclado["analise_incompleta"] = bool(partes_com_falha)
+    avisos_falha = [
+        f"Não foi possível ler uma parte do edital (trecho {pf}) -- a análise "
+        f"pode estar incompleta nessa seção. Tente novamente mais tarde."
+        for pf in partes_com_falha
+    ]
+    avisos_conflito = analise_partes.conflitos_entre_partes(resultados_ok)
+    # avisos_falha primeiro: um trecho não lido é uma lacuna mais grave do
+    # que uma divergência entre partes (ex.: duas datas de sessão) -- não
+    # pode ser cortado pelo [:12] em favor de um aviso de prioridade menor.
+    mesclado["pontos_atencao"] = (avisos_falha + avisos_conflito + mesclado["pontos_atencao"])[:12]
+    mesclado["partes_analisadas"] = len(resultados_ok)
+    mesclado["partes_com_falha"] = partes_com_falha
     return mesclado
 
 
@@ -2720,6 +2747,9 @@ Catálogo (um produto por linha, numerado):
 Para CADA produto do catálogo, na mesma ordem, dê um score de 0.0 a 1.0 indicando o quanto ele é o MESMO produto físico do item acima — mesmo tipo de objeto e uso prático, não apenas categoria parecida. Responda APENAS com um JSON no formato {{"scores": [n1, n2, ...]}}, com exatamente {n} números, um por produto, na mesma ordem da lista."""
 
 
+_MAX_CATALOGO_RERANK_GEMINI = 20000  # chars -- ver achado real no docstring abaixo
+
+
 def rerank_gemini(texto_item: str, documentos: list[str], api_key: str | None = None,
                   timeout: int = 60, tentativas: int = 2) -> list[float] | None:
     """Alternativa ao reranker da DeepInfra (ver matching/embeddings.rerank):
@@ -2731,12 +2761,38 @@ def rerank_gemini(texto_item: str, documentos: list[str], api_key: str | None = 
     EXPERIMENTAL: é 1 chamada ao Gemini POR ITEM. Num recálculo completo
     (milhares de editais) isso estoura de longe os limites de taxa do
     Gemini — viável só pra testar em poucos editais por vez, não pra rodar
-    a base inteira (ver seletor em main.py, restrito a uma conta)."""
+    a base inteira (ver seletor em main.py, restrito a uma conta).
+
+    Achado real (auditoria de performance pedida pelo usuário): a versão
+    anterior montava o catálogo inteiro e só TRUNCAVA O TEXTO em
+    _MAX_CATALOGO_RERANK_GEMINI chars, mas pedia `n=len(documentos)` scores
+    -- com catálogo grande (ex.: 3600 produtos), o prompt mostrava só uns
+    ~700 produtos de verdade, e o Gemini, pra obedecer ao FORMATO pedido
+    (exatamente N números), completava a lista inventando score pros
+    ~2900 produtos que nunca viu. A checagem `len(scores) == len(documentos)`
+    só pega o caso em que o modelo desobedece a contagem, não o caso (muito
+    mais comum) em que ele obedece ao formato alucinando o resto. Agora
+    trunca a LISTA de documentos (não só o texto) pro que de fato cabe no
+    orçamento de caracteres, pede score só desses, e completa o restante
+    com 0.0 (nunca avaliado -> nunca "vence" por engano) em vez de repassar
+    um score que o modelo nunca teve base pra dar."""
     if not ia_texto_disponivel(api_key) or not documentos:
         return None
-    catalogo_txt = "\n".join(f"{i+1}. {d}" for i, d in enumerate(documentos))
+    incluidos: list[str] = []
+    tamanho = 0
+    for d in documentos:
+        linha = f"{len(incluidos) + 1}. {d}"
+        if incluidos and tamanho + len(linha) + 1 > _MAX_CATALOGO_RERANK_GEMINI:
+            break
+        incluidos.append(d)
+        tamanho += len(linha) + 1
+    if len(incluidos) < len(documentos):
+        log.warning("rerank_gemini(): catálogo com %d produtos excede o orçamento de "
+                   "%d chars -- só os primeiros %d entram na chamada, o resto fica sem score.",
+                   len(documentos), _MAX_CATALOGO_RERANK_GEMINI, len(incluidos))
+    catalogo_txt = "\n".join(f"{i+1}. {d}" for i, d in enumerate(incluidos))
     prompt = _PROMPT_RERANK.format(item=(texto_item or "")[:500],
-                                   catalogo=catalogo_txt[:20000], n=len(documentos))
+                                   catalogo=catalogo_txt, n=len(incluidos))
     txt, st = _gerar(prompt, api_key=api_key, timeout=timeout, tentativas=tentativas)
     if st != "ok" or not txt:
         return None
@@ -2744,9 +2800,12 @@ def rerank_gemini(texto_item: str, documentos: list[str], api_key: str | None = 
     if not isinstance(data, dict) or not isinstance(data.get("scores"), list):
         return None
     scores = data["scores"]
-    if len(scores) != len(documentos):
+    if len(scores) != len(incluidos):
         return None
     try:
-        return [max(0.0, min(1.0, float(s))) for s in scores]
+        scores_validados = [max(0.0, min(1.0, float(s))) for s in scores]
     except (TypeError, ValueError):
         return None
+    if len(incluidos) < len(documentos):
+        scores_validados += [0.0] * (len(documentos) - len(incluidos))
+    return scores_validados
