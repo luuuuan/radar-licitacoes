@@ -199,7 +199,25 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # nenhuma. itens_citados() agora confronta a citação contra o CONTEÚDO da
 # página citada (ver _citacao_confere_com_texto) -- muda o resultado pra
 # quem já tinha analisado esse edital com v21, precisa reprocessar.
-VERSAO_PROMPT = 22
+#
+# v23 = achado real (usuário conferiu a análise em PRODUÇÃO imediatamente
+# depois do deploy de v22, MESMO edital 170354): os itens inventados
+# continuaram aparecendo -- a própria IA deixou rastro num "ponto de
+# atenção" de uma das 11 partes: "É necessário comprovar capacidade
+# técnica e econômico-financeira, apesar de não haver menção explícita a
+# documentos específicos neste trecho". Ou seja: a IA não conseguiu citar
+# (caiu no caminho `pendentes`), mas o filtro fraco por palavra no texto
+# INTEIRO aceitou de qualquer jeito -- um TR de 194 itens cobrindo produto
+# variado tem de sobra palavra genérica tipo "capacidade"/"técnica" em
+# contexto sem nada a ver com habilitação. itens_citados() agora só usa
+# esse filtro fraco como ÚLTIMA linha de defesa pra texto SEM paginação
+# nenhuma (.docx/.odt, OCR sem marcador) -- quando o texto TEM paginação
+# (o caso comum, e o deste edital: as OUTRAS categorias da mesma análise
+# citam página corretamente), a IA teve a chance de citar e não citou, o
+# que já é evidência de invenção por si só -- descarta direto, sem
+# segunda chance, igual o próprio prompt já instrui ("SE VOCÊ NÃO
+# CONSEGUIR apontar documento+página... NÃO INCLUA o item").
+VERSAO_PROMPT = 23
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -2159,7 +2177,30 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
                 # fraco, mas melhor que aceitar sem checagem nenhuma -- ver
                 # _filtrar_exigencias_inventadas e o LIMITE CONHECIDO acima).
                 pendentes.append((i, item.strip(), ""))
-        if pendentes:
+        # Achado real (usuário conferiu a análise em produção DEPOIS do
+        # deploy de v22, edital 170354 -- mesmo edital que motivou a
+        # correção): os itens inventados (atestado/declaração de
+        # capacidade técnica, balanço patrimonial, alvará de
+        # funcionamento) continuaram aparecendo -- um dos "pontos_atencao"
+        # da própria resposta da IA confirma o padrão: "É necessário
+        # comprovar capacidade técnica e econômico-financeira, apesar de
+        # não haver menção explícita a documentos específicos neste
+        # trecho". Ou seja: a IA não conseguiu citar (foi pro caminho
+        # `pendentes`), mas o filtro fraco por palavra aceitou de qualquer
+        # jeito -- um TR de 194 itens cobrindo produto variado tem de
+        # sobra palavra genérica tipo "capacidade"/"técnica"/"patrimonial"
+        # em contexto que não tem nada a ver com habilitação. O filtro
+        # fraco só devia ser a ÚLTIMA linha de defesa quando NENHUMA
+        # checagem por página é possível (texto sem paginação nenhuma --
+        # .docx/.odt, OCR) -- quando o texto TEM paginação (o caso comum, e
+        # o deste edital: as OUTRAS categorias desta mesma análise citam
+        # página corretamente), a IA teve a chance de citar e não citou --
+        # isso já é evidência suficiente de invenção, do mesmo jeito que
+        # citação apontando pra página sem relação (ver
+        # _citacao_confere_com_texto) -- não entra no filtro fraco, é
+        # descartado direto, igual o próprio prompt já instrui ("SE VOCÊ
+        # NÃO CONSEGUIR apontar documento+página... NÃO INCLUA o item").
+        if pendentes and not _RE_MARCADOR_PAGINA.search(texto):
             sobreviventes = {
                 it["exigido"] for it in _filtrar_exigencias_inventadas(
                     [{"exigido": n} for _, n, _ in pendentes], [texto])
@@ -2167,9 +2208,16 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
             for i, nome, citacao in pendentes:
                 if nome in sobreviventes:
                     log.warning("analisar(): item de habilitação sem citação de página "
-                               "verificável, mantido só por passar no filtro por palavra: "
-                               "%r (citação recebida: %r)", nome, citacao)
+                               "verificável (texto sem paginação, última linha de defesa), "
+                               "mantido só por passar no filtro por palavra: %r "
+                               "(citação recebida: %r)", nome, citacao)
                     aceitos[i] = nome
+        elif pendentes:
+            for i, nome, citacao in pendentes:
+                log.warning("analisar(): item de habilitação sem citação de página "
+                           "verificável, descartado (texto tem paginação -- a IA teve a "
+                           "chance de citar e não citou): %r (citação recebida: %r)",
+                           nome, citacao)
         return [aceitos[i] for i in sorted(aceitos)]
 
     def documentos_habilitacao(x):

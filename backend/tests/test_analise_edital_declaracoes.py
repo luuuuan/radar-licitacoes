@@ -149,17 +149,20 @@ def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
     citação (mas que sobrevivem ao filtro por palavra) eram juntados em
     DUAS listas separadas e concatenados no fim -- um item sem citação no
     MEIO da resposta da IA acabava empurrado pro final da lista exibida.
-    itens_citados() agora preserva o índice original. Os dois itens COM
-    citação precisam de página real com conteúdo batendo (v22, ver
-    _citacao_confere_com_texto) -- o do MEIO, sem citação, continua
-    dependendo só do filtro fraco por palavra no texto inteiro."""
+    itens_citados() agora preserva o índice original.
+
+    Texto SEM marcador de página nenhum (ver achado real abaixo, v23,
+    sobre por que isso é necessário pra este cenário ainda ser possível):
+    sem paginação, nenhum dos 3 itens é verificável por página, então os 3
+    caem no filtro fraco por palavra -- o do meio sobrevive por achar
+    "procuração"/"anexo" no texto, os outros 2 por achar "contrato"/
+    "social"/"registro"/"comercial"."""
     texto_pdf = (
-        "[pág. 1]\nAbertura do edital, texto administrativo de preenchimento só pra "
-        "passar do limite mínimo de caracteres que analisar() exige.\n"
-        "[pág. 2]\nO licitante deve apresentar Contrato social atualizado e suas "
-        "respectivas alterações contratuais registradas em órgão competente.\n"
-        "[pág. 3]\nApresentar Registro comercial da empresa perante a junta comercial. "
-        "Procuração do representante legal consta no Anexo II, se houver.\n"
+        "O licitante deve apresentar Contrato social atualizado e suas respectivas "
+        "alterações contratuais registradas em órgão competente, Procuração do "
+        "representante legal consta no Anexo II se houver, e Registro comercial "
+        "da empresa perante a junta comercial -- texto corrido, sem marcador de "
+        "página, só pra passar do limite mínimo de caracteres que analisar() exige."
     )
     resultado = _analisar_com_resposta("""{
         "documentos_habilitacao": {
@@ -174,3 +177,38 @@ def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
     assert resultado["documentos_habilitacao"]["juridica"] == [
         "Contrato social", "Procuração do representante legal", "Registro comercial",
     ]
+
+
+def test_item_sem_citacao_verificavel_e_descartado_quando_texto_tem_paginacao():
+    """Achado real (usuário conferiu a análise em produção IMEDIATAMENTE
+    depois do deploy de v22, mesmo edital 170354 que motivou a correção
+    original): os itens inventados continuaram aparecendo -- a própria IA
+    deixou rastro num "ponto de atenção" de uma das 11 partes: "É
+    necessário comprovar capacidade técnica e econômico-financeira, apesar
+    de não haver menção explícita a documentos específicos neste trecho".
+    Ou seja: a IA não conseguiu citar (foi pro caminho `pendentes`), mas o
+    filtro fraco por palavra aceitou de qualquer jeito -- um TR de 194
+    itens cobrindo produto variado tem de sobra palavra genérica tipo
+    "capacidade"/"técnica" em contexto que não tem nada a ver com
+    habilitação. v23: quando o texto TEM paginação (a IA teve a chance de
+    citar e não citou), item sem citação verificável é descartado direto,
+    sem passar pelo filtro fraco -- esse só continua valendo como última
+    linha de defesa pra texto SEM paginação nenhuma (ver teste acima)."""
+    texto_pdf = (
+        "[pág. 1]\nObjeto: aquisição de materiais de expediente, especificação "
+        "técnica detalhada de cada item conforme capacidade de uso contínuo, "
+        "para atender as secretarias municipais de forma contínua e regular.\n"
+        "[pág. 2]\nRegras de entrega e condições de pagamento do contrato "
+        "administrativo, prazo de 10 dias úteis após a ordem de fornecimento, "
+        "entrega parcelada conforme necessidade da Administração Pública.\n"
+    )
+    resultado = _analisar_com_resposta("""{
+        "documentos_habilitacao": {
+            "tecnica": [{"item": "Atestado de capacidade técnica", "citacao": ""}],
+            "economico_financeira": [{"item": "Balanço patrimonial e demonstrações contábeis", "citacao": ""}],
+            "declaracoes": []
+        }
+    }""", texto_pdf=texto_pdf)
+    doc = resultado["documentos_habilitacao"]
+    assert doc["tecnica"] == []
+    assert doc["economico_financeira"] == []
