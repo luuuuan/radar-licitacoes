@@ -165,7 +165,31 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # _texto_pronto_cache -- que só invalida pelo (texto_analise_ia_versao ==
 # VERSAO_PROMPT) -- nunca chegando a ativar o modo por partes (que exige
 # len(texto) > MAX_TOTAL) pra quem já tinha sido analisado uma vez.
-VERSAO_PROMPT = 20
+# v21 = achado real (usuário reportou, edital 396/2026 - Pregão UFSC
+# 396/2026, material de expediente): a lista de "documentos exigidos para
+# habilitação" trazia itens que não existem em NENHUM lugar do edital/termo
+# de referência/estudo técnico preliminar (conferido por grep no texto
+# completo do PDF: zero ocorrências de "INSS" e de "alvará") -- 4 variações
+# de "regularidade com o INSS" e 2 de "alvará de funcionamento", todas
+# marcadas "não atende" na verificação por documentos, inventadas do zero
+# pela IA com base em "o que toda licitação costuma exigir", apesar da
+# instrução "não invente nada que não esteja no texto". A defesa que já
+# existia (_filtrar_exigencias_inventadas, filtro por palavra-chave) só
+# protege a etapa de VERIFICAR os documentos do usuário contra a lista já
+# extraída -- nunca protegeu a EXTRAÇÃO original (documentos_habilitacao)
+# em si, que é onde a invenção realmente nasce. Testado contra o texto real
+# deste edital: o próprio filtro por palavra-chave, se aplicado aqui, não
+# pegaria nenhum dos dois casos (documento de 60 páginas cobrindo vários
+# assuntos -- "regularidade", "social", "nacional", "funcionamento"
+# aparecem em contextos não relacionados, dando falso positivo de "tem
+# base"). As 4 categorias juridica/fiscal_trabalhista/tecnica/
+# economico_financeira passam a exigir uma citação de página por item
+# (_L_ITEM_CITADO), no mesmo padrão que "declaracoes" já usa com sucesso
+# (nenhuma invenção observada nessa categoria neste mesmo edital, onde
+# toda declaração veio com citação de item/página corretas) -- item sem
+# citação é descartado (ver itens_citados() em _analisar_texto_unico),
+# exigir prova de origem em vez de confiar só na prosa do prompt.
+VERSAO_PROMPT = 21
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -222,11 +246,13 @@ Analise o EDITAL abaixo e responda APENAS com um JSON válido (sem texto fora do
 
 - "objeto": string. Resumo claro do que está sendo contratado, em 1 a 2 frases.
 
-- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Cada exigência entra em UMA ÚNICA categoria — mesmo quando o edital diz que um cadastro (ex.: Sicaf) substitui documentação de VÁRIAS categorias ao mesmo tempo (jurídica, fiscal, econômico-financeira), liste-o UMA VEZ SÓ, na categoria mais natural pra ele; nunca repita a mesma exigência em duas categorias diferentes. Cada chave recebe uma lista vazia [] (nunca false, nunca a chave ausente) se essa categoria não constar:
-  - "juridica": array de strings. Habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
-  - "fiscal_trabalhista": array de strings. Regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
-  - "tecnica": array de strings. Qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
-  - "economico_financeira": array de strings. Qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
+- "documentos_habilitacao": objeto com estas 5 chaves, cada uma um array. Liste CADA documento/certidão INDIVIDUALMENTE e por extenso, como aparece no edital — não resuma vários documentos numa frase só nem agrupe categorias diferentes no mesmo item. Cada exigência entra em UMA ÚNICA categoria — mesmo quando o edital diz que um cadastro (ex.: Sicaf) substitui documentação de VÁRIAS categorias ao mesmo tempo (jurídica, fiscal, econômico-financeira), liste-o UMA VEZ SÓ, na categoria mais natural pra ele; nunca repita a mesma exigência em duas categorias diferentes. Cada chave recebe uma lista vazia [] (nunca false, nunca a chave ausente) se essa categoria não constar.
+
+  REGRA CRÍTICA pras 4 categorias abaixo (juridica/fiscal_trabalhista/tecnica/economico_financeira): cada item é um OBJETO, não uma string solta — {{"item": "<nome do documento, como aparece no edital>", "citacao": "<onde ESSE documento específico é exigido>"}}. Preencha "citacao" com o MESMO padrão do "detalhe" de declaracoes abaixo: documento (pelo cabeçalho "=== DOCUMENTO: ... ===") e página (pelo marcador "[pág. N]" mais próximo). SE VOCÊ NÃO CONSEGUIR apontar documento+página onde ESSE item específico é exigido, NÃO INCLUA o item na lista — mesmo que seja um documento comum/típico de licitação pública (ex.: alvará de funcionamento, CND do INSS, atestado de capacidade técnica), mesmo que pareça óbvio que esse tipo de contratação exigiria algo assim, mesmo que o NOME do documento apareça em outro trecho do texto num contexto que não é exigência de habilitação (ex.: uma cláusula genérica sobre documentos de filial/sucursal não é, por si só, uma exigência de atestado de capacidade técnica pra este edital). "Toda licitação costuma exigir isso" NUNCA é motivo válido pra incluir um item sem citação — só o texto DESTE edital específico decide o que ele exige.
+  - "juridica": array de objetos (ver regra acima). Habilitação jurídica (ex.: ato constitutivo/contrato social e alterações, procuração do representante legal, registro comercial).
+  - "fiscal_trabalhista": array de objetos (ver regra acima). Regularidade fiscal e trabalhista (ex.: CND Receita Federal/PGFN, CRF do FGTS, CNDT, certidão negativa estadual, certidão negativa municipal, alvará de funcionamento).
+  - "tecnica": array de objetos (ver regra acima). Qualificação técnica (ex.: atestado de capacidade técnica, registro em conselho de classe, comprovação de quantitativo mínimo já fornecido).
+  - "economico_financeira": array de objetos (ver regra acima). Qualificação econômico-financeira (ex.: balanço patrimonial, certidão negativa de falência/recuperação judicial, capital social mínimo, índices contábeis exigidos).
   - "declaracoes": array de OBJETOS (não strings), um para CADA declaração exigida (ex.: declaração de ME/EPP, de não emprego de menor, de idoneidade/inexistência de fato impeditivo, de elaboração independente de proposta). Se não houver nenhuma declaração, use lista vazia []. Cada objeto:
     - "nome": string. A declaração, como aparece no edital.
     - "modelo_orgao": boolean ou null. true se o EDITAL/ÓRGÃO fornece um modelo/anexo PRONTO pra essa declaração (a empresa só preenche e assina — geralmente citado como "conforme Anexo X", "modelo constante do Anexo"). false SOMENTE se o edital afirmar explicitamente que a declaração segue texto livre/próprio da empresa. Os anexos com os modelos costumam vir no final do edital ou em arquivo separado, fora do texto disponível — se o texto não menciona anexo pra essa declaração (em vez de negar explicitamente que exista um), use null, não false: ausência de menção não é o mesmo que confirmação de que não há modelo.
@@ -289,6 +315,25 @@ TEXTO DO EDITAL (pode estar truncado):
 _S = {"type": "STRING"}
 _L_S = {"type": "ARRAY", "items": _S}
 _B = {"type": "BOOLEAN"}
+# Achado real (edital 396/2026, UFSC): com "juridica"/"fiscal_trabalhista"/
+# "tecnica"/"economico_financeira" como array de STRING solta, a IA listava
+# documento que não existe NO TEXTO NENHUM (INSS, alvará de funcionamento,
+# atestado de capacidade técnica com quantitativo inventado) -- "não invente
+# nada que não esteja no texto" na prosa do prompt não bastou (mesma lição já
+# aprendida com _filtrar_exigencias_inventadas, que só protege a etapa de
+# verificar_documentos_usuario, não esta extração original). Forçar uma
+# citação de página POR ITEM, igual ao "detalhe" que declaracoes já usa com
+# sucesso (zero invenção observada nessa categoria), e descartar (ver
+# itens_citados() em _analisar_texto_unico) qualquer item sem citação em vez
+# de confiar só na instrução.
+_L_ITEM_CITADO = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {"item": _S, "citacao": _S},
+        "required": ["item", "citacao"],
+    },
+}
 
 # Schema (formato Gemini, subset de OpenAPI) espelhando _PROMPT -- força tipo,
 # obrigatoriedade de chave e os enums no decoder do próprio Gemini, em vez de
@@ -301,8 +346,8 @@ _RESPONSE_SCHEMA = {
         "documentos_habilitacao": {
             "type": "OBJECT",
             "properties": {
-                "juridica": _L_S, "fiscal_trabalhista": _L_S,
-                "tecnica": _L_S, "economico_financeira": _L_S,
+                "juridica": _L_ITEM_CITADO, "fiscal_trabalhista": _L_ITEM_CITADO,
+                "tecnica": _L_ITEM_CITADO, "economico_financeira": _L_ITEM_CITADO,
                 "declaracoes": {
                     "type": "ARRAY",
                     "items": {
@@ -1838,13 +1883,75 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
             return []
         return out
 
+    def itens_citados(x):
+        """Cada item das 4 categorias (juridica/fiscal_trabalhista/tecnica/
+        economico_financeira) agora vem com uma citação de página exigida
+        pelo prompt (ver _L_ITEM_CITADO) -- sem citação, descarta (achado
+        real, edital 396/2026 UFSC: a IA listava INSS/alvará/atestado de
+        capacidade técnica sem base alguma no texto, apesar da instrução
+        "não invente"; confiar só na prosa do prompt não bastou, igual já
+        tinha acontecido antes com _filtrar_exigencias_inventadas).
+
+        Mantém a ORDEM original da resposta da IA mesmo quando alguns itens
+        passam pelo caminho de tolerância abaixo (achado real, revisão de
+        debugger: separar em duas listas -- citados e sem-citação -- e
+        concatenar no fim reordenava a lista, empurrando pro final um item
+        que a IA tinha listado no meio; guarda o índice original em vez de
+        só a ordem de inserção).
+
+        LIMITE CONHECIDO (achado real, revisão de debugger, não resolvido
+        aqui): esta defesa é sólida só quando a chamada passa pelo Gemini
+        com response_schema (que FORÇA o formato {item, citacao}, caminho
+        padrão, permitir_groq=True). Quando o Gemini falha (5xx/429/404 --
+        ver memória do projeto: 503 frequente, editais grandes comuns) e
+        `_gerar()` cai no fallback Mistral/Groq (_chamar_mistral/
+        _chamar_groq), NENHUM dos dois manda response_schema -- dependem só
+        da prosa do prompt pra produzir {item, citacao}, então um item sem
+        citação nesse caminho cai no MESMO filtro por palavra que já se
+        provou incapaz de pegar o caso real que motivou esta correção
+        (edital de 60 páginas, multi-assunto, dá falso positivo de "tem
+        base" pra palavra genérica tipo "funcionamento"/"social"). Ou seja:
+        a invenção pode voltar a passar quando Mistral/Groq responde sem
+        citação -- o log abaixo ("mantido só por passar no filtro por
+        palavra") existe exatamente pra não escapar essa limitação."""
+        if not isinstance(x, list):
+            return []
+        aceitos: dict[int, str] = {}
+        pendentes: list[tuple[int, str]] = []
+        for i, item in enumerate(x):
+            if isinstance(item, dict):
+                nome = str(item.get("item") or "").strip()
+                citacao = str(item.get("citacao") or "").strip()
+                if nome and citacao:
+                    aceitos[i] = nome
+                elif nome:
+                    pendentes.append((i, nome))
+            elif isinstance(item, str) and item.strip():
+                # tolerância: a IA ignorou o schema e mandou string solta
+                # (formato antigo, ou fallback Mistral/Groq sem schema) --
+                # sem citação pra checar, cai no filtro por palavra (mais
+                # fraco, mas melhor que aceitar sem checagem nenhuma -- ver
+                # _filtrar_exigencias_inventadas e o LIMITE CONHECIDO acima).
+                pendentes.append((i, item.strip()))
+        if pendentes:
+            sobreviventes = {
+                it["exigido"] for it in _filtrar_exigencias_inventadas(
+                    [{"exigido": n} for _, n in pendentes], [texto])
+            }
+            for i, nome in pendentes:
+                if nome in sobreviventes:
+                    log.warning("analisar(): item de habilitação sem citação de página, "
+                               "mantido só por passar no filtro por palavra: %r", nome)
+                    aceitos[i] = nome
+        return [aceitos[i] for i in sorted(aceitos)]
+
     def documentos_habilitacao(x):
         x = x if isinstance(x, dict) else {}
         return {
-            "juridica": lista(x.get("juridica")),
-            "fiscal_trabalhista": lista(x.get("fiscal_trabalhista")),
-            "tecnica": lista(x.get("tecnica")),
-            "economico_financeira": lista(x.get("economico_financeira")),
+            "juridica": itens_citados(x.get("juridica")),
+            "fiscal_trabalhista": itens_citados(x.get("fiscal_trabalhista")),
+            "tecnica": itens_citados(x.get("tecnica")),
+            "economico_financeira": itens_citados(x.get("economico_financeira")),
             "declaracoes": declaracoes(x.get("declaracoes")),
         }
 

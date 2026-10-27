@@ -20,9 +20,10 @@ def _resposta_gemini(json_texto: str):
     return r
 
 
-def _analisar_com_resposta(json_texto: str) -> dict:
+def _analisar_com_resposta(json_texto: str, texto_pdf: str | None = None) -> dict:
     arquivos = [{"titulo": "Edital", "tipo": "pdf", "url": "http://x/edital.pdf"}]
-    texto_pdf = "x" * 400  # >300 chars, senão analisar() desiste antes de chamar a IA
+    # >300 chars, senão analisar() desiste antes de chamar a IA
+    texto_pdf = texto_pdf if texto_pdf is not None else "x" * 400
     with patch("app.analise_edital._baixar_texto_pdf", return_value=(texto_pdf, False)), \
          patch("app.analise_edital.requests.post", return_value=_resposta_gemini(json_texto)):
         return analisar("Objeto de teste", arquivos, api_key="fake-key")
@@ -68,10 +69,14 @@ def test_declaracao_sem_nome_e_descartada():
 
 
 def test_outras_categorias_de_documentos_continuam_lista_de_strings():
+    """O formato que a IA manda pra estas 4 categorias mudou (agora exige
+    "citacao" de página por item, ver VERSAO_PROMPT v21/_L_ITEM_CITADO) --
+    mas o formato de SAÍDA continua lista de strings simples (ao contrário
+    de "declaracoes", que é lista de objetos)."""
     resultado = _analisar_com_resposta("""{
         "documentos_habilitacao": {
-            "juridica": ["Contrato social"],
-            "fiscal_trabalhista": ["CND Federal"],
+            "juridica": [{"item": "Contrato social", "citacao": "Edital, pág. 3"}],
+            "fiscal_trabalhista": [{"item": "CND Federal", "citacao": "Edital, pág. 4"}],
             "declaracoes": []
         }
     }""")
@@ -79,3 +84,39 @@ def test_outras_categorias_de_documentos_continuam_lista_de_strings():
     assert doc["juridica"] == ["Contrato social"]
     assert doc["fiscal_trabalhista"] == ["CND Federal"]
     assert doc["declaracoes"] == []
+
+
+def test_categoria_sem_citacao_e_descartada_quando_sem_base_no_texto():
+    """Achado real (edital 396/2026, UFSC): a IA listava documento que não
+    existe no texto nenhum (INSS, alvará), sem citação alguma -- sem
+    citação E sem nenhuma palavra em comum com o texto mandado, o item
+    tem que ser descartado (ver itens_citados() em _analisar_texto_unico)."""
+    resultado = _analisar_com_resposta("""{
+        "documentos_habilitacao": {
+            "juridica": [{"item": "Certidão Negativa do INSS", "citacao": ""}],
+            "declaracoes": []
+        }
+    }""")
+    assert resultado["documentos_habilitacao"]["juridica"] == []
+
+
+def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
+    """Achado real (revisão de debugger): itens com citação e itens sem
+    citação (mas que sobrevivem ao filtro por palavra) eram juntados em
+    DUAS listas separadas e concatenados no fim -- um item sem citação no
+    MEIO da resposta da IA acabava empurrado pro final da lista exibida.
+    itens_citados() agora preserva o índice original."""
+    texto_pdf = "Procuração do representante legal consta no Anexo II. " * 10
+    resultado = _analisar_com_resposta("""{
+        "documentos_habilitacao": {
+            "juridica": [
+                {"item": "Contrato social", "citacao": "Edital, pág. 2"},
+                {"item": "Procuração do representante legal", "citacao": ""},
+                {"item": "Registro comercial", "citacao": "Edital, pág. 3"}
+            ],
+            "declaracoes": []
+        }
+    }""", texto_pdf=texto_pdf)
+    assert resultado["documentos_habilitacao"]["juridica"] == [
+        "Contrato social", "Procuração do representante legal", "Registro comercial",
+    ]
