@@ -72,18 +72,62 @@ def test_outras_categorias_de_documentos_continuam_lista_de_strings():
     """O formato que a IA manda pra estas 4 categorias mudou (agora exige
     "citacao" de página por item, ver VERSAO_PROMPT v21/_L_ITEM_CITADO) --
     mas o formato de SAÍDA continua lista de strings simples (ao contrário
-    de "declaracoes", que é lista de objetos)."""
+    de "declaracoes", que é lista de objetos). A citação precisa apontar
+    pra uma página que REALMENTE fala do item (v22, ver
+    _citacao_confere_com_texto) -- texto_pdf tem marcador de página com
+    conteúdo batendo com cada citação."""
+    texto_pdf = (
+        "[pág. 1]\nTexto de abertura do edital, preenchendo espaço só pra passar do "
+        "limite mínimo de caracteres que analisar() exige antes de chamar a IA.\n"
+        "[pág. 2]\nCondições gerais da disputa, modo aberto, critério de julgamento "
+        "menor preço, sessão pública realizada por meio eletrônico.\n"
+        "[pág. 3]\nO licitante deve apresentar Contrato social atualizado e suas "
+        "alterações, devidamente registrado no órgão competente.\n"
+        "[pág. 4]\nApresentar CND Federal de regularidade fiscal perante a Receita "
+        "Federal e a Procuradoria-Geral da Fazenda Nacional.\n"
+    )
     resultado = _analisar_com_resposta("""{
         "documentos_habilitacao": {
             "juridica": [{"item": "Contrato social", "citacao": "Edital, pág. 3"}],
             "fiscal_trabalhista": [{"item": "CND Federal", "citacao": "Edital, pág. 4"}],
             "declaracoes": []
         }
-    }""")
+    }""", texto_pdf=texto_pdf)
     doc = resultado["documentos_habilitacao"]
     assert doc["juridica"] == ["Contrato social"]
     assert doc["fiscal_trabalhista"] == ["CND Federal"]
     assert doc["declaracoes"] == []
+
+
+def test_citacao_de_pagina_real_mas_sem_relacao_com_item_e_descartada():
+    """Achado real (edital 170354, PE 043/2026 Piraí do Sul, já em
+    VERSAO_PROMPT 21): a IA inventou "Atestado de capacidade técnica" e
+    "Balanço patrimonial" (nenhum exigido pelo edital) JUNTO com uma
+    citação de página plausível -- v21 só exigia que a citação não fosse
+    vazia, nunca checava se a página citada tinha qualquer relação com o
+    item, então a citação fabricada passava sem checagem. v22 confronta a
+    citação contra o CONTEÚDO real da página (_citacao_confere_com_texto):
+    página 2 existe, mas fala só de entrega/pagamento -- sem nenhuma
+    palavra em comum com "atestado"/"capacidade"/"técnica" ou "balanço"/
+    "patrimonial", os dois itens são descartados."""
+    texto_pdf = (
+        "[pág. 1]\nObjeto: aquisição de materiais de expediente para as secretarias "
+        "municipais, conforme especificações detalhadas no Anexo I deste edital de "
+        "registro de preços, modalidade pregão eletrônico.\n"
+        "[pág. 2]\nRegras de entrega e condições de pagamento do contrato "
+        "administrativo, prazo de 10 dias úteis após a ordem de fornecimento, "
+        "entrega parcelada conforme necessidade da Administração.\n"
+    )
+    resultado = _analisar_com_resposta("""{
+        "documentos_habilitacao": {
+            "tecnica": [{"item": "Atestado de capacidade técnica", "citacao": "Edital, pág. 2"}],
+            "economico_financeira": [{"item": "Balanço patrimonial", "citacao": "Edital, pág. 2"}],
+            "declaracoes": []
+        }
+    }""", texto_pdf=texto_pdf)
+    doc = resultado["documentos_habilitacao"]
+    assert doc["tecnica"] == []
+    assert doc["economico_financeira"] == []
 
 
 def test_categoria_sem_citacao_e_descartada_quando_sem_base_no_texto():
@@ -105,8 +149,18 @@ def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
     citação (mas que sobrevivem ao filtro por palavra) eram juntados em
     DUAS listas separadas e concatenados no fim -- um item sem citação no
     MEIO da resposta da IA acabava empurrado pro final da lista exibida.
-    itens_citados() agora preserva o índice original."""
-    texto_pdf = "Procuração do representante legal consta no Anexo II. " * 10
+    itens_citados() agora preserva o índice original. Os dois itens COM
+    citação precisam de página real com conteúdo batendo (v22, ver
+    _citacao_confere_com_texto) -- o do MEIO, sem citação, continua
+    dependendo só do filtro fraco por palavra no texto inteiro."""
+    texto_pdf = (
+        "[pág. 1]\nAbertura do edital, texto administrativo de preenchimento só pra "
+        "passar do limite mínimo de caracteres que analisar() exige.\n"
+        "[pág. 2]\nO licitante deve apresentar Contrato social atualizado e suas "
+        "respectivas alterações contratuais registradas em órgão competente.\n"
+        "[pág. 3]\nApresentar Registro comercial da empresa perante a junta comercial. "
+        "Procuração do representante legal consta no Anexo II, se houver.\n"
+    )
     resultado = _analisar_com_resposta("""{
         "documentos_habilitacao": {
             "juridica": [

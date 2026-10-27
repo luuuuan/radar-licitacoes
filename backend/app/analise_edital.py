@@ -27,6 +27,7 @@ import tempfile
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from datetime import date
 
 import requests
@@ -189,7 +190,16 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # toda declaração veio com citação de item/página corretas) -- item sem
 # citação é descartado (ver itens_citados() em _analisar_texto_unico),
 # exigir prova de origem em vez de confiar só na prosa do prompt.
-VERSAO_PROMPT = 21
+#
+# v22 = achado real (edital 170354, PE 043/2026 Piraí do Sul): v21 só
+# exigia QUE EXISTISSE uma citação, nunca checava se a página citada tinha
+# qualquer relação com o item -- a IA inventou documento (atestado/
+# declaração de capacidade técnica, balanço patrimonial, INSS avulso)
+# JUNTO com uma citação de página plausível, que passava sem checagem
+# nenhuma. itens_citados() agora confronta a citação contra o CONTEÚDO da
+# página citada (ver _citacao_confere_com_texto) -- muda o resultado pra
+# quem já tinha analisado esse edital com v21, precisa reprocessar.
+VERSAO_PROMPT = 22
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1421,6 +1431,196 @@ def _palavras_significativas(texto: str) -> set[str]:
     return {p for p in re.findall(r"[a-z]+", _sem_acento(texto or "").lower()) if len(p) >= 5}
 
 
+# Achado real (usuário reportou, edital 170354 - PE 043/2026 Piraí do Sul,
+# TR de 194 itens + Edital + Anexos III/IV + Minuta de ATA, bem acima de
+# MAX_TOTAL -- analisado em 11 partes, ver _analisar_por_partes): mesmo já
+# em VERSAO_PROMPT 21 (citação de página obrigatória, ver _L_ITEM_CITADO),
+# a IA listou em "tecnica"/"economico_financeira"/"fiscal_trabalhista"
+# documento que o edital inteiro não exige (atestado de capacidade técnica,
+# declaração de capacidade técnica, balanço patrimonial, comprovante de
+# INSS avulso) -- com `versao: 21` confirmado na resposta real (puxada da
+# produção via GET /api/editais/170354/analise), ou seja, a defesa de v21
+# RODOU e não pegou. O motivo: itens_citados() (abaixo) só exige que
+# "citacao" não seja vazia -- nunca checa se a página que a IA CITOU tem
+# alguma relação com o item. A IA pode inventar o documento E inventar uma
+# citação plausível (nome de arquivo + nº de página) pro mesmo preço de
+# inventar só o documento -- "exigir uma citação" não é o mesmo que
+# "verificar a citação", e só a 2ª fecha o buraco de verdade. Isso vale
+# pros 3 caminhos (Gemini com schema, Mistral, Groq): os marcadores
+# "[pág. N]" são posicionados no TEXTO DE ENTRADA (ver _baixar_texto_pdf,
+# marcar_paginas=True), não na saída da IA -- checar contra eles funciona
+# igual nos 3, ao contrário do filtro por palavra-chave no texto INTEIRO
+# (ponto fraco já documentado: em documento grande e multi-assunto, dá
+# falso positivo pra palavra genérica).
+#
+# LIMITE CONHECIDO, não resolvido aqui (achado real, revisão de
+# architect-reviewer): esta checagem assume que "o trecho entre [pág. N] e
+# o próximo marcador é de fato a página N" -- verdade no caminho rápido
+# (texto contíguo) e no modo por partes (dividir_em_partes corta SEMPRE em
+# fronteira de página), mas falsa nos caminhos de recorte mais raros
+# (_selecionar_trechos_relevantes_analise, que concatena trechos NÃO
+# adjacentes por similaridade, e o fallback de `pedacos` por corte cego de
+# MAX_TOTAL chars) -- usados só quando o edital é grande demais até pro
+# modo por partes (_MAX_PARTES_ANALISE) ou _ANALISE_POR_PARTES está
+# desligado. Nesses caminhos raros, um "False" pode descartar documento
+# real (página cortada no meio) -- risco aceito por ora: são os mesmos
+# caminhos que já sinalizam "confianca_baixa"/"analise_incompleta" pro
+# usuário por outros motivos, e resolver direito exigiria persistir se o
+# texto é contíguo no cache de texto_pronto (fora do escopo desta correção).
+_RE_MARCADOR_PAGINA = re.compile(r"\[pág\. (\d+)\]")
+_RE_DOC_HEADER = re.compile(r"=== DOCUMENTO: (.+?) ===")
+
+# Achado real (revisão desta correção, debugger): o regex antigo só
+# reconhecia "pág."/"pag" abreviado e só o 1º número -- perdia "página"/
+# "páginas"/"págs." por extenso (comum no fallback Mistral/Groq, que
+# responde só por prosa livre, sem o exemplo abreviado do prompt pra
+# copiar) e citação de mais de uma página/intervalo na mesma string (ex.:
+# "págs. 3 e 45", "pág. 12 a 15") -- nesse 2º caso, só olhar o 1º número
+# pode REJEITAR item legítimo quando a exigência está numa página do meio
+# do intervalo, não na borda. Agora extrai TODOS os números encontrados
+# depois de qualquer palavra tipo "pág"/"pags"/"página"/"páginas", aceita
+# se QUALQUER um dos números citados bater com a página.
+_RE_PAGINAS_CITADAS = re.compile(
+    r"p[áa]g(?:in[ae]s?)?s?\.?\s*(\d+(?:\s*(?:,|e|a|-)\s*\d+)*)", re.IGNORECASE,
+)
+
+# Siglas de documento (CRF, CNDT, CND, SICAF -- os PRÓPRIOS exemplos do
+# prompt pra "fiscal_trabalhista", ver _PROMPT acima) têm 2 a 6 letras
+# MAIÚSCULAS -- abaixo do piso de 5+ letras de _palavras_significativas,
+# que por isso devolve conjunto vazio pra esses nomes (achado real,
+# revisão desta correção, debugger E error-detective, independentemente):
+# sem nenhuma palavra pra comparar, _citacao_confere_com_texto nunca
+# conseguia confirmar NEM refutar um item só-sigla -- zero proteção nova
+# exatamente pro tipo de nome mais comum em habilitação fiscal.
+_RE_SIGLA = re.compile(r"\b[A-ZÀ-Ý]{2,6}\b")
+
+
+def _palavras_significativas_ou_sigla(texto: str) -> set[str]:
+    """_palavras_significativas (5+ letras) + siglas (2-6 letras TODAS
+    MAIÚSCULAS no texto original, ex.: CRF, CNDT, SICAF) -- usada só na
+    validação de citação (_citacao_confere_com_texto), não em
+    verificar_documentos_usuario/_filtrar_exigencias_inventadas, que
+    continuam com o critério antigo (ver comentário acima de _RE_SIGLA)."""
+    return _palavras_significativas(texto) | {s.lower() for s in _RE_SIGLA.findall(texto or "")}
+
+
+def _paginas_citadas(citacao: str) -> list[int]:
+    """Todos os números de página mencionados em `citacao` (ver
+    _RE_PAGINAS_CITADAS acima pro porquê de aceitar mais de um)."""
+    paginas = []
+    for m in _RE_PAGINAS_CITADAS.finditer(citacao):
+        paginas.extend(int(n) for n in re.findall(r"\d+", m.group(1)))
+    return paginas
+
+
+def _blocos_por_documento(texto: str) -> list[tuple[str, str]]:
+    """[(titulo, bloco)] -- um por cabeçalho "=== DOCUMENTO: ... ===" (ver o
+    f-string que monta esse cabeçalho em analisar(), mesmo padrão consumido
+    por analise_partes._RE_DOC). Sem cabeçalho nenhum no texto (um único
+    documento sem esse prefixo -- caso comum em teste), devolve o texto
+    inteiro como bloco único, título ""."""
+    cabecalhos = list(_RE_DOC_HEADER.finditer(texto))
+    if not cabecalhos:
+        return [("", texto)]
+    blocos = []
+    for i, m in enumerate(cabecalhos):
+        fim = cabecalhos[i + 1].start() if i + 1 < len(cabecalhos) else len(texto)
+        blocos.append((m.group(1).strip(), texto[m.start():fim]))
+    return blocos
+
+
+@lru_cache(maxsize=8)
+def _trechos_por_pagina(texto: str) -> dict[int, list[str]]:
+    """Mapa Nº de página -> trecho(s) de TODOS os documentos combinados em
+    `texto` (um finditer só, não um por item -- achado real, revisão de
+    performance-engineer: sem isso, cada item citando a mesma página
+    reescaneia e renormaliza o texto inteiro do zero; num trecho sem
+    marcador nenhum -- .docx/.odt --, o "trecho" vira o texto inteiro e o
+    custo por item sobe ~10x). `lru_cache`: `itens_citados()` roda as 4
+    categorias sobre o MESMO objeto `texto` (closure de _analisar_texto_
+    unico) -- cache por identidade de string, hit garantido entre
+    categorias; maxsize=8 cobre o paralelismo de _analisar_por_partes
+    (3 textos diferentes ao mesmo tempo) com folga."""
+    marcadores = list(_RE_MARCADOR_PAGINA.finditer(texto))
+    out: dict[int, list[str]] = {}
+    for i, m in enumerate(marcadores):
+        fim = marcadores[i + 1].start() if i + 1 < len(marcadores) else len(texto)
+        out.setdefault(int(m.group(1)), []).append(texto[m.start():fim])
+    return out
+
+
+_palavras_de_trecho = lru_cache(maxsize=512)(_palavras_significativas_ou_sigla)
+
+
+def _trechos_da_pagina(texto: str, pagina: int, citacao: str = "") -> tuple[list[str], bool]:
+    """Trecho(s) de `texto` entre o marcador "[pág. N]" (N == `pagina`) e o
+    próximo marcador de página. Quando `citacao` nomeia um documento que
+    bate (palavra significativa em comum) com algum cabeçalho
+    "=== DOCUMENTO: ... ===" presente em `texto`, restringe a busca ao
+    bloco DESSE documento -- achado real (revisão desta correção,
+    debugger, com reprodução concreta): sem essa restrição, uma citação
+    pra um documento SEM relação com o item "confere" só porque OUTRO
+    documento combinado no mesmo texto tem, por coincidência, a mesma
+    numeração de página E uma palavra em comum -- reabrindo o bug original
+    por uma porta lateral (o caso real que motivou esta correção já
+    combinava Edital + Termo de Referência técnico + Anexos no mesmo
+    texto). Sem nome de documento reconhecível na citação, mantém o
+    comportamento antigo (busca em TODOS os blocos) -- citação vaga-mas-
+    real sem nome de arquivo explícito não deve ser punida.
+
+    Devolve (trechos, achou_marcador_no_escopo_buscado) -- o 2º valor deixa
+    quem chama (_citacao_confere_com_texto) distinguir "a página citada não
+    existe nesse escopo, mas o texto TEM paginação" (mais forte: só esse
+    número específico não existe) de "este texto não tem marcador de
+    página nenhum" (sem base pra julgar nada -- .docx/.odt, ou página fora
+    desta parte)."""
+    blocos = _blocos_por_documento(texto)
+    if citacao:
+        palavras_citacao = _palavras_significativas(citacao)
+        escolhidos = [b for titulo, b in blocos
+                     if titulo and _palavras_significativas(titulo) & palavras_citacao]
+        if escolhidos:
+            blocos = [("", b) for b in escolhidos]
+    trechos: list[str] = []
+    achou_marcador = False
+    for _, bloco in blocos:
+        mapa = _trechos_por_pagina(bloco)
+        if mapa:
+            achou_marcador = True
+        trechos.extend(mapa.get(pagina, []))
+    return trechos, achou_marcador
+
+
+def _citacao_confere_com_texto(citacao: str, item: str, texto: str) -> bool | None:
+    """True/False quando dá pra checar a citação contra o conteúdo real da
+    página citada; None quando não dá pra julgar (sem número de página
+    reconhecível na citação, ou texto sem paginação nenhuma -- .docx/.odt,
+    PDF escaneado sem marcador, ou página fora desta parte). Quando o texto
+    TEM paginação mas a página citada não existe nela (nem no documento
+    nomeado, nem em nenhum outro) -- achado real, revisão desta correção,
+    debugger: citar um número que não existe em NADA do que a IA recebeu
+    nesta chamada é evidência de invenção tão forte quanto citar um número
+    que existe mas não sustenta o item -- devolve False, não None (ver
+    itens_citados: None cai no filtro fraco por palavra no texto inteiro,
+    False é descartado direto, sem segunda chance). Quem chama decide o
+    que fazer com None -- nunca tratado como "confere"."""
+    paginas = _paginas_citadas(citacao)
+    if not paginas:
+        return None
+    trechos: list[str] = []
+    achou_marcador = False
+    for pagina in paginas:
+        t, marcador = _trechos_da_pagina(texto, pagina, citacao)
+        trechos += t
+        achou_marcador = achou_marcador or marcador
+    if not trechos:
+        return False if achou_marcador else None
+    palavras_item = _palavras_significativas_ou_sigla(item)
+    if not palavras_item:
+        return None
+    return any(palavras_item & _palavras_de_trecho(t) for t in trechos)
+
+
 def _prioridade_arquivo(a: dict) -> int:
     """Prioriza retificação/errata/aditamento -- achado real (edital 127082):
     quando existe uma retificação alterando data/condições, o edital
@@ -1899,49 +2099,76 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
         que a IA tinha listado no meio; guarda o índice original em vez de
         só a ordem de inserção).
 
+        LIMITE QUE ESTA FUNÇÃO TINHA (achado real, edital 170354 -- PE
+        043/2026 Piraí do Sul, ver _citacao_confere_com_texto acima):
+        v21 exigia QUE EXISTISSE uma citação, mas nunca checava se a
+        página citada tinha qualquer relação com o item -- a IA inventou
+        "Atestado de capacidade técnica", "Declaração de capacidade
+        técnica", "Balanço patrimonial" e "Comprovante de regularidade
+        perante o INSS" (nenhum exigido pelo edital de verdade) JUNTO com
+        uma citação de página plausível, que passava sem checagem alguma.
+        Agora cada item com citação é confrontado contra o CONTEÚDO da
+        página citada (_citacao_confere_com_texto) -- página real sem
+        nenhuma palavra em comum com o item é descartado direto (prova
+        MAIS forte de invenção que a simples ausência de citação: a IA
+        apontou um lugar específico, e esse lugar não sustenta o item).
+        Só cai no filtro fraco por palavra no texto inteiro (tolerância
+        antiga, ver LIMITE CONHECIDO abaixo) quando a citação não dá pra
+        checar (sem nº de página reconhecível, ou página fora desta parte
+        -- documento sem marcador de página, ex.: .docx/.odt).
+
         LIMITE CONHECIDO (achado real, revisão de debugger, não resolvido
-        aqui): esta defesa é sólida só quando a chamada passa pelo Gemini
-        com response_schema (que FORÇA o formato {item, citacao}, caminho
-        padrão, permitir_groq=True). Quando o Gemini falha (5xx/429/404 --
-        ver memória do projeto: 503 frequente, editais grandes comuns) e
-        `_gerar()` cai no fallback Mistral/Groq (_chamar_mistral/
-        _chamar_groq), NENHUM dos dois manda response_schema -- dependem só
-        da prosa do prompt pra produzir {item, citacao}, então um item sem
-        citação nesse caminho cai no MESMO filtro por palavra que já se
-        provou incapaz de pegar o caso real que motivou esta correção
-        (edital de 60 páginas, multi-assunto, dá falso positivo de "tem
-        base" pra palavra genérica tipo "funcionamento"/"social"). Ou seja:
-        a invenção pode voltar a passar quando Mistral/Groq responde sem
-        citação -- o log abaixo ("mantido só por passar no filtro por
-        palavra") existe exatamente pra não escapar essa limitação."""
+        aqui): o filtro fraco por palavra no texto INTEIRO (usado só
+        quando a citação não dá pra checar contra uma página, ver acima)
+        continua tão fraco quanto antes -- documento grande e multi-
+        assunto dá falso positivo de "tem base" pra palavra genérica tipo
+        "funcionamento"/"social". Mistral/Groq (sem response_schema, ver
+        _gerar) tendem a cair nesse caminho mais que o Gemini com schema,
+        mas os marcadores de página vêm do TEXTO DE ENTRADA, não da
+        resposta da IA -- _citacao_confere_com_texto funciona igual nos
+        3 caminhos sempre que a IA manda ALGUM nº de página, mesmo sem
+        schema forçando o formato."""
         if not isinstance(x, list):
             return []
         aceitos: dict[int, str] = {}
-        pendentes: list[tuple[int, str]] = []
+        # guarda a citação original (quando houver) nos pendentes -- achado
+        # real (revisão de code-reviewer): descartar a citação aqui perde
+        # exatamente o dado que ajudaria a investigar um próximo caso real
+        # (foi inspecionando a citação de verdade que este bug foi achado).
+        pendentes: list[tuple[int, str, str]] = []
         for i, item in enumerate(x):
             if isinstance(item, dict):
                 nome = str(item.get("item") or "").strip()
                 citacao = str(item.get("citacao") or "").strip()
                 if nome and citacao:
-                    aceitos[i] = nome
+                    confere = _citacao_confere_com_texto(citacao, nome, texto)
+                    if confere is True:
+                        aceitos[i] = nome
+                    elif confere is False:
+                        log.warning("analisar(): item de habilitação com citação de página "
+                                   "que não confere com o conteúdo dessa página, descartado: "
+                                   "%r (citação: %r)", nome, citacao)
+                    else:   # None: não deu pra checar a página citada
+                        pendentes.append((i, nome, citacao))
                 elif nome:
-                    pendentes.append((i, nome))
+                    pendentes.append((i, nome, ""))
             elif isinstance(item, str) and item.strip():
                 # tolerância: a IA ignorou o schema e mandou string solta
                 # (formato antigo, ou fallback Mistral/Groq sem schema) --
                 # sem citação pra checar, cai no filtro por palavra (mais
                 # fraco, mas melhor que aceitar sem checagem nenhuma -- ver
                 # _filtrar_exigencias_inventadas e o LIMITE CONHECIDO acima).
-                pendentes.append((i, item.strip()))
+                pendentes.append((i, item.strip(), ""))
         if pendentes:
             sobreviventes = {
                 it["exigido"] for it in _filtrar_exigencias_inventadas(
-                    [{"exigido": n} for _, n in pendentes], [texto])
+                    [{"exigido": n} for _, n, _ in pendentes], [texto])
             }
-            for i, nome in pendentes:
+            for i, nome, citacao in pendentes:
                 if nome in sobreviventes:
-                    log.warning("analisar(): item de habilitação sem citação de página, "
-                               "mantido só por passar no filtro por palavra: %r", nome)
+                    log.warning("analisar(): item de habilitação sem citação de página "
+                               "verificável, mantido só por passar no filtro por palavra: "
+                               "%r (citação recebida: %r)", nome, citacao)
                     aceitos[i] = nome
         return [aceitos[i] for i in sorted(aceitos)]
 
