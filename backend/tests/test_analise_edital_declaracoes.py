@@ -179,21 +179,19 @@ def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
     ]
 
 
-def test_item_sem_citacao_verificavel_e_descartado_quando_texto_tem_paginacao():
+def test_item_sem_citacao_mas_com_palavra_em_comum_sobrevive_mesmo_com_paginacao():
     """Achado real (usuário conferiu a análise em produção IMEDIATAMENTE
     depois do deploy de v22, mesmo edital 170354 que motivou a correção
-    original): os itens inventados continuaram aparecendo -- a própria IA
-    deixou rastro num "ponto de atenção" de uma das 11 partes: "É
-    necessário comprovar capacidade técnica e econômico-financeira, apesar
-    de não haver menção explícita a documentos específicos neste trecho".
-    Ou seja: a IA não conseguiu citar (foi pro caminho `pendentes`), mas o
-    filtro fraco por palavra aceitou de qualquer jeito -- um TR de 194
-    itens cobrindo produto variado tem de sobra palavra genérica tipo
-    "capacidade"/"técnica" em contexto que não tem nada a ver com
-    habilitação. v23: quando o texto TEM paginação (a IA teve a chance de
-    citar e não citou), item sem citação verificável é descartado direto,
-    sem passar pelo filtro fraco -- esse só continua valendo como última
-    linha de defesa pra texto SEM paginação nenhuma (ver teste acima)."""
+    original): os itens inventados continuaram aparecendo via o filtro
+    fraco. v23 tentou descartar DIRETO (sem filtro fraco) qualquer item
+    sem citação verificável sempre que o texto tivesse paginação -- mas
+    isso também descartou documento REAL (a IA é tão inconsistente pra
+    citar item real quanto item inventado), então v24 reverteu: o filtro
+    fraco volta a valer como rede de segurança SEMPRE, com ou sem
+    paginação. Esta é a LIMITE CONHECIDO documentada (não resolvida):
+    item sem citação mas com palavra genérica em comum ainda sobrevive,
+    mesmo em texto paginado -- este teste trava esse comportamento
+    aceito de propósito, pra não ser revertido de novo sem querer."""
     texto_pdf = (
         "[pág. 1]\nObjeto: aquisição de materiais de expediente, especificação "
         "técnica detalhada de cada item conforme capacidade de uso contínuo, "
@@ -205,10 +203,7 @@ def test_item_sem_citacao_verificavel_e_descartado_quando_texto_tem_paginacao():
     resultado = _analisar_com_resposta("""{
         "documentos_habilitacao": {
             "tecnica": [{"item": "Atestado de capacidade técnica", "citacao": ""}],
-            "economico_financeira": [{"item": "Balanço patrimonial e demonstrações contábeis", "citacao": ""}],
             "declaracoes": []
         }
     }""", texto_pdf=texto_pdf)
-    doc = resultado["documentos_habilitacao"]
-    assert doc["tecnica"] == []
-    assert doc["economico_financeira"] == []
+    assert resultado["documentos_habilitacao"]["tecnica"] == ["Atestado de capacidade técnica"]

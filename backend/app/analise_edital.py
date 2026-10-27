@@ -209,15 +209,31 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # (caiu no caminho `pendentes`), mas o filtro fraco por palavra no texto
 # INTEIRO aceitou de qualquer jeito -- um TR de 194 itens cobrindo produto
 # variado tem de sobra palavra genérica tipo "capacidade"/"técnica" em
-# contexto sem nada a ver com habilitação. itens_citados() agora só usa
-# esse filtro fraco como ÚLTIMA linha de defesa pra texto SEM paginação
-# nenhuma (.docx/.odt, OCR sem marcador) -- quando o texto TEM paginação
-# (o caso comum, e o deste edital: as OUTRAS categorias da mesma análise
-# citam página corretamente), a IA teve a chance de citar e não citou, o
-# que já é evidência de invenção por si só -- descarta direto, sem
-# segunda chance, igual o próprio prompt já instrui ("SE VOCÊ NÃO
-# CONSEGUIR apontar documento+página... NÃO INCLUA o item").
-VERSAO_PROMPT = 23
+# contexto sem nada a ver com habilitação. Tentei fazer itens_citados()
+# descartar direto (sem passar pelo filtro fraco) qualquer item sem
+# citação verificável sempre que o texto tivesse paginação, assumindo que
+# "a IA teve a chance de citar e não citou" já era prova suficiente de
+# invenção.
+#
+# v24 = REVERTE v23 (achado real: o PRÓPRIO usuário conferiu de novo em
+# produção depois do deploy de v23, mesmo edital): a suposição de v23
+# estava errada -- a IA é tão inconsistente em preencher "citacao" pra
+# itens REAIS quanto pra itens inventados. v23 zerou "juridica" (era
+# CNPJ, contrato social, procuração...) e reduziu "fiscal_trabalhista" de
+# 8 pra 2 itens NESTE MESMO edital, removendo exigência que o edital
+# genuinamente tem (confirmado comparando com a leitura manual do
+# usuário) -- perder documento REAL é pior que mostrar um inventado a
+# mais. Volta ao filtro fraco como rede de segurança SEMPRE que a citação
+# não dá pra verificar, independente de paginação (comportamento de v22).
+# A proteção real desta correção inteira continua sendo
+# _citacao_confere_com_texto (citação QUE EXISTE confrontada contra a
+# página de verdade, ver v22 acima) -- "citação ausente num texto grande
+# e multi-assunto" continua sendo LIMITE CONHECIDO, não resolvido (ver
+# itens_citados()): tunar o filtro fraco (ex.: exigir 2+ palavras em
+# comum) foi considerado e descartado por falta de visibilidade do texto
+# real desse edital pra validar a mudança sem arriscar um 3º ciclo de
+# regressão não verificada contra produção.
+VERSAO_PROMPT = 24
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -2186,21 +2202,36 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
         # comprovar capacidade técnica e econômico-financeira, apesar de
         # não haver menção explícita a documentos específicos neste
         # trecho". Ou seja: a IA não conseguiu citar (foi pro caminho
-        # `pendentes`), mas o filtro fraco por palavra aceitou de qualquer
+        # `pendentes`), e o filtro fraco por palavra aceitou de qualquer
         # jeito -- um TR de 194 itens cobrindo produto variado tem de
-        # sobra palavra genérica tipo "capacidade"/"técnica"/"patrimonial"
-        # em contexto que não tem nada a ver com habilitação. O filtro
-        # fraco só devia ser a ÚLTIMA linha de defesa quando NENHUMA
-        # checagem por página é possível (texto sem paginação nenhuma --
-        # .docx/.odt, OCR) -- quando o texto TEM paginação (o caso comum, e
-        # o deste edital: as OUTRAS categorias desta mesma análise citam
-        # página corretamente), a IA teve a chance de citar e não citou --
-        # isso já é evidência suficiente de invenção, do mesmo jeito que
-        # citação apontando pra página sem relação (ver
-        # _citacao_confere_com_texto) -- não entra no filtro fraco, é
-        # descartado direto, igual o próprio prompt já instrui ("SE VOCÊ
-        # NÃO CONSEGUIR apontar documento+página... NÃO INCLUA o item").
-        if pendentes and not _RE_MARCADOR_PAGINA.search(texto):
+        # sobra palavra genérica tipo "capacidade"/"técnica" em contexto
+        # sem nada a ver com habilitação.
+        #
+        # v23 (REVERTIDO em v24, achado real: o PRÓPRIO usuário conferiu
+        # de novo em produção depois do deploy): tentei descartar
+        # DIRETO, sem filtro fraco nenhum, qualquer item sem citação
+        # verificável sempre que o texto tivesse paginação (achando que a
+        # IA "teve a chance de citar e não citou" era prova suficiente de
+        # invenção). Na prática, a IA é tão inconsistente em preencher
+        # "citacao" pra itens REAIS quanto pra itens inventados -- v23
+        # zerou "juridica" (era CNPJ, contrato social, procuração...) e
+        # reduziu "fiscal_trabalhista" de 8 pra 2 itens NESTE MESMO
+        # edital, removendo exigência que o edital genuinamente tem
+        # (confirmado comparando com a leitura manual do usuário). Perder
+        # documento REAL é pior que mostrar um inventado a mais -- o
+        # usuário pode não preparar algo que precisa, em vez de só
+        # preparar algo a mais que não precisava. Volta a usar o filtro
+        # fraco como rede de segurança SEMPRE que a citação não dá pra
+        # verificar (independente de paginação) -- a proteção real desta
+        # correção continua sendo _citacao_confere_com_texto (citação QUE
+        # EXISTE sendo conferida contra a página de verdade); o caso de
+        # "citação ausente num texto grande e multi-assunto" continua
+        # sendo o LIMITE CONHECIDO já documentado (ver itens_citados()
+        # acima), não resolvido por enquanto -- heurística adicional
+        # aqui (ex.: exigir 2+ palavras em comum) foi considerada e
+        # descartada por falta de visibilidade do texto real pra validar
+        # sem arriscar um 3º ciclo de regressão não verificada.
+        if pendentes:
             sobreviventes = {
                 it["exigido"] for it in _filtrar_exigencias_inventadas(
                     [{"exigido": n} for _, n, _ in pendentes], [texto])
@@ -2208,16 +2239,9 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
             for i, nome, citacao in pendentes:
                 if nome in sobreviventes:
                     log.warning("analisar(): item de habilitação sem citação de página "
-                               "verificável (texto sem paginação, última linha de defesa), "
-                               "mantido só por passar no filtro por palavra: %r "
-                               "(citação recebida: %r)", nome, citacao)
+                               "verificável, mantido só por passar no filtro por palavra: "
+                               "%r (citação recebida: %r)", nome, citacao)
                     aceitos[i] = nome
-        elif pendentes:
-            for i, nome, citacao in pendentes:
-                log.warning("analisar(): item de habilitação sem citação de página "
-                           "verificável, descartado (texto tem paginação -- a IA teve a "
-                           "chance de citar e não citou): %r (citação recebida: %r)",
-                           nome, citacao)
         return [aceitos[i] for i in sorted(aceitos)]
 
     def documentos_habilitacao(x):
