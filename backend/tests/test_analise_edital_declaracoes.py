@@ -179,7 +179,7 @@ def test_itens_sem_citacao_que_sobrevivem_mantem_a_ordem_original():
     ]
 
 
-def test_item_sem_citacao_mas_com_palavra_em_comum_sobrevive_mesmo_com_paginacao():
+def test_item_sem_citacao_e_descartado_mesmo_com_uma_palavra_generica_em_comum():
     """Achado real (usuário conferiu a análise em produção IMEDIATAMENTE
     depois do deploy de v22, mesmo edital 170354 que motivou a correção
     original): os itens inventados continuaram aparecendo via o filtro
@@ -188,10 +188,17 @@ def test_item_sem_citacao_mas_com_palavra_em_comum_sobrevive_mesmo_com_paginacao
     isso também descartou documento REAL (a IA é tão inconsistente pra
     citar item real quanto item inventado), então v24 reverteu: o filtro
     fraco volta a valer como rede de segurança SEMPRE, com ou sem
-    paginação. Esta é a LIMITE CONHECIDO documentada (não resolvida):
-    item sem citação mas com palavra genérica em comum ainda sobrevive,
-    mesmo em texto paginado -- este teste trava esse comportamento
-    aceito de propósito, pra não ser revertido de novo sem querer."""
+    paginação -- só exigindo QUALQUER palavra em comum, o que era
+    documentado como LIMITE CONHECIDO (fraco demais pra texto grande).
+
+    v26: medido contra o texto real desse mesmo edital, um item
+    FABRICADO chega a ter 62-67% de overlap com o texto inteiro (qualquer
+    palavra de 5+ letras tem chance real de aparecer em algum lugar de um
+    documento de 330000+ chars), enquanto os itens REAIS continuam em
+    100%. _LIMIAR_RATIO_TEXTO_INTEIRO (75%) agora discrimina onde "1
+    palavra basta" não discriminava -- este item, com só "técnica"/
+    "capacidade" em comum (2 de 3 palavras = 67%, abaixo do limiar),
+    finalmente é descartado."""
     texto_pdf = (
         "[pág. 1]\nObjeto: aquisição de materiais de expediente, especificação "
         "técnica detalhada de cada item conforme capacidade de uso contínuo, "
@@ -206,4 +213,4 @@ def test_item_sem_citacao_mas_com_palavra_em_comum_sobrevive_mesmo_com_paginacao
             "declaracoes": []
         }
     }""", texto_pdf=texto_pdf)
-    assert resultado["documentos_habilitacao"]["tecnica"] == ["Atestado de capacidade técnica"]
+    assert resultado["documentos_habilitacao"]["tecnica"] == []

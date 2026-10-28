@@ -163,29 +163,28 @@ def test_citacao_confere_com_texto_item_sigla_curta_agora_e_verificavel():
 
 def test_citacao_confere_com_texto_ignora_palavra_do_objeto_do_contrato():
     """Achado real (usuário pediu pra resolver o "atestado técnico" que
-    sobrou no edital 170354 depois de v24): baixei os 4 documentos de
-    verdade do PNCP (Edital/TR/Anexos/ATA) e confirmei com grep -- ZERO
-    ocorrências de "atestado"/"capacidade técnica"/"capital social" em
-    qualquer um deles. O item inventado só "conferia" porque seu próprio
-    nome, escrito pela IA de forma verborrágica, ecoa o OBJETO do
-    contrato como enchimento de frase ("...para FORNECIMENTO DE
-    MATERIAIS DE EXPEDIENTE...") -- palavra onipresente em quase toda
-    página do edital. Passar `objeto` exclui essas palavras da
-    comparação -- o item não tem mais nenhuma palavra de verdade em
-    comum com uma página que só fala do objeto do contrato."""
-    item = ("Atestado de capacidade técnica para fornecimento de materiais de "
-            "expediente, comprovando experiência e quantitativo mínimo já fornecido")
-    objeto = ("Registro de Preços para aquisição de materiais de expediente "
-              "(papelaria, escritório, festas e utilidades) para as Secretarias "
-              "Municipais de Piraí do Sul")
-    texto = ("[pág. 1]\nObjeto: aquisição de materiais de expediente, registro "
-            "de preços para as secretarias municipais.\n")
+    sobrou no edital 170354 depois de v24): o item inventado só
+    "conferia" porque seu próprio nome, escrito pela IA de forma
+    verborrágica, ecoa o OBJETO do contrato como enchimento de frase
+    ("...MATERIAIS DE EXPEDIENTE...") -- palavra onipresente em quase
+    toda página do edital.
 
-    # sem objeto (comportamento antigo): "materiais"/"expediente" batem por
-    # acaso com o objeto repetido na página -- falso positivo.
+    Exemplo calibrado pra isolar especificamente o efeito da exclusão de
+    objeto (em vez do limiar de proporção por si só, já cobert noutro
+    teste): item com 4 palavras significativas, 2 delas também no
+    objeto -- sem excluir o objeto, 2/4 = 50% bate exatamente no limiar
+    por página (_LIMIAR_RATIO_PAGINA) e passa; excluindo o objeto, sobram
+    só as 2 palavras que NÃO têm nada a ver com o objeto, e a página (que
+    só fala do objeto do contrato) não tem nenhuma delas -- 0%, descartado."""
+    objeto = "aquisição de materiais de expediente para secretarias"
+    item = "Comprovação de materiais e expediente padronizados"
+    texto = "[pág. 1]\nObjeto: aquisição de materiais de expediente para as secretarias municipais.\n"
+
+    # sem objeto: "materiais"/"expediente" (2 das 4 palavras do item) batem
+    # por acaso com o objeto repetido na página -- 50%, bate no limiar.
     assert _citacao_confere_com_texto("Edital, pág. 1", item, texto, "") is True
-    # com objeto: as palavras do objeto não contam mais como evidência --
-    # sobra só "atestado"/"capacidade"/"tecnica"/etc, que a página não tem.
+    # com objeto: essas 2 palavras saem da comparação -- só sobram
+    # "comprovação"/"padronizados", que a página (só sobre o objeto) não tem.
     assert _citacao_confere_com_texto("Edital, pág. 1", item, texto, objeto) is False
 
 

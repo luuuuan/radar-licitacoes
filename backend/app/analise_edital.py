@@ -253,7 +253,25 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # comprado -- item de habilitação real (CNPJ, contrato social, FGTS,
 # procuração...) nunca usa palavra do objeto no próprio nome, então não
 # tem custo pra eles.
-VERSAO_PROMPT = 25
+#
+# v26 = achado real (usuário conferiu de novo em produção depois do
+# deploy de v25, mesmo edital 170354): a exclusão de objeto não bastou --
+# o item inventado apareceu de novo numa rodada nova (variação normal
+# entre chamadas de IA), agora padronado com OUTRAS palavras genéricas do
+# domínio de licitação ("edital", "similares", "atividade", "serviços"),
+# não as palavras do objeto específico. Baixei o texto real de novo e
+# medi: mesmo citando a página CERTA (pág. 6, a lista real de
+# habilitação), "1 palavra em comum basta" ainda dava True pro item
+# inventado, porque essa mesma página também fala de "fornecimento" num
+# parágrafo totalmente diferente (exequibilidade de proposta). Medido
+# contra o texto real: o item inventado tem 23% de overlap com a página
+# citada (62-67% contra o texto inteiro); os 7 itens reais de habilitação
+# desse edital têm 100% nos dois casos -- margem enorme. Troca "1 palavra
+# basta" por um LIMIAR DE PROPORÇÃO (_LIMIAR_RATIO_PAGINA=0.5 na checagem
+# por página, _LIMIAR_RATIO_TEXTO_INTEIRO=0.75 no filtro fraco -- ver
+# _citacao_confere_com_texto e _filtrar_exigencias_inventadas) -- muda o
+# resultado pra quem já tinha analisado esse edital com v25.
+VERSAO_PROMPT = 26
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1645,6 +1663,32 @@ def _trechos_da_pagina(texto: str, pagina: int, citacao: str = "") -> tuple[list
     return trechos, achou_marcador
 
 
+# Limiares de proporção de palavras em comum (não "1 palavra basta") --
+# achado real (edital 170354, medido contra os 4 documentos de verdade do
+# PNCP): um item inventado ("Atestado de capacidade técnica...", 13
+# palavras significativas) tem 23% delas em comum com o conteúdo da
+# página CORRETAMENTE citada (pág. 6, a que tem a lista real de
+# habilitação) -- "1 palavra basta" aceitava isso só por "fornecimento"
+# aparecer num parágrafo totalmente diferente da mesma página. Os 7 itens
+# REAIS de habilitação desse mesmo edital (CNPJ, contrato social, FGTS
+# etc.) têm 100% de overlap com a página certa -- margem enorme entre
+# 23% e 100%, _LIMIAR_RATIO_PAGINA fica no meio dela.
+#
+# No filtro fraco (texto INTEIRO, não só a página citada -- usado quando
+# não há citação pra checar), a margem é menor: o mesmo item inventado
+# chega a 62%-67% de overlap contra o texto inteiro combinado (~330000
+# chars, qualquer palavra de 5+ letras tem chance real de aparecer em
+# algum lugar), enquanto os itens reais continuam em 100% (são cópia
+# quase literal do texto fonte). _LIMIAR_RATIO_TEXTO_INTEIRO mais alto
+# (75%) ainda deixa margem dos itens fabricados medidos (até 67%) pros
+# reais (100%), mas com menos folga que o limiar por página -- por isso o
+# LIMITE CONHECIDO documentado em itens_citados() continua valendo: o
+# filtro fraco é estruturalmente mais fraco que a checagem por página,
+# nunca vai ter a mesma confiança.
+_LIMIAR_RATIO_PAGINA = 0.5
+_LIMIAR_RATIO_TEXTO_INTEIRO = 0.75
+
+
 def _citacao_confere_com_texto(citacao: str, item: str, texto: str, objeto: str = "") -> bool | None:
     """True/False quando dá pra checar a citação contra o conteúdo real da
     página citada; None quando não dá pra julgar (sem número de página
@@ -1675,7 +1719,20 @@ def _citacao_confere_com_texto(citacao: str, item: str, texto: str, objeto: str 
     sobre o contrato", nunca "esta página exige ESTE documento" -- exclui
     da comparação. Item de habilitação real (CNPJ, contrato social, FGTS,
     procuração...) nunca usa palavra do objeto do contrato no próprio
-    nome, então essa exclusão não tem custo pra eles."""
+    nome, então essa exclusão não tem custo pra eles.
+
+    LIMIAR DE PROPORÇÃO, não "1 palavra basta" (achado real, usuário
+    pediu pra resolver o mesmo "atestado técnico" DEPOIS da exclusão de
+    objeto acima -- ela sozinha não bastou): baixei os 4 documentos de
+    verdade do PNCP e testei a citação CORRETA (pág. 6, onde está a lista
+    real de habilitação) pro item inventado -- mesmo citando a página
+    CERTA, "any 1 palavra em comum" ainda dava True, porque essa mesma
+    página também fala de "fornecimento" num parágrafo totalmente
+    diferente (exequibilidade de proposta). Medido contra o texto real
+    desse edital: o item inventado tem 23% das palavras em comum com o
+    conteúdo da página citada; os 7 itens REAIS de habilitação (CNPJ,
+    contrato social, FGTS etc.) têm 100% -- margem enorme. _LIMIAR_RATIO
+    (50%) fica bem no meio dessa margem."""
     paginas = _paginas_citadas(citacao)
     if not paginas:
         return None
@@ -1690,7 +1747,10 @@ def _citacao_confere_com_texto(citacao: str, item: str, texto: str, objeto: str 
     palavras_item = _palavras_significativas_ou_sigla(item) - _palavras_significativas(objeto)
     if not palavras_item:
         return None
-    return any(palavras_item & _palavras_de_trecho(t) for t in trechos)
+    palavras_pagina: set[str] = set()
+    for t in trechos:
+        palavras_pagina |= _palavras_de_trecho(t)
+    return len(palavras_item & palavras_pagina) / len(palavras_item) >= _LIMIAR_RATIO_PAGINA
 
 
 def _prioridade_arquivo(a: dict) -> int:
@@ -2281,7 +2341,8 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
         if pendentes:
             sobreviventes = {
                 it["exigido"] for it in _filtrar_exigencias_inventadas(
-                    [{"exigido": n} for _, n, _ in pendentes], [texto], objeto=objeto)
+                    [{"exigido": n} for _, n, _ in pendentes], [texto], objeto=objeto,
+                    limiar_ratio=_LIMIAR_RATIO_TEXTO_INTEIRO)
             }
             for i, nome, citacao in pendentes:
                 if nome in sobreviventes:
@@ -2857,7 +2918,7 @@ def _itens_declaracao(declaracoes: list | None) -> list[dict]:
 
 
 def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[str],
-                                   objeto: str = "") -> list[dict]:
+                                   objeto: str = "", limiar_ratio: float = 0.0) -> list[dict]:
     """Descarta itens de `itens` (já normalizados, com chave "exigido")
     sem NENHUMA palavra significativa (5+ letras) em comum com nenhuma
     linha de `linhas_requisitos` -- achado real (edital 159668): a IA
@@ -2877,6 +2938,21 @@ def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[st
     provar nada além de "este texto é sobre o contrato" -- item de
     habilitação real nunca usa palavra do objeto no próprio nome, então
     não tem custo pra eles.
+
+    `limiar_ratio`: achado real (mesmo edital, revisão depois da exclusão
+    de objeto acima não ter bastado por si só): testado contra o texto
+    real desse edital (330000+ chars, 4 documentos), um item FABRICADO
+    chega a ter 62-67% das próprias palavras em comum com o texto inteiro
+    (qualquer palavra de 5+ letras tem chance real de aparecer em algum
+    lugar desse tanto de texto) -- "1 palavra basta" (limiar_ratio=0.0,
+    que é só "a interseção não pode ser vazia") não discrimina mais nada
+    nessa escala. Os 7 itens REAIS de habilitação desse mesmo edital
+    continuam em 100% (são cópia quase literal do texto fonte). Mantido
+    0.0 por padrão (comportamento idêntico ao de sempre) pra não afetar o
+    OUTRO chamador desta função (verificar_documentos_usuario, que compara
+    contra uma lista curta já curada, não o texto inteiro do edital, onde
+    a calibração abaixo já valeu a pena manter) -- só itens_citados() (ver
+    _LIMIAR_RATIO_TEXTO_INTEIRO) passa um valor mais alto explicitamente.
 
     Achado real (calibração desta função, pedido do usuário): tentei trocar
     esse filtro por similaridade de embeddings (BGE-M3/DeepInfra) esperando
@@ -2902,9 +2978,16 @@ def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[st
     out = []
     for it in itens:
         palavras_exigido = _palavras_significativas(it["exigido"]) - palavras_objeto
-        if palavras_exigido and not (palavras_exigido & vocabulario):
+        if not palavras_exigido:
+            # sem palavra pra julgar (sigla curta, ou só palavra do
+            # objeto) -- não descarta por falta de prova, ver docstring.
+            out.append(it)
+            continue
+        ratio = len(palavras_exigido & vocabulario) / len(palavras_exigido)
+        if ratio <= limiar_ratio:
             log.warning("verificar_documentos_usuario(): IA devolveu exigência sem base "
-                       "no prompt, descartada: %r", it["exigido"])
+                       "no prompt, descartada (%.0f%% de overlap, limiar %.0f%%): %r",
+                       ratio * 100, limiar_ratio * 100, it["exigido"])
             continue
         out.append(it)
     return out
