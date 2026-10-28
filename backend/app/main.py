@@ -2918,6 +2918,24 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             if p_c:
                 sugestoes.append({"score": c.get("score"), "produto": _produto_json(p_c)})
 
+        # achado real (usuário reportou, edital 155858): "Valor unit.
+        # (venda)" preso no valor do órgão mesmo com o match já confirmado
+        # e um custo real disponível. preco_cotacao já tinha sido congelado
+        # (CotacaoPreco) ANTES do match ficar compatível, quando ainda não
+        # havia custo_comparavel nenhum pra comparar -- _preco_cotacao_por_
+        # numero agora evita congelar um placeholder NOVO assim, mas não
+        # tem como saber se um valor JÁ salvo é esse placeholder antigo ou
+        # uma escolha real do usuário. Mesmo sinal de lá: se o valor salvo
+        # é EXATAMENTE o valor do órgão e agora existe um custo_comparavel
+        # diferente, não é uma escolha de verdade -- cede lugar ao custo
+        # (o usuário sempre pode digitar de novo se quiser mesmo o valor do
+        # órgão, o campo nunca foi definitivo).
+        preco_cotacao_item = precos_cotacao.get(it.numero)
+        custo_comparavel = margem_dados["custo_comparavel"]
+        if (preco_cotacao_item is not None and preco_cotacao_item == it.valor_unitario
+                and custo_comparavel is not None and custo_comparavel != it.valor_unitario):
+            preco_cotacao_item = None
+
         itens.append({
             "numero": it.numero, "descricao": it.descricao,
             "valor_orgao": it.valor_unitario, "quantidade": it.quantidade,
@@ -2929,7 +2947,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             **margem_dados,
             "produto": _produto_json(prod) if (prod and compativel) else None,
             "sugestoes": sugestoes,
-            "preco_cotacao": precos_cotacao.get(it.numero),
+            "preco_cotacao": preco_cotacao_item,
             "sem_divisao_embalagem": sem_divisao_embalagem,
         })
     itens.sort(key=lambda x: x["compativel"], reverse=True)
@@ -4734,7 +4752,22 @@ def _preco_cotacao_por_numero(edital_id: int, user: Usuario, db: Session) -> dic
     pra sempre (o item nunca ganha valor próprio), não só uma ponte de
     migração -- então o fallback grava (write-through) o valor herdado na
     tabela própria assim que é usado, virando explícito e desacoplado dali
-    em diante, igual a qualquer valor definido manualmente."""
+    em diante, igual a qualquer valor definido manualmente.
+
+    Achado real (usuário reportou: "Valor unit. (venda)" mostrando o valor
+    do órgão em vez do custo do item, mesmo com o match já confirmado e um
+    custo real disponível): _sincronizarItemNaProposta (index.html) grava
+    preco_unit = valor_orgao quando o item é adicionado à Proposta/Cotação
+    ANTES do match ficar compatível (custo_comparavel ainda nulo, não é um
+    preço escolhido de verdade, é só o placeholder que sobra do fallback).
+    Se esse placeholder for lido por aqui antes do match ser confirmado, o
+    write-through acima o congela como se fosse definitivo -- e depois,
+    quando o match é confirmado e o custo real aparece, o valor do órgão já
+    está travado em CotacaoPreco pra sempre, nunca mais cede lugar ao custo.
+    Sinal de que o valor ainda é esse placeholder (não uma escolha real):
+    ele é EXATAMENTE igual ao valor_unitario do item no edital -- não
+    congela nesse caso, deixa a leitura seguir pro fallback vivo de
+    custo_comparavel (edital_detalhe) em vez de travar o valor do órgão."""
     preco_cotacao: dict[int, float] = {}
     for row in db.execute(select(CotacaoPreco.numero_item, CotacaoPreco.valor)
                           .where(CotacaoPreco.edital_id == edital_id)
@@ -4744,6 +4777,9 @@ def _preco_cotacao_por_numero(edital_id: int, user: Usuario, db: Session) -> dic
     prop_atual = db.execute(select(Proposta).where(Proposta.edital_id == edital_id)
                             .where(Proposta.usuario_id == user.id)).scalars().first()
     if prop_atual and prop_atual.itens:
+        valor_orgao_por_numero = {row.numero: row.valor_unitario for row in db.execute(
+            select(ItemEdital.numero, ItemEdital.valor_unitario)
+            .where(ItemEdital.edital_id == edital_id))}
         novos = False
         for i in prop_atual.itens:
             numero = i.get("numero")
@@ -4753,6 +4789,8 @@ def _preco_cotacao_por_numero(edital_id: int, user: Usuario, db: Session) -> dic
                 numero = None
             if numero is not None and numero not in preco_cotacao and i.get("preco_unit") is not None:
                 valor = i["preco_unit"]
+                if valor == valor_orgao_por_numero.get(numero):
+                    continue
                 preco_cotacao[numero] = valor
                 db.add(CotacaoPreco(usuario_id=user.id, edital_id=edital_id,
                                     numero_item=numero, valor=valor))

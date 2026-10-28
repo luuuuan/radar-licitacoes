@@ -254,3 +254,103 @@ def test_preco_cotacao_por_numero_fallback_da_proposta_e_write_through():
                     .where(CotacaoPreco.usuario_id == u.id)).scalar_one()
     assert cp.numero_item == 1
     assert cp.valor == 65.0
+
+
+def test_preco_cotacao_nao_congela_placeholder_igual_ao_valor_do_orgao():
+    """O bug reportado pelo usuário (edital 155858, item com match já
+    confirmado e custo real cadastrado, mas a coluna "Valor unit. (venda)"
+    continuava mostrando o valor do órgão): o item foi adicionado à
+    Proposta/Cotação ANTES do match ficar compatível, então
+    _sincronizarItemNaProposta (index.html) gravou preco_unit = valor_orgao
+    (fallback, não uma escolha de verdade). Esse placeholder é EXATAMENTE
+    igual ao valor_unitario do item -- não pode ser congelado pelo
+    write-through, senão o valor do órgão trava pra sempre em CotacaoPreco
+    e nunca mais cede lugar ao custo_comparavel, mesmo depois do match ser
+    confirmado."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db)  # valor_unitario=50.0
+    db.add(Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "x", "quantidade": 10, "custo_unit": 0, "preco_unit": 50.0},
+    ]))
+    db.commit()
+
+    resultado = _preco_cotacao_por_numero(ed.id, u, db)
+
+    assert resultado == {}
+    assert db.execute(select(CotacaoPreco).where(CotacaoPreco.edital_id == ed.id)
+                      ).scalars().first() is None
+
+
+def test_preco_cotacao_placeholder_depois_passa_a_usar_custo_comparavel():
+    """Ponta a ponta do bug: item incompatível (preco_unit = valor_orgao,
+    placeholder) não trava nada; depois que o match é confirmado e ganha um
+    custo real, edital_detalhe já mostra o custo, não mais o valor do
+    órgão congelado."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db)  # valor_unitario=50.0
+    db.add(Proposta(edital_id=ed.id, usuario_id=u.id, itens=[
+        {"numero": 1, "descricao": "x", "quantidade": 10, "custo_unit": 0, "preco_unit": 50.0},
+    ]))
+    db.commit()
+    # 1ª leitura, item ainda incompatível -- não deve congelar nada
+    r1 = edital_detalhe(ed.id, user=u, db=db)
+    assert r1["itens"][0]["preco_cotacao"] is None
+
+    # match confirmado depois, com custo real
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=30.0)
+    db.add(prod)
+    db.commit()
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte", detalhe={
+        "itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta", "confirmado_manualmente": True}]
+    }))
+    db.commit()
+
+    r2 = edital_detalhe(ed.id, user=u, db=db)
+    item2 = r2["itens"][0]
+    assert item2["compativel"] is True
+    assert item2["preco_cotacao"] is None
+    assert item2["custo_comparavel"] == 30.0
+
+
+def test_preco_cotacao_ja_congelado_igual_ao_orgao_cede_lugar_ao_custo_depois_de_confirmado():
+    """Caso real do usuário (edital 155858): o placeholder já tinha virado
+    um registro PRÓPRIO em CotacaoPreco (write-through antigo, antes desta
+    correção, ou qualquer outro jeito do valor ter ficado igual ao do
+    órgão) ANTES do match ser confirmado. Mesmo já persistido -- não é só
+    o fallback da Proposta --, uma vez que o match é confirmado e o custo
+    real aparece, não pode continuar preso no valor do órgão."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db)  # valor_unitario=50.0
+    definir_preco_cotacao(ed.id, 1, PrecoCotacaoIn(valor=50.0), user=u, db=db)
+
+    prod = Produto(usuario_id=u.id, descricao="Papel A4", preco_custo=30.0)
+    db.add(prod)
+    db.commit()
+    db.add(Match(usuario_id=u.id, edital_id=ed.id, score=0.9, nivel="forte", detalhe={
+        "itens": [{"item": 1, "produto_id": prod.id, "confianca": "alta", "confirmado_manualmente": True}]
+    }))
+    db.commit()
+
+    r = edital_detalhe(ed.id, user=u, db=db)
+    item = r["itens"][0]
+    assert item["compativel"] is True
+    assert item["custo_comparavel"] == 30.0
+    assert item["preco_cotacao"] is None
+
+
+def test_preco_cotacao_deliberado_igual_ao_orgao_mas_sem_custo_comparavel_nao_muda():
+    """Sem custo_comparavel disponível (item ainda incompatível ou produto
+    sem custo cadastrado), o valor salvo continua valendo do mesmo jeito
+    de sempre -- a correção só entra quando HÁ um custo real pra oferecer
+    no lugar, nunca troca um valor conhecido por nada."""
+    db = _sessao()
+    u = _usuario(db)
+    ed = _edital_com_item(db)  # valor_unitario=50.0
+    definir_preco_cotacao(ed.id, 1, PrecoCotacaoIn(valor=50.0), user=u, db=db)
+
+    r = edital_detalhe(ed.id, user=u, db=db)
+
+    assert r["itens"][0]["preco_cotacao"] == 50.0
