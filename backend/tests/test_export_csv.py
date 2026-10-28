@@ -385,3 +385,32 @@ def test_export_xlsx_tambem_inclui_edital_sem_match_e_filtra_prazo():
 
     assert "Orgao Sem Match" in orgaos
     assert "Orgao Encerrado" not in orgaos
+
+
+def test_export_xlsx_nao_quebra_com_caractere_de_controle_ilegal_no_objeto():
+    """Achado real (usuário testou export .xlsx, "itens numa coluna só"):
+    openpyxl escreve .xlsx como XML por baixo -- um caractere de controle
+    ASCII (ex.: \\x1f) no texto livre de origem (objeto, vindo do PNCP) é
+    ilegal em XML e derrubava a exportação inteira com
+    IllegalCharacterError. CSV tolera o mesmo caractere sem problema."""
+    import openpyxl
+    import io as _io
+
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    objeto_com_controle = ("Contratação de empresa seguradora para emissão de "
+                           "apólices\x1fna modalidade financeira")
+    ed = _edital_com_match(db, u, "ed1", orgao="Orgao Controle",
+                           data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    ed.objeto = objeto_com_controle
+    db.commit()
+
+    resp = export_xlsx(nivel=None, itens="coluna", user=u, db=db)   # não pode levantar IllegalCharacterError
+    conteudo = _ler_bytes(resp)
+    wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
+    ws = wb.active
+    objeto_exportado = ws.cell(row=2, column=10).value
+
+    assert "\x1f" not in objeto_exportado
+    assert "apólices" in objeto_exportado and "na modalidade financeira" in objeto_exportado

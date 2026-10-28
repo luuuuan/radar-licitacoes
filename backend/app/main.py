@@ -5865,6 +5865,24 @@ def export_csv(nivel: str | None = None,
     )
 
 
+_RX_CONTROLE_ILEGAL_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitizar_celula_xlsx(valor):
+    """openpyxl escreve .xlsx como XML por baixo -- caractere de controle
+    ASCII (ex.: separador de unidade \\x1f) é ilegal em XML 1.0 e faz
+    ws.append() levantar IllegalCharacterError, derrubando a exportação
+    inteira. Achado real (usuário testou export .xlsx, "itens numa
+    coluna"): o texto livre de origem (objeto do edital, vindo do PNCP)
+    trazia um desses caracteres invisíveis -- CSV tolera, .xlsx não.
+    Aplicado em TODA célula string (não só objeto/descrição do item): é
+    um problema do FORMATO, não de um campo específico -- qualquer texto
+    livre da fonte pode trazer o mesmo caractere."""
+    if isinstance(valor, str):
+        return _RX_CONTROLE_ILEGAL_XML.sub("", valor)
+    return valor
+
+
 @app.get("/api/export.xlsx")
 def export_xlsx(nivel: str | None = None,
                 itens: str | None = Query(None, pattern="^(coluna|linha)$"),
@@ -5884,7 +5902,7 @@ def export_xlsx(nivel: str | None = None,
     for cel in ws[1]:
         cel.font = Font(bold=True)
     for linha in linhas:
-        ws.append(linha)
+        ws.append([_sanitizar_celula_xlsx(v) for v in linha])
     return _resposta_xlsx(wb, f"editais_{date.today().isoformat()}.xlsx")
 
 
