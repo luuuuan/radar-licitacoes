@@ -5751,31 +5751,54 @@ def exportar_papel_timbrado(user: Usuario = Depends(_auth.get_current_user)):
                 "Cache-Control": "no-store"})
 
 
-@app.get("/api/export.csv")
-def export_csv(nivel: str | None = None,
-               itens: str | None = Query(None, pattern="^(coluna|linha)$"),
-               user: Usuario = Depends(_auth.get_current_user),
-               db: Session = Depends(get_session)):
-    """CSV da lista de editais (botão "Exportar CSV" na aba Editais).
-    `itens` (pedido do usuário, modal com 2 opções): sem o parâmetro, exporta
-    como sempre -- uma linha por edital, só com itens_compativeis (contagem).
-    "coluna" acrescenta os itens PEDIDOS PELO ÓRGÃO (não só os compatíveis)
-    numa única coluna, concatenados, mantendo uma linha por edital. "linha"
-    quebra numa linha por item -- as colunas do edital se repetem, pra abrir
-    no Excel/filtrar por item mais fácil (planilha fica bem maior).
+_RX_TAG_HTML = re.compile(r"<[^>]+>")
 
-    Achado real (usuário testou a exportação, pediu a correção): a consulta
-    nunca filtrava por prazo -- editais já encerrados (prazo de propostas
-    vencido) saíam misturados com os ainda "aguardando"/"recebendo" na
-    mesma planilha, sem nenhum jeito de diferenciar. Mesma condição "ativo"
-    de vista=ativos em listar_editais (_condicoes_prazo_editais) -- só os
-    editais que ainda dá pra participar."""
+
+def _texto_plano_export(texto: str | None) -> str:
+    """Remove tags HTML e colapsa qualquer quebra de linha num espaço só.
+
+    Achado real (usuário testou a exportação de editais): a descrição de
+    alguns itens vem da fonte com HTML cru (ex.: "<p>AGENDA DO ALUNO...
+    </p>") e parágrafo de verdade embutido (newline literal dentro do
+    texto). Sem limpar, o campo ia pro CSV/XLSX corretamente citado (não é
+    CSV corrompido de verdade), mas o Excel mostra essa célula "quebrada"
+    em várias linhas visuais -- pareceu planilha quebrada pro usuário,
+    mesmo sem ser."""
+    if not texto:
+        return ""
+    sem_tags = _RX_TAG_HTML.sub(" ", texto)
+    return " ".join(sem_tags.split())
+
+
+def _linhas_export_editais(nivel: str | None, itens: str | None, user: Usuario,
+                           db: Session) -> tuple[list[str], list[list]]:
+    """Linhas (cabeçalho + dados) da exportação de editais -- compartilhado
+    entre /api/export.csv e /api/export.xlsx, pra não duplicar a consulta e
+    a montagem de cada linha em dois lugares (um escreve com csv.writer, o
+    outro com openpyxl, mas os DADOS são os mesmos).
+
+    `itens`: None exporta como sempre -- uma linha por edital, só com
+    itens_compativeis (contagem). "coluna" acrescenta os itens PEDIDOS
+    PELO ÓRGÃO (não só os compatíveis) numa única coluna, concatenados,
+    mantendo uma linha por edital. "linha" quebra numa linha por item --
+    as colunas do edital se repetem.
+
+    Achado real (usuário testou a exportação, 2 correções pedidas):
+    (1) a consulta nunca filtrava por prazo -- editais já encerrados
+    saíam misturados com os ainda "aguardando"/"recebendo". Mesma condição
+    "ativo" de vista=ativos em listar_editais (_condicoes_prazo_editais).
+    (2) a consulta exigia Match (INNER JOIN) -- um edital sem Match pra
+    este usuário (regra de exclusão, ou nunca chegou a ser recalculado)
+    nunca aparecia, mesmo pedindo "todos os editais, independente de
+    compatibilidade". OUTER JOIN a partir de Edital, mesmo padrão de
+    todos_editais em _query_editais_filtrada -- sem Match, nivel/score/
+    itens_compativeis saem None/0."""
     agora = datetime.now(BR_TZ).replace(tzinfo=None)
     hoje_data = agora.date()
     ativo_cond, _ = _condicoes_prazo_editais(agora, hoje_data)
-    q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-        .where(Match.usuario_id == user.id) \
-        .where(ativo_cond)
+    q = (select(Match, Edital).select_from(Edital)
+        .outerjoin(Match, (Match.edital_id == Edital.id) & (Match.usuario_id == user.id))
+        .where(ativo_cond))
     if nivel:
         q = q.where(Match.nivel == nivel)
     if itens:
@@ -5784,8 +5807,6 @@ def export_csv(nivel: str | None = None,
         q = q.options(selectinload(Edital.itens))
     q = q.order_by(Match.score.desc())
 
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
     cabecalho = ["nivel", "score", "itens_compativeis", "orgao", "uf", "municipio",
                 "modalidade", "valor_estimado", "data_encerramento", "objeto", "link"]
     if itens == "coluna":
@@ -5793,34 +5814,78 @@ def export_csv(nivel: str | None = None,
     elif itens == "linha":
         cabecalho += ["item_numero", "item_descricao", "item_quantidade",
                       "item_unidade_medida", "item_valor_orgao"]
-    w.writerow(cabecalho)
 
+    linhas: list[list] = []
     for m, ed in db.execute(q).all():
-        linha_base = [m.nivel, m.score, m.itens_compativeis, ed.orgao, ed.uf,
+        linha_base = [m.nivel if m else None, m.score if m else None,
+                      m.itens_compativeis if m else 0, ed.orgao, ed.uf,
                       ed.municipio, ed.modalidade, ed.valor_estimado,
-                      ed.data_encerramento, (ed.objeto or "")[:300], ed.link]
+                      ed.data_encerramento, _texto_plano_export(ed.objeto)[:300], ed.link]
         if itens == "coluna":
             itens_ordenados = sorted(ed.itens, key=lambda it: (it.numero is None, it.numero))
             texto_itens = "; ".join(
-                f"{it.quantidade if it.quantidade is not None else '?'}x {it.descricao}"
+                f"{it.quantidade if it.quantidade is not None else '?'}x {_texto_plano_export(it.descricao)}"
                 for it in itens_ordenados)
-            w.writerow(linha_base + [texto_itens])
+            linhas.append(linha_base + [texto_itens])
         elif itens == "linha":
             itens_ordenados = sorted(ed.itens, key=lambda it: (it.numero is None, it.numero))
             if not itens_ordenados:
-                w.writerow(linha_base + ["", "", "", "", ""])
+                linhas.append(linha_base + ["", "", "", "", ""])
             else:
                 for it in itens_ordenados:
-                    w.writerow(linha_base + [it.numero, it.descricao, it.quantidade,
-                                             it.unidade_medida, it.valor_unitario])
+                    linhas.append(linha_base + [it.numero, _texto_plano_export(it.descricao),
+                                                it.quantidade, it.unidade_medida, it.valor_unitario])
         else:
-            w.writerow(linha_base)
+            linhas.append(linha_base)
+    return cabecalho, linhas
+
+
+@app.get("/api/export.csv")
+def export_csv(nivel: str | None = None,
+               itens: str | None = Query(None, pattern="^(coluna|linha)$"),
+               user: Usuario = Depends(_auth.get_current_user),
+               db: Session = Depends(get_session)):
+    """CSV da lista de editais (botão "Exportar CSV" na aba Editais) -- ver
+    _linhas_export_editais pros parâmetros e achados reais."""
+    cabecalho, linhas = _linhas_export_editais(nivel, itens, user, db)
+    buf = io.StringIO()
+    # BOM UTF-8: achado real (usuário testou a exportação) -- sem ele, o
+    # Excel (pt-BR) abre o CSV como ANSI/cp1252 por padrão, e todo acento
+    # vira lixo ("Pregão" -> "Preg�o"). Com o BOM, detecta UTF-8 certo.
+    buf.write("﻿")
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(cabecalho)
+    for linha in linhas:
+        w.writerow(linha)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=editais.csv",
                 "Cache-Control": "no-store"},
     )
+
+
+@app.get("/api/export.xlsx")
+def export_xlsx(nivel: str | None = None,
+                itens: str | None = Query(None, pattern="^(coluna|linha)$"),
+                user: Usuario = Depends(_auth.get_current_user),
+                db: Session = Depends(get_session)):
+    """Mesmo conteúdo de export_csv, em .xlsx -- pedido do usuário (abre
+    direto no Excel com acentuação e tipos de coluna corretos, sem precisar
+    escolher delimitador/codificação na mão)."""
+    import openpyxl
+    from openpyxl.styles import Font
+
+    cabecalho, linhas = _linhas_export_editais(nivel, itens, user, db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Editais"
+    ws.append(cabecalho)
+    for cel in ws[1]:
+        cel.font = Font(bold=True)
+    for linha in linhas:
+        ws.append(linha)
+    return _resposta_xlsx(wb, f"editais_{date.today().isoformat()}.xlsx")
 
 
 # --------------------------- Catálogo CATMAT/CATSER ------------------- #

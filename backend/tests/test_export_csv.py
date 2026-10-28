@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import export_csv
+from app.main import export_csv, export_xlsx
 from app.models import Base, Usuario, Edital, ItemEdital, Match
 
 
@@ -43,9 +43,21 @@ def _edital_com_match(db, usuario, id_externo, orgao="Orgao Teste", data_abertur
     return ed
 
 
-def _ler_csv(resp):
-    """StreamingResponse monta o corpo com um async generator -- precisa
+def _ler_bytes(resp):
+    """StreamingResponse monta o corpo com um async generator (mesmo
+    passando um iterável síncrono, ver _resposta_xlsx/export_csv) -- precisa
     drenar ele pra ler o conteúdo de verdade, igual o cliente HTTP faria."""
+    import asyncio
+
+    async def _drenar():
+        partes = []
+        async for chunk in resp.body_iterator:
+            partes.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+        return b"".join(partes)
+    return asyncio.run(_drenar())
+
+
+def _ler_csv(resp):
     import asyncio
 
     async def _drenar():
@@ -133,7 +145,9 @@ def test_export_csv_sem_parametro_itens_nao_muda_colunas_de_antes():
     conteudo = _ler_csv(resp)
 
     linhas = conteudo.strip().splitlines()
-    assert linhas[0] == "nivel;score;itens_compativeis;orgao;uf;municipio;modalidade;valor_estimado;data_encerramento;objeto;link"
+    # BOM UTF-8 no início -- achado real, ver _ler_csv/export_csv: sem ele
+    # o Excel (pt-BR) abre o arquivo como ANSI e corrompe acento.
+    assert linhas[0] == "﻿nivel;score;itens_compativeis;orgao;uf;municipio;modalidade;valor_estimado;data_encerramento;objeto;link"
     assert len(linhas) == 2   # cabeçalho + 1 edital, nunca 1 linha por item
     assert "Caneta azul" not in conteudo
 
@@ -233,3 +247,141 @@ def test_export_csv_nivel_continua_filtrando_junto_com_itens():
 
     assert "Orgao Forte" in conteudo
     assert "Orgao Fraco" not in conteudo
+
+
+# --------- "todos os editais, independente de compatibilidade" (pedido do usuário) --------- #
+
+def test_export_csv_inclui_edital_sem_match_nenhum():
+    """Achado real (usuário pediu): a consulta original exigia Match
+    (INNER JOIN) -- um edital sem avaliação nenhuma pra este usuário
+    (regra de exclusão, ou nunca recalculado) nunca aparecia na
+    exportação, mesmo sendo um edital ativo de verdade."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    ed = Edital(fonte="PNCP", id_externo="ed-sem-match", orgao="Orgao Sem Match Nenhum",
+                objeto="Aquisicao qualquer", uf="SP",
+                data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    db.add(ed)
+    db.commit()
+    # nenhum Match criado pra este edital -- igual a um que caiu numa
+    # regra de exclusão do usuário, ou um recém-coletado ainda não avaliado.
+
+    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Sem Match Nenhum" in conteudo
+
+
+def test_export_csv_edital_sem_match_sai_com_nivel_vazio_e_itens_compativeis_zero():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    ed = Edital(fonte="PNCP", id_externo="ed-sem-match", orgao="Orgao X",
+                objeto="Aquisicao", uf="SP",
+                data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    db.add(ed)
+    db.commit()
+
+    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    linhas = _ler_csv(resp).strip().splitlines()
+
+    assert linhas[1].startswith(";;0;Orgao X;")
+
+
+def test_export_csv_filtro_nivel_continua_excluindo_edital_sem_match():
+    """Pedir um nível específico continua só trazendo quem tem Match com
+    esse nível -- "todos independente de compatibilidade" é o padrão sem
+    filtro nenhum, não quando o usuário pede um nível."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    ed = Edital(fonte="PNCP", id_externo="ed-sem-match", orgao="Orgao Sem Match",
+                objeto="Aquisicao", uf="SP",
+                data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    db.add(ed)
+    db.commit()
+
+    resp = export_csv(nivel="forte", itens=None, user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Sem Match" not in conteudo
+
+
+# --------- limpeza de HTML/quebra de linha na descrição do item --------- #
+
+def test_export_csv_remove_html_e_quebra_de_linha_da_descricao_do_item():
+    """Achado real (usuário testou a exportação, planilha "quebrada"): a
+    descrição de alguns itens vem da fonte com HTML cru e parágrafo de
+    verdade embutido (newline literal) -- o CSV ficava tecnicamente
+    correto (campo citado), mas o Excel mostrava a célula "quebrada" em
+    várias linhas visuais. Limpa pra texto corrido numa linha só."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    ed = _edital_com_match(db, u, "ed1", data_abertura=hoje - timedelta(days=1),
+                           data_encerramento=hoje + timedelta(days=5))
+    db.add(ItemEdital(edital_id=ed.id, numero=1,
+                      descricao="<p>AGENDA DO ALUNO.\n- Espiral plástico,\nbolsa canguru.</p>",
+                      quantidade=10, valor_unitario=1.0))
+    db.commit()
+
+    resp = export_csv(nivel=None, itens="linha", user=u, db=db)
+    linhas = _ler_csv(resp).strip().splitlines()
+
+    assert len(linhas) == 2   # cabeçalho + 1 item -- nunca quebra em mais linhas
+    assert "<p>" not in linhas[1] and "</p>" not in linhas[1]
+    assert "AGENDA DO ALUNO. - Espiral plástico, bolsa canguru." in linhas[1]
+
+
+# --------- /api/export.xlsx (mesmo conteúdo, formato novo pedido pelo usuário) --------- #
+
+def test_export_xlsx_mesmas_linhas_do_csv():
+    import openpyxl
+    import io as _io
+
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    ed = _edital_com_match(db, u, "ed1", orgao="Orgao XLSX",
+                           data_abertura=hoje - timedelta(days=1),
+                           data_encerramento=hoje + timedelta(days=5))
+    db.add(ItemEdital(edital_id=ed.id, numero=1, descricao="Caneta azul",
+                      quantidade=100, valor_unitario=2.5))
+    db.commit()
+
+    resp = export_xlsx(nivel=None, itens="coluna", user=u, db=db)
+    conteudo = _ler_bytes(resp)
+    wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
+    ws = wb.active
+
+    cabecalho = [c.value for c in ws[1]]
+    assert cabecalho[-1] == "itens_pedidos"
+    linha1 = [c.value for c in ws[2]]
+    assert linha1[3] == "Orgao XLSX"
+    assert "Caneta azul" in linha1[-1]
+
+
+def test_export_xlsx_tambem_inclui_edital_sem_match_e_filtra_prazo():
+    import openpyxl
+    import io as _io
+
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    db.add(Edital(fonte="PNCP", id_externo="ed-sem-match", orgao="Orgao Sem Match",
+                  objeto="Aquisicao", uf="SP",
+                  data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5)))
+    db.add(Edital(fonte="PNCP", id_externo="ed-encerrado", orgao="Orgao Encerrado",
+                  objeto="Aquisicao", uf="SP",
+                  data_abertura=hoje - timedelta(days=30), data_encerramento=hoje - timedelta(days=5)))
+    db.commit()
+
+    resp = export_xlsx(nivel=None, itens=None, user=u, db=db)
+    conteudo = _ler_bytes(resp)
+    wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
+    ws = wb.active
+    orgaos = {row[3].value for row in ws.iter_rows(min_row=2)}
+
+    assert "Orgao Sem Match" in orgaos
+    assert "Orgao Encerrado" not in orgaos
