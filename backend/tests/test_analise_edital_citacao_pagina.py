@@ -16,6 +16,7 @@ Rode com: cd backend && pytest
 """
 from app.analise_edital import (
     _citacao_confere_com_texto,
+    _filtrar_exigencias_inventadas,
     _paginas_citadas,
     _palavras_significativas_ou_sigla,
     _trechos_da_pagina,
@@ -158,3 +159,44 @@ def test_citacao_confere_com_texto_item_sigla_curta_agora_e_verificavel():
 
     texto_sem_relacao = "[pág. 5]\nRegras de entrega e pagamento do contrato.\n"
     assert _citacao_confere_com_texto("Edital, pág. 5", "CRF do FGTS", texto_sem_relacao) is False
+
+
+def test_citacao_confere_com_texto_ignora_palavra_do_objeto_do_contrato():
+    """Achado real (usuário pediu pra resolver o "atestado técnico" que
+    sobrou no edital 170354 depois de v24): baixei os 4 documentos de
+    verdade do PNCP (Edital/TR/Anexos/ATA) e confirmei com grep -- ZERO
+    ocorrências de "atestado"/"capacidade técnica"/"capital social" em
+    qualquer um deles. O item inventado só "conferia" porque seu próprio
+    nome, escrito pela IA de forma verborrágica, ecoa o OBJETO do
+    contrato como enchimento de frase ("...para FORNECIMENTO DE
+    MATERIAIS DE EXPEDIENTE...") -- palavra onipresente em quase toda
+    página do edital. Passar `objeto` exclui essas palavras da
+    comparação -- o item não tem mais nenhuma palavra de verdade em
+    comum com uma página que só fala do objeto do contrato."""
+    item = ("Atestado de capacidade técnica para fornecimento de materiais de "
+            "expediente, comprovando experiência e quantitativo mínimo já fornecido")
+    objeto = ("Registro de Preços para aquisição de materiais de expediente "
+              "(papelaria, escritório, festas e utilidades) para as Secretarias "
+              "Municipais de Piraí do Sul")
+    texto = ("[pág. 1]\nObjeto: aquisição de materiais de expediente, registro "
+            "de preços para as secretarias municipais.\n")
+
+    # sem objeto (comportamento antigo): "materiais"/"expediente" batem por
+    # acaso com o objeto repetido na página -- falso positivo.
+    assert _citacao_confere_com_texto("Edital, pág. 1", item, texto, "") is True
+    # com objeto: as palavras do objeto não contam mais como evidência --
+    # sobra só "atestado"/"capacidade"/"tecnica"/etc, que a página não tem.
+    assert _citacao_confere_com_texto("Edital, pág. 1", item, texto, objeto) is False
+
+
+def test_filtrar_exigencias_inventadas_ignora_palavra_do_objeto_do_contrato():
+    """Mesmo achado acima, mas no filtro fraco (usado quando não há
+    citação pra checar por página)."""
+    item = ("Atestado de capacidade técnica para fornecimento de materiais de "
+            "expediente, comprovando experiência e quantitativo mínimo já fornecido")
+    objeto = ("Registro de Preços para aquisição de materiais de expediente "
+              "para as Secretarias Municipais de Piraí do Sul")
+    texto = "Objeto: aquisição de materiais de expediente para as secretarias municipais."
+
+    assert _filtrar_exigencias_inventadas([{"exigido": item}], [texto], objeto="") == [{"exigido": item}]
+    assert _filtrar_exigencias_inventadas([{"exigido": item}], [texto], objeto=objeto) == []

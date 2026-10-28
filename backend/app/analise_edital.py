@@ -233,7 +233,27 @@ _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # comum) foi considerado e descartado por falta de visibilidade do texto
 # real desse edital pra validar a mudança sem arriscar um 3º ciclo de
 # regressão não verificada contra produção.
-VERSAO_PROMPT = 24
+#
+# v25 = achado real (usuário pediu pra resolver o "atestado técnico" que
+# sobrou depois de v24, mesmo edital 170354): consegui a visibilidade do
+# texto real que faltava em v24 -- baixei os 4 documentos de verdade
+# direto do PNCP (Edital, TR, Anexos III/IV, Minuta de ATA) e confirmei
+# com grep: ZERO ocorrências de "atestado"/"capacidade técnica"/"capital
+# social"/"balanço" em qualquer um dos quatro. O item inventado só
+# "confere" (tanto em _citacao_confere_com_texto quanto no filtro fraco)
+# porque seu próprio nome, escrito pela IA de forma verborrágica, ecoa o
+# OBJETO do contrato como enchimento de frase (ex.: "...para FORNECIMENTO
+# DE MATERIAIS DE EXPEDIENTE...") -- "materiais"/"expediente" aparecem em
+# quase toda página (título, cabeçalho, objeto repetido), e sozinhas já
+# "provam" qualquer invenção. _citacao_confere_com_texto e
+# _filtrar_exigencias_inventadas agora recebem `objeto` (já disponível --
+# é o mesmo parâmetro de analisar()/_analisar_texto_unico, dado
+# estruturado do PNCP, não depende da IA) e excluem da comparação as
+# palavras que o CONTRATO EM SI já usa pra descrever o que está sendo
+# comprado -- item de habilitação real (CNPJ, contrato social, FGTS,
+# procuração...) nunca usa palavra do objeto no próprio nome, então não
+# tem custo pra eles.
+VERSAO_PROMPT = 25
 
 # Versão da LÓGICA de verificar_documentos_usuario() (não do prompt em si,
 # embora um ajuste no prompt também conte). Achado real (agente
@@ -1625,7 +1645,7 @@ def _trechos_da_pagina(texto: str, pagina: int, citacao: str = "") -> tuple[list
     return trechos, achou_marcador
 
 
-def _citacao_confere_com_texto(citacao: str, item: str, texto: str) -> bool | None:
+def _citacao_confere_com_texto(citacao: str, item: str, texto: str, objeto: str = "") -> bool | None:
     """True/False quando dá pra checar a citação contra o conteúdo real da
     página citada; None quando não dá pra julgar (sem número de página
     reconhecível na citação, ou texto sem paginação nenhuma -- .docx/.odt,
@@ -1637,7 +1657,25 @@ def _citacao_confere_com_texto(citacao: str, item: str, texto: str) -> bool | No
     que existe mas não sustenta o item -- devolve False, não None (ver
     itens_citados: None cai no filtro fraco por palavra no texto inteiro,
     False é descartado direto, sem segunda chance). Quem chama decide o
-    que fazer com None -- nunca tratado como "confere"."""
+    que fazer com None -- nunca tratado como "confere".
+
+    `objeto`: achado real (usuário conferiu a análise em produção, mesmo
+    edital 170354, DEPOIS dos documentos reais terem voltado em v24): o
+    item inventado "Atestado de capacidade técnica para FORNECIMENTO DE
+    MATERIAIS DE EXPEDIENTE..." ainda passava -- confirmado baixando os 4
+    documentos de verdade do PNCP (Edital/TR/Anexos/ATA) e conferindo com
+    grep: ZERO ocorrências de "atestado"/"capacidade"/"técnica"/"capital
+    social" em qualquer um deles. O item só "conferia" porque seu próprio
+    nome (escrito pela IA de forma verborrágica, ecoando o objeto do
+    contrato como enchimento de frase) compartilha "materiais"/
+    "expediente" com o OBJETO do contrato -- palavra que aparece em quase
+    TODA página (título, cabeçalho, objeto repetido), então qualquer
+    citação de página "confere" por essas palavras, mesmo sem nenhuma
+    relação real com o item. Palavra do OBJETO só prova "esta página é
+    sobre o contrato", nunca "esta página exige ESTE documento" -- exclui
+    da comparação. Item de habilitação real (CNPJ, contrato social, FGTS,
+    procuração...) nunca usa palavra do objeto do contrato no próprio
+    nome, então essa exclusão não tem custo pra eles."""
     paginas = _paginas_citadas(citacao)
     if not paginas:
         return None
@@ -1649,7 +1687,7 @@ def _citacao_confere_com_texto(citacao: str, item: str, texto: str) -> bool | No
         achou_marcador = achou_marcador or marcador
     if not trechos:
         return False if achou_marcador else None
-    palavras_item = _palavras_significativas_ou_sigla(item)
+    palavras_item = _palavras_significativas_ou_sigla(item) - _palavras_significativas(objeto)
     if not palavras_item:
         return None
     return any(palavras_item & _palavras_de_trecho(t) for t in trechos)
@@ -2175,7 +2213,7 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
                 nome = str(item.get("item") or "").strip()
                 citacao = str(item.get("citacao") or "").strip()
                 if nome and citacao:
-                    confere = _citacao_confere_com_texto(citacao, nome, texto)
+                    confere = _citacao_confere_com_texto(citacao, nome, texto, objeto)
                     if confere is True:
                         aceitos[i] = nome
                     elif confere is False:
@@ -2231,10 +2269,19 @@ def _analisar_texto_unico(objeto: str, texto: str, api_key: str | None,
         # aqui (ex.: exigir 2+ palavras em comum) foi considerada e
         # descartada por falta de visibilidade do texto real pra validar
         # sem arriscar um 3º ciclo de regressão não verificada.
+        #
+        # objeto=objeto (achado real, mesmo edital 170354, depois de v24
+        # em produção): item inventado como "Atestado de capacidade
+        # técnica para FORNECIMENTO DE MATERIAIS DE EXPEDIENTE..." ainda
+        # sobrevivia aqui -- confirmado baixando os 4 documentos reais do
+        # PNCP (zero ocorrência de "atestado"/"capacidade"/"técnica"
+        # neles) -- porque o próprio nome do item ecoa o OBJETO do
+        # contrato ("materiais de expediente"), palavra onipresente no
+        # texto inteiro. Ver docstring de _filtrar_exigencias_inventadas.
         if pendentes:
             sobreviventes = {
                 it["exigido"] for it in _filtrar_exigencias_inventadas(
-                    [{"exigido": n} for _, n, _ in pendentes], [texto])
+                    [{"exigido": n} for _, n, _ in pendentes], [texto], objeto=objeto)
             }
             for i, nome, citacao in pendentes:
                 if nome in sobreviventes:
@@ -2809,7 +2856,8 @@ def _itens_declaracao(declaracoes: list | None) -> list[dict]:
     return itens
 
 
-def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[str]) -> list[dict]:
+def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[str],
+                                   objeto: str = "") -> list[dict]:
     """Descarta itens de `itens` (já normalizados, com chave "exigido")
     sem NENHUMA palavra significativa (5+ letras) em comum com nenhuma
     linha de `linhas_requisitos` -- achado real (edital 159668): a IA
@@ -2819,6 +2867,16 @@ def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[st
     (tipo "CND" sozinho) não entra nessa checagem pra nenhum dos dois
     lados -- não tem base nenhuma pra julgar, então não descarta por falta
     de prova (só descarta quando SOBRA prova de que é outra coisa).
+
+    `objeto`: achado real (edital 170354, ver _citacao_confere_com_texto):
+    a IA escreve o nome do item inventado de forma verborrágica, ecoando o
+    OBJETO do contrato como enchimento de frase (ex.: "...para FORNECIMENTO
+    DE MATERIAIS DE EXPEDIENTE...") -- palavra do objeto aparece em quase
+    toda página/trecho do edital (título, cabeçalho, objeto repetido), e
+    sozinha já "prova" qualquer invenção. Excluída da comparação por não
+    provar nada além de "este texto é sobre o contrato" -- item de
+    habilitação real nunca usa palavra do objeto no próprio nome, então
+    não tem custo pra eles.
 
     Achado real (calibração desta função, pedido do usuário): tentei trocar
     esse filtro por similaridade de embeddings (BGE-M3/DeepInfra) esperando
@@ -2840,9 +2898,10 @@ def _filtrar_exigencias_inventadas(itens: list[dict], linhas_requisitos: list[st
         vocabulario |= _palavras_significativas(linha)
     if not vocabulario:
         return itens
+    palavras_objeto = _palavras_significativas(objeto)
     out = []
     for it in itens:
-        palavras_exigido = _palavras_significativas(it["exigido"])
+        palavras_exigido = _palavras_significativas(it["exigido"]) - palavras_objeto
         if palavras_exigido and not (palavras_exigido & vocabulario):
             log.warning("verificar_documentos_usuario(): IA devolveu exigência sem base "
                        "no prompt, descartada: %r", it["exigido"])
