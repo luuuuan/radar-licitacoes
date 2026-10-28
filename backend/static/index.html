@@ -1417,7 +1417,7 @@
           <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Guarda esta combinação de filtros neste navegador e aplica ela automaticamente da próxima vez que você abrir a aba Editais.</span></span>
         </button>
         <button class="btn ghost" onclick="limparFiltros()">Limpar filtros</button>
-        <a class="btn ghost" href="/api/export.csv" download><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</a>
+        <button class="btn ghost" onclick="abrirModalExportarCsv()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg> Exportar CSV</button>
       </aside>
       <div class="editais-principal">
         <div id="slot-busca-desktop"></div>
@@ -3431,6 +3431,44 @@ function _aplicarFiltroModalidadesModal(){
   _atualizarBotaoModalidades();
   fecharModal();
   loadEditais();
+}
+
+// Pedido do usuário: botão "Exportar CSV" (aba Editais) abre um modal
+// perguntando como os itens pedidos pelo órgão devem aparecer na planilha,
+// em vez de baixar direto (CSV antes nunca incluía os itens, só a contagem
+// itens_compativeis). As 2 opções são mutuamente exclusivas (uma linha por
+// edital com os itens numa coluna só, OU uma linha por item) -- marcar uma
+// desmarca a outra; sem marcar nenhuma, exporta como sempre (sem itens).
+function abrirModalExportarCsv(){
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:440px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Exportar CSV</h2>
+      <p class="muted" style="font-size:12px;margin:4px 0 14px">Só entram os editais que ainda estão aguardando ou recebendo propostas. Como você quer que os itens pedidos pelo órgão apareçam na planilha?</p>
+      <label class="chk" style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <input type="checkbox" id="exp-csv-coluna" onchange="if(this.checked) $('#exp-csv-linha').checked=false">
+        Uma coluna com os itens pedidos (1 linha por edital, igual hoje)
+      </label>
+      <label class="chk" style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <input type="checkbox" id="exp-csv-linha" onchange="if(this.checked) $('#exp-csv-coluna').checked=false">
+        Uma linha por item (o edital se repete nas colunas)
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost discreto" onclick="fecharModal()">Cancelar</button>
+        <button class="btn" onclick="_exportarCsvEditais()">Exportar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function _exportarCsvEditais(){
+  const coluna = $('#exp-csv-coluna').checked;
+  const linha = $('#exp-csv-linha').checked;
+  let url = '/api/export.csv';
+  if(coluna) url += '?itens=coluna';
+  else if(linha) url += '?itens=linha';
+  window.location.href = url;
+  fecharModal();
 }
 
 // Zera todos os filtros de exibição (não mexe nas configurações de monitoramento)

@@ -5753,22 +5753,68 @@ def exportar_papel_timbrado(user: Usuario = Depends(_auth.get_current_user)):
 
 @app.get("/api/export.csv")
 def export_csv(nivel: str | None = None,
+               itens: str | None = Query(None, pattern="^(coluna|linha)$"),
                user: Usuario = Depends(_auth.get_current_user),
                db: Session = Depends(get_session)):
+    """CSV da lista de editais (botão "Exportar CSV" na aba Editais).
+    `itens` (pedido do usuário, modal com 2 opções): sem o parâmetro, exporta
+    como sempre -- uma linha por edital, só com itens_compativeis (contagem).
+    "coluna" acrescenta os itens PEDIDOS PELO ÓRGÃO (não só os compatíveis)
+    numa única coluna, concatenados, mantendo uma linha por edital. "linha"
+    quebra numa linha por item -- as colunas do edital se repetem, pra abrir
+    no Excel/filtrar por item mais fácil (planilha fica bem maior).
+
+    Achado real (usuário testou a exportação, pediu a correção): a consulta
+    nunca filtrava por prazo -- editais já encerrados (prazo de propostas
+    vencido) saíam misturados com os ainda "aguardando"/"recebendo" na
+    mesma planilha, sem nenhum jeito de diferenciar. Mesma condição "ativo"
+    de vista=ativos em listar_editais (_condicoes_prazo_editais) -- só os
+    editais que ainda dá pra participar."""
+    agora = datetime.now(BR_TZ).replace(tzinfo=None)
+    hoje_data = agora.date()
+    ativo_cond, _ = _condicoes_prazo_editais(agora, hoje_data)
     q = select(Match, Edital).join(Edital, Match.edital_id == Edital.id) \
-        .where(Match.usuario_id == user.id)
+        .where(Match.usuario_id == user.id) \
+        .where(ativo_cond)
     if nivel:
         q = q.where(Match.nivel == nivel)
+    if itens:
+        # evita 1 SELECT de ItemEdital por edital dentro do loop abaixo
+        # (N+1) -- mesmo achado de outras listagens (ver listar_editais).
+        q = q.options(selectinload(Edital.itens))
     q = q.order_by(Match.score.desc())
 
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["nivel", "score", "itens_compativeis", "orgao", "uf", "municipio",
-                "modalidade", "valor_estimado", "data_encerramento", "objeto", "link"])
+    cabecalho = ["nivel", "score", "itens_compativeis", "orgao", "uf", "municipio",
+                "modalidade", "valor_estimado", "data_encerramento", "objeto", "link"]
+    if itens == "coluna":
+        cabecalho.append("itens_pedidos")
+    elif itens == "linha":
+        cabecalho += ["item_numero", "item_descricao", "item_quantidade",
+                      "item_unidade_medida", "item_valor_orgao"]
+    w.writerow(cabecalho)
+
     for m, ed in db.execute(q).all():
-        w.writerow([m.nivel, m.score, m.itens_compativeis, ed.orgao, ed.uf,
-                    ed.municipio, ed.modalidade, ed.valor_estimado,
-                    ed.data_encerramento, (ed.objeto or "")[:300], ed.link])
+        linha_base = [m.nivel, m.score, m.itens_compativeis, ed.orgao, ed.uf,
+                      ed.municipio, ed.modalidade, ed.valor_estimado,
+                      ed.data_encerramento, (ed.objeto or "")[:300], ed.link]
+        if itens == "coluna":
+            itens_ordenados = sorted(ed.itens, key=lambda it: (it.numero is None, it.numero))
+            texto_itens = "; ".join(
+                f"{it.quantidade if it.quantidade is not None else '?'}x {it.descricao}"
+                for it in itens_ordenados)
+            w.writerow(linha_base + [texto_itens])
+        elif itens == "linha":
+            itens_ordenados = sorted(ed.itens, key=lambda it: (it.numero is None, it.numero))
+            if not itens_ordenados:
+                w.writerow(linha_base + ["", "", "", "", ""])
+            else:
+                for it in itens_ordenados:
+                    w.writerow(linha_base + [it.numero, it.descricao, it.quantidade,
+                                             it.unidade_medida, it.valor_unitario])
+        else:
+            w.writerow(linha_base)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",
