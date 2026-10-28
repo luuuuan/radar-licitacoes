@@ -1325,3 +1325,73 @@ def test_filtro_hoje_ignora_date_today_e_usa_fuso_de_brasilia(monkeypatch):
 
     ids = {x["edital_id"] for x in r["resultados"]}
     assert ids == {ed_hoje.id}
+
+
+# ---------------------------------------------------------------------------
+# "encerra hoje" x hora exata do encerramento -- achado real (usuário
+# reportou, edital 170947): dias_restantes é hora-exata DE PROPÓSITO
+# (pedido do usuário no fix do edital 141941, ver comentário em
+# _dias_restantes_edital) -- não pode voltar a ser por dia de calendário.
+# Mas isso fazia dias_restantes=0 pra um edital que encerra às 08h45 de
+# AMANHÃ, visto hoje à tarde (menos de 24h de diferença), e o front lia
+# "dias<=0" como "encerra hoje" literalmente. Ver _encerra_hoje_edital em
+# app/main.py -- sinal de calendário separado, só pro rótulo.
+# ---------------------------------------------------------------------------
+
+def _patch_agora(monkeypatch, *args):
+    from app import main as app_main
+
+    class _DateTimeFalsaAgora(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(*args)
+
+    monkeypatch.setattr(app_main, "datetime", _DateTimeFalsaAgora)
+
+
+def test_encerra_hoje_falso_quando_fecha_so_amanha_de_manha(monkeypatch):
+    """Caso real: hoje é 28/10 à tarde, o edital encerra 29/10 às 08h45 --
+    menos de 24h de diferença, mas é AMANHÃ, não hoje. dias_restantes
+    continua 0 (hora-exata, comportamento preservado), mas o rótulo não
+    pode mais dizer "hoje"."""
+    from app.main import _dias_restantes_edital, _status_prazo_edital, _encerra_hoje_edital
+
+    _patch_agora(monkeypatch, 2026, 10, 28, 15, 0)
+    ed = Edital(fonte="PNCP", id_externo="ed-fecha-amanha", orgao="Orgao Teste",
+                objeto="Aquisicao", uf="SP",
+                data_abertura=datetime(2026, 10, 16, 8, 0),
+                data_encerramento=datetime(2026, 10, 29, 8, 45))
+
+    assert _dias_restantes_edital(ed) == 0
+    assert _status_prazo_edital(ed) == "recebendo"
+    assert _encerra_hoje_edital(ed) is False
+
+
+def test_encerra_hoje_verdadeiro_quando_fecha_de_verdade_hoje(monkeypatch):
+    """Fechamento no MESMO dia de calendário continua "encerra hoje"."""
+    from app.main import _encerra_hoje_edital
+
+    _patch_agora(monkeypatch, 2026, 10, 28, 9, 0)
+    ed = Edital(fonte="PNCP", id_externo="ed-fecha-hoje", orgao="Orgao Teste",
+                objeto="Aquisicao", uf="SP",
+                data_abertura=datetime(2026, 10, 16, 8, 0),
+                data_encerramento=datetime(2026, 10, 28, 23, 0))
+
+    assert _encerra_hoje_edital(ed) is True
+
+
+def test_encerra_hoje_falso_quando_ja_passou_do_prazo_no_mesmo_dia(monkeypatch):
+    """Prazo que já fechou hoje de manhã: status já é "encerrado" (não
+    "recebendo"), então o rótulo "encerra hoje" não se aplica mais --
+    _encerra_hoje_edital não distingue isso por si só (só compara
+    calendário), quem decide usar o sinal é o chamador (status=='recebendo'
+    primeiro, igual ao front)."""
+    from app.main import _status_prazo_edital
+
+    _patch_agora(monkeypatch, 2026, 10, 28, 10, 0)
+    ed = Edital(fonte="PNCP", id_externo="ed-fechou-hoje", orgao="Orgao Teste",
+                objeto="Aquisicao", uf="SP",
+                data_abertura=datetime(2026, 10, 16, 8, 0),
+                data_encerramento=datetime(2026, 10, 28, 8, 0))
+
+    assert _status_prazo_edital(ed) == "encerrado"

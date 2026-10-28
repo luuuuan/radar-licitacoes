@@ -1746,6 +1746,22 @@ def _dias_restantes_edital(ed: Edital) -> int | None:
     return None
 
 
+def _encerra_hoje_edital(ed: Edital) -> bool:
+    """Sinal separado de dias_restantes, só pro rótulo "encerra hoje" dos
+    cards (fmtPrazoEdital no front) -- achado real (usuário reportou,
+    edital 170947): dias_restantes é hora-exata de propósito (pedido do
+    usuário no fix do edital 141941: "a contagem passou a respeitar a
+    hora, não só o dia" -- não pode voltar a ser por dia de calendário,
+    senão os testes que fixam esse comportamento regridem). Mas isso faz
+    um edital que encerra às 08h45 de AMANHÃ, visto hoje à tarde (menos de
+    24h de diferença), dar dias_restantes=0 -- e o front lia "dias<=0"
+    como "encerra hoje" literalmente, mesmo sendo amanhã pelo calendário.
+    Em vez de forçar dias_restantes a mentir pra accomodar o rótulo, o
+    rótulo "hoje" passa a vir de uma comparação de DATA DE CALENDÁRIO
+    própria, independente da contagem hora-exata."""
+    return bool(ed.data_encerramento) and ed.data_encerramento.date() == datetime.now(BR_TZ).replace(tzinfo=None).date()
+
+
 def _status_prazo_edital(ed: Edital) -> str:
     """Fase do prazo de recebimento de propostas (pedido do usuário: o PNCP
     chama de "Data de início/fim de recebimento de propostas" -- são
@@ -2352,7 +2368,8 @@ def listar_editais(
             "plataforma": ed.plataforma,
             "valor_estimado": ed.valor_estimado, "fonte": ed.fonte,
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
-            "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed), "link": ed.link,
+            "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
+            "encerra_hoje": _encerra_hoje_edital(ed), "link": ed.link,
             "score": match.score if match_avaliado else None, "nivel": match.nivel if match_avaliado else None,
             "itens_compativeis": itens_compativeis,
             "lido": match.lido if match else False, "interessante": match.interessante if match else False,
@@ -2443,6 +2460,7 @@ def listar_editais(
                 "valor_estimado": ed.valor_estimado,
                 "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
                 "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
+                "encerra_hoje": _encerra_hoje_edital(ed),
                 "link": ed.link, "itens_batem": itens_batem,
             })
 
@@ -2578,6 +2596,7 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
             "valor_estimado": ed.valor_estimado,
             "dias_restantes": _dias_restantes_edital(ed),
             "status_prazo": _status_prazo_edital(ed),
+            "encerra_hoje": _encerra_hoje_edital(ed),
             "nivel": match.nivel, "score": match.score, "link": ed.link,
         })
     for itens in colunas.values():
@@ -2962,6 +2981,7 @@ def edital_detalhe(edital_id: int, user: Usuario = Depends(_auth.get_current_use
             "data_abertura": ed.data_abertura.isoformat() if ed.data_abertura else None,
             "data_encerramento": ed.data_encerramento.isoformat() if ed.data_encerramento else None,
             "dias_restantes": dias, "status_prazo": _status_prazo_edital(ed),
+            "encerra_hoje": _encerra_hoje_edital(ed),
             "bloqueio_edicao": _bloqueio_edicao_edital(ed, match, user, db),
             # match_avaliado (não só "match"): achado real (usuário
             # reportou -- ver mesmo achado em listar_editais) -- abrir/

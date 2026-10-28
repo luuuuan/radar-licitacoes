@@ -3053,16 +3053,24 @@ function fmtDataHora(iso){
 // pode ser "faltam N dias pra abrir" quanto "faltam N dias pro prazo
 // fechar" -- só a fase resolve a ambiguidade. Parâmetro opcional (chamador
 // sem essa info ainda cai no comportamento de antes, baseado só nos dias).
-function fmtPrazoEdital(dias, statusPrazo){
+function fmtPrazoEdital(dias, statusPrazo, encerraHoje){
   // "recebendo" é a janela ABERTA de propostas -- dias aqui já conta até
   // o ENCERRAMENTO (ver _dias_restantes_edital, backend), não até a
   // abertura. Antes disso ficava escondido atrás de um "recebendo
   // proposta" genérico bem na fase que mais importa saber quantos dias
   // faltam pra fechar (pedido do usuário: mostrar isso nos cards do
   // pipeline).
+  //
+  // achado real (usuário reportou, edital 170947): "dias" aqui é
+  // hora-exata DE PROPÓSITO (pedido do usuário no fix do edital 141941) --
+  // um edital que encerra às 08h45 de AMANHÃ, visto hoje à tarde (menos de
+  // 24h de diferença), dá dias=0 igualzinho a um que encerra hoje à noite.
+  // "dias<=0" sozinho não distingue os dois -- precisa do sinal de
+  // calendário próprio do backend (encerra_hoje, ver _encerra_hoje_edital)
+  // pra só dizer "hoje" quando é hoje de verdade.
   if(statusPrazo==='recebendo'){
     if(dias==null) return 'recebendo proposta';
-    if(dias<=0) return 'recebendo · encerra hoje';
+    if(dias===0) return encerraHoje ? 'recebendo · encerra hoje' : 'recebendo · encerra em breve';
     return `recebendo · faltam ${dias} dia(s)`;
   }
   if(dias<0) return 'encerrado';
@@ -3072,7 +3080,7 @@ function fmtPrazoEdital(dias, statusPrazo){
 
 function cardEdital(e){
   const urg = e.dias_restantes!=null && e.dias_restantes<=5;
-  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes, e.status_prazo);
+  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes, e.status_prazo, e.encerra_hoje);
   const det = (e.detalhe&&e.detalhe.itens||[]).slice(0,4).map(d=>{
     const vt = d.validacao_tecnica;
     // selo compacto (sem lista de pendências, isso já tem espaço só na
@@ -3524,7 +3532,7 @@ async function loadEditais(resetPagina=true){
 // edital", que abre a página normal (compatível com match=None desde a
 // correção de /detalhe pra esse caso).
 function cardEditalSemMatch(e){
-  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes, e.status_prazo);
+  const prazo = e.dias_restantes==null?'prazo n/d':fmtPrazoEdital(e.dias_restantes, e.status_prazo, e.encerra_hoje);
   const linkEdital = linkSeguro(e.link);
   const itens = (e.itens_batem||[]).map(d=>`• ${esc(d)}`).join('<br>');
   return `<div class="card">
@@ -4356,7 +4364,7 @@ function _pipelineColunaHTML(status, itens){
 }
 function _pipelineCardHTML(c){
   const linkEdital = linkSeguro(c.link);
-  const prazo = c.dias_restantes==null ? 'prazo n/d' : fmtPrazoEdital(c.dias_restantes, c.status_prazo);
+  const prazo = c.dias_restantes==null ? 'prazo n/d' : fmtPrazoEdital(c.dias_restantes, c.status_prazo, c.encerra_hoje);
   return `<div class="pipeline-card" draggable="true" data-edital-id="${c.edital_id}" data-nivel="${esc(c.nivel||'')}"
       ondragstart="_pipelineDragStart(event,${c.edital_id})" ondragend="_pipelineDragEnd(event)">
     <div class="topo">
@@ -5618,7 +5626,7 @@ function _renderCabecalhoEdital(){
   // chamar mais atenção na página do edital.
   const encerrado = e.status_prazo ? e.status_prazo==='encerrado' : (e.dias_restantes!=null && e.dias_restantes<0);
   const recebendo = e.status_prazo==='recebendo';
-  const prazo = (encerrado||recebendo) ? '' : (e.dias_restantes!=null?fmtPrazoEdital(e.dias_restantes,e.status_prazo):'prazo n/d');
+  const prazo = (encerrado||recebendo) ? '' : (e.dias_restantes!=null?fmtPrazoEdital(e.dias_restantes,e.status_prazo,e.encerra_hoje):'prazo n/d');
   const linkPortal = linkSeguro(e.link);
   const linkPlataforma = linkSeguro(e.link_sistema_origem);
   $('#edital-cabecalho').innerHTML = `<div class="card">
