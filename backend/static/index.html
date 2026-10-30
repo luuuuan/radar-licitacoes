@@ -5010,6 +5010,14 @@ function _verificacaoDocumentosIAHTML(v, desatualizada){
 // última comparação de catálogo renderizada — alimenta o modal "escolher
 // produto" (escolherProdutoIA) sem precisar buscar de novo no servidor.
 let _comparacaoCatalogoItensAtual = {};
+// resultado BRUTO (r.comparacao_catalogo_ia) da última renderização --
+// diferente do mapa acima (que só é reconstruído quando status é "ok",
+// podendo ficar com dado do edital ANTERIOR se o atual ainda não tiver uma
+// comparação "ok"), este é sempre atribuído incondicionalmente no topo de
+// _comparacaoCatalogoIAHTML, então está sempre em sincronia com o edital
+// aberto. Alimenta _itensSemProdutoCompativel (botão "Adicionar produto",
+// pedido do usuário) sem depender do mapa que pode estar desatualizado.
+let _comparacaoCatalogoIAAtual = null;
 
 // Segunda opinião da IA comparando TODO o catálogo do usuário com os itens
 // deste edital — independente do motor de matching por texto (TF-IDF/
@@ -5155,7 +5163,14 @@ function _atualizarLinhaComparacaoIA(numero){
 }
 
 function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
-  if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return '';
+  // atribuição INCONDICIONAL (antes de qualquer "return" abaixo) -- pedido
+  // do usuário: o botão "Adicionar produto" (_botaoAdicionarProdutoHTML)
+  // precisa saber quais itens a IA já achou candidato mesmo quando esta
+  // função devolve vazio/aviso de erro (edital sem comparação "ok" ainda
+  // tem itens incompatíveis que merecem aparecer no botão).
+  _comparacaoCatalogoIAAtual = c;
+  const btnAdicionar = _botaoAdicionarProdutoHTML();
+  if(!c || c.status==='sem_ia' || c.status==='sem_itens' || c.status==='sem_catalogo') return btnAdicionar;
   const _motivoBloq = _motivoBloqueioEdicao();
   const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
   // caixa destacada (fundo vermelho suave, mesmo ícone do indicador de
@@ -5164,7 +5179,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   // ação do usuário (esperar a cota da IA liberar, ou tentar de novo).
   const _iconeAlerta = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;flex-shrink:0"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
   if(c.status==='erro_ia'){
-    return `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
+    return btnAdicionar + `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (${esc(_msgErroIA(c.detalhe))}).</div>`;
   }
   // achado real: edital com muitos itens (57) fazia a IA responder algo
   // que não dava pra interpretar como JSON — a rota não travava (não vira
@@ -5172,18 +5187,18 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
   // simplesmente sumia da tela sem nenhum aviso, e "realizar nova análise"
   // parecia não fazer nada (o usuário reabria e via a mesma tela em branco).
   if(c.status==='resposta_invalida'){
-    return `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (a IA respondeu num formato inesperado).
+    return btnAdicionar + `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.14);color:var(--destructive);font-size:13px;font-weight:600">${_iconeAlerta} Não foi possível comparar seu catálogo com este edital agora (a IA respondeu num formato inesperado).
       <button class="btn ghost" style="margin-left:4px;padding:2px 8px;font-size:11px;font-weight:400" onclick="abaEdital('analise',true)" ${_atribBloq}>Tentar novamente</button></div>`;
   }
-  if(c.status!=='ok' || !c.itens) return '';
+  if(c.status!=='ok' || !c.itens) return btnAdicionar;
   // itens descartados pelo usuário nesta sessão (ver _excluirComparacaoIA) --
   // não persiste no servidor (a comparação em si fica cacheada por lá), só
   // esconde da tela enquanto o usuário está revisando a lista.
   const itensVisiveis = c.itens.filter(it => !_comparacaoCatalogoExcluidos.has(String(it.numero)));
   if(!itensVisiveis.length){
-    return c.itens.length
+    return btnAdicionar + (c.itens.length
       ? '<div class="muted" style="margin-top:10px;font-size:13px">Todos os itens desta comparação foram excluídos da lista.</div>'
-      : `<div style="margin-top:10px;font-size:14px;font-weight:600;color:var(--medio)">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`;
+      : `<div style="margin-top:10px;font-size:14px;font-weight:600;color:var(--medio)">A IA comparou seu catálogo com os itens deste edital e não achou nenhum produto seu compatível.</div>`);
   }
   const aviso = desatualizada ? `<div style="margin:4px 0 8px;font-size:12px;font-weight:600;color:var(--medio)">
     ⚠ Seu catálogo mudou desde esta comparação — o resultado abaixo pode estar desatualizado.
@@ -5233,6 +5248,7 @@ function _comparacaoCatalogoIAHTML(c, desatualizada, lotes){
     corpo = tabelaHTML(itensVisiveis);
   }
   return `<div style="margin-top:16px">
+    ${btnAdicionar}
     ${aviso}
     ${avisoLotes}
     <strong>Comparação do seu catálogo com os itens do edital (IA)</strong>
@@ -5378,6 +5394,118 @@ function _filtrarTrocaProdutoIA(numero){
     <button class="btn ghost" style="padding:3px 10px;font-size:11px;white-space:nowrap" onclick="confirmarCandidatoIA(${numero}, ${p.id})">usar</button>
   </div>`).join('');
 }
+
+// Pedido do usuário: itens do edital sem NENHUM produto compatível -- nem
+// pelo motor de matching por texto (Itens/margem, que só mostra "trocar
+// produto" quando já existe alguma sugestão), nem pela comparação por IA
+// acima (que só lista item quando ELA MESMA acha candidato -- sem
+// candidato, o item nem aparece na tabela). Esses itens ficavam sem
+// NENHUM jeito de associar um produto manualmente. Lê de
+// _comparacaoCatalogoIAAtual (não do mapa _comparacaoCatalogoItensAtual,
+// que só é reconstruído em status "ok" e pode ficar com dado do edital
+// ANTERIOR) -- sempre em sincronia com o edital aberto.
+function _itensSemProdutoCompativel(){
+  const itens = (_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [];
+  const c = _comparacaoCatalogoIAAtual;
+  const comCandidatoIA = new Set(
+    (c && c.status === 'ok' && c.itens ? c.itens : []).map(it => String(it.numero)));
+  return itens.filter(it => !it.compativel && !comCandidatoIA.has(String(it.numero)));
+}
+
+function _botaoAdicionarProdutoHTML(){
+  const pendentes = _itensSemProdutoCompativel();
+  if(!pendentes.length) return '';
+  const _motivoBloq = _motivoBloqueioEdicao();
+  const _atribBloq = _motivoBloq ? `disabled title="${esc(_motivoBloq)}"` : '';
+  return `<div style="margin-bottom:12px">
+    <button class="btn ghost" onclick="abrirModalItensSemProduto()" ${_atribBloq}>+ Adicionar produto (${pendentes.length} ${pendentes.length===1?'item':'itens'} sem produto)</button>
+  </div>`;
+}
+
+// Modal A: lista os itens pendentes, cada um com um botão que abre o
+// Modal B (_selecionarItemSemProduto) pra escolher o produto. Reaberto
+// depois de cada confirmação (_confirmarItemSemProduto) pra já remover o
+// item resolvido da lista -- fecha sozinho (com toast) quando não sobra
+// nenhum pendente.
+function abrirModalItensSemProduto(){
+  const pendentes = _itensSemProdutoCompativel();
+  if(!pendentes.length){
+    fecharModal();
+    toast('Todos os itens já têm um produto associado.', 'ok');
+    return;
+  }
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:480px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Adicionar produto</h2>
+      <p class="muted" style="font-size:12px;margin:4px 0 12px">Itens deste edital sem nenhum produto compatível encontrado — escolha um produto do seu catálogo pra cada um.</p>
+      <div>${pendentes.map(it => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:600">Item ${esc(it.numero??'')}</div>
+          <div class="muted" style="font-size:12px;overflow-wrap:break-word">${esc(it.descricao||'')}</div>
+        </div>
+        <button class="btn ghost" style="white-space:nowrap" onclick="_selecionarItemSemProduto('${esc(it.numero)}')">Selecionar item</button>
+      </div>`).join('')}</div>
+    </div>
+  </div>`;
+}
+
+// Modal B: busca livre no catálogo pra este item -- mesmo padrão de busca
+// de escolherProdutoIA/_filtrarTrocaProdutoIA, só que sem cards de
+// candidato nenhum (por definição, este item não tem nenhum) e voltando
+// pro Modal A em vez de fechar tudo, tanto no botão "Voltar" quanto depois
+// de confirmar (ver _confirmarItemSemProduto).
+function _selecionarItemSemProduto(numero){
+  const it = ((_paginaEditalDetalhe && _paginaEditalDetalhe.itens) || [])
+    .find(x => String(x.numero) === String(numero)) || {};
+  const doEdital = `<p style="margin:8px 0 0;line-height:1.5;font-size:14px">${esc(it.descricao||'')}</p>
+    ${_paresHTML('Pedido no edital', [
+      ['Valor do órgão (unit.)', it.valor_orgao!=null?fmtMoeda(it.valor_orgao):null],
+      ['Quantidade pedida', it.quantidade],
+      ['Unidade', it.unidade_medida],
+    ])}`;
+  $('#modal-mount').innerHTML = `<div class="modal" onclick="if(event.target===this)fecharModal()">
+    <div class="modal-card" style="max-width:480px">
+      <button class="close-x" onclick="fecharModal()">×</button>
+      <h2>Selecionar item — item ${esc(it.numero??'')}</h2>
+      ${doEdital}
+      <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+        <label style="font-size:12px;font-weight:600">Busque um produto no seu catálogo</label>
+        <input type="text" id="sem-prod-busca" placeholder="Digite parte da descrição..." style="width:100%;margin-top:6px" oninput="_filtrarSelecaoItemSemProduto('${esc(numero)}')">
+        <div id="sem-prod-lista" style="margin-top:8px;max-height:220px;overflow-y:auto"></div>
+      </div>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end">
+        <button class="btn ghost discreto" onclick="abrirModalItensSemProduto()">Voltar</button>
+      </div>
+    </div>
+  </div>`;
+  $('#sem-prod-busca').focus();
+  (async () => {
+    if(!_produtos.length){ await loadProdutos(); }
+    _filtrarSelecaoItemSemProduto(numero);
+  })();
+}
+function _filtrarSelecaoItemSemProduto(numero){
+  const lista = $('#sem-prod-lista');
+  const campo = $('#sem-prod-busca');
+  if(!lista || !campo) return;
+  const termo = campo.value.trim();
+  if(!termo){ lista.innerHTML = '<p class="muted" style="font-size:11px">Digite para buscar no seu catálogo.</p>'; return; }
+  const achados = buscaFiltrarProdutos(_produtos||[], termo).slice(0, 25);   // catálogo pode ser grande -- não trava a tela
+  if(!achados.length){ lista.innerHTML = '<p class="muted" style="font-size:11px">Nenhum produto encontrado.</p>'; return; }
+  lista.innerHTML = achados.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+    <span style="font-size:12px">${esc(p.descricao)}</span>
+    <button class="btn ghost" style="padding:3px 10px;font-size:11px;white-space:nowrap" onclick="_confirmarItemSemProduto('${esc(numero)}', ${p.id})">usar</button>
+  </div>`).join('');
+}
+// Confirma pelo MESMO endpoint/fluxo de adicionarItemIaNaCotacao (POST
+// /confirmar + recarrega _paginaEditalDetalhe) -- depois volta pro Modal A
+// (não fecha tudo), já com o item resolvido removido da lista.
+async function _confirmarItemSemProduto(numero, produtoId){
+  await adicionarItemIaNaCotacao(numero, produtoId, null);
+  abrirModalItensSemProduto();
+}
+
 // Mesmo padrão do modal "Ver detalhes" da aba Itens/margem (abrirDetalheItem),
 // mas alimentado pelos dados da COMPARAÇÃO POR IA (_comparacaoCatalogoItensAtual),
 // não pelo motor de matching determinístico — não dá pra reaproveitar
