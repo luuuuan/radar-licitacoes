@@ -1435,98 +1435,130 @@ async def importar_produtos(arquivo: UploadFile = File(...),
             if d:
                 mapa_fone_forn[d] = f
 
+    # Achado real (usuário reportou erro ao reimportar o próprio catálogo
+    # exportado, ~3600 linhas, contra o Postgres de produção): 2 causas
+    # somadas, a mesma classe de problema do achado de commit-por-linha
+    # logo abaixo (round-trip de rede demais, catálogo grande o bastante
+    # pra dar timeout antes de terminar).
+    # (1) A busca de "existente" (por id OU por descrição) era 1 SELECT por
+    # linha -- carrega TODO o catálogo do usuário de uma vez (1 SELECT só)
+    # e casa em memória. Os dicts são atualizados conforme o loop cria/
+    # atualiza produtos, pra uma 2ª linha com a MESMA descrição nova
+    # (duplicada dentro do próprio arquivo) continuar achando a 1ª já
+    # criada nesta mesma importação, igual o SELECT por linha achava antes.
+    # (2) Mesmo com (1), o db.commit() a cada _LOTE_COMMIT linhas (ver
+    # abaixo) EXPIRA todo objeto da sessão por padrão (expire_on_commit) --
+    # tocar de novo num produto do dict (setattr, ou só ler .descricao) nos
+    # lotes seguintes reintroduzia o MESMO SELECT por linha por outro
+    # caminho (recarga automática do objeto expirado). Mesmo achado/mesma
+    # correção já usada em service.py:_gerar_matches_usuario -- desliga
+    # expire_on_commit só pela duração deste loop (nunca lemos um produto
+    # fora dos dicts aqui, sem risco de servir dado desatualizado).
+    produtos_por_id: dict[int, Produto] = {}
+    produtos_por_desc: dict[str, Produto] = {}
+    for p in db.execute(select(Produto).where(Produto.usuario_id == user.id)).scalars():
+        produtos_por_id[p.id] = p
+        if p.descricao:
+            produtos_por_desc[p.descricao.lower()] = p
+
     criados = atualizados = ignorados = 0
     erros = []
-    for n, linha in enumerate(linhas, start=2):
-        if linha is None or all(c is None or str(c).strip() == "" for c in linha):
-            continue
-        dados = {}
-        for i, campo in mapa.items():
-            val = linha[i] if i < len(linha) else None
-            if campo in _CAMPOS_NUM:
-                dados[campo] = _num_br(val)
-            else:
-                dados[campo] = (str(val).strip() if val not in (None, "") else None)
-        desc = dados.get("descricao")
-        if not desc:
-            ignorados += 1
-            continue
-        fone_forn = dados.pop("_fornecedor_telefone", None)
-        if fone_forn:
-            forn = mapa_fone_forn.get(re.sub(r"\D", "", fone_forn))
-            if forn:
-                dados["fornecedor_id"] = forn.id
-                if not dados.get("fornecedor_nome"):
-                    dados["fornecedor_nome"] = forn.nome
-                if not dados.get("fornecedor_contato"):
-                    dados["fornecedor_contato"] = forn.whatsapp or forn.telefone or forn.email
-                if not dados.get("fornecedor_site"):
-                    dados["fornecedor_site"] = forn.site
-            else:
-                erros.append(f"linha {n}: nenhum fornecedor cadastrado com o telefone '{fone_forn}'")
-        # id do produto (coluna "id"/"produto_id", presente quando a planilha
-        # veio de /api/produtos/exportar.xlsx): casa por ID quando dá, senão
-        # cai pra descrição -- achado real: casar só por descrição (case-
-        # insensitive) fazia reimportar o catálogo exportado, depois de
-        # corrigir/renomear uma descrição na planilha, CRIAR um produto novo
-        # em vez de atualizar o original (a descrição antiga não batia mais
-        # com nada), duplicando o item no catálogo em vez de corrigi-lo.
-        pid_raw = dados.pop("_produto_id", None)
-        produto_id = None
-        if pid_raw not in (None, ""):
-            try:
-                produto_id = int(float(pid_raw))
-            except (TypeError, ValueError):
-                erros.append(f"linha {n}: id de produto '{pid_raw}' inválido, ignorada")
-                ignorados += 1
+    _expire_on_commit_original = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        for n, linha in enumerate(linhas, start=2):
+            if linha is None or all(c is None or str(c).strip() == "" for c in linha):
                 continue
-        if produto_id is not None:
-            existente = db.execute(
-                select(Produto).where(Produto.usuario_id == user.id)
-                .where(Produto.id == produto_id)
-            ).scalars().first()
-            if not existente:
-                # id não encontrado (produto apagado nesse meio-tempo, ou id de
-                # outro usuário) -- não cai pra descrição: criar um produto novo
-                # "roubando" o id de outra linha seria mais surpreendente que
-                # simplesmente avisar e pular.
-                erros.append(f"linha {n}: id de produto '{produto_id}' não encontrado no seu catálogo")
-                ignorados += 1
-                continue
-        else:
-            # sem id na planilha (import externo, ex.: lista de fornecedor) —
-            # comportamento de sempre: casa pela descrição já cadastrada.
-            existente = db.execute(
-                select(Produto).where(Produto.usuario_id == user.id)
-                .where(func.lower(Produto.descricao) == desc.lower())
-            ).scalars().first()
-        try:
-            # Achado real (planilha de catálogo externo com ~3600 linhas,
-            # banco em produção): um commit por linha fazia a importação
-            # demorar tempo suficiente pra dar timeout antes de terminar --
-            # cada commit é um round-trip de rede + fsync no Postgres, ao
-            # contrário do SQLite local onde isso passa despercebido. Troca
-            # pra SAVEPOINT (begin_nested): ainda isola o erro de uma linha
-            # (rollback só desfaz o que essa linha tentou, sem perder as
-            # anteriores já flushadas), mas sem pagar o commit de verdade a
-            # cada iteração -- o commit de fato só acontece a cada
-            # _LOTE_COMMIT linhas (e no final).
-            with db.begin_nested():
-                if existente:
-                    for campo, valor in dados.items():
-                        if valor is not None:       # só sobrescreve o que veio preenchido
-                            setattr(existente, campo, valor)
+            dados = {}
+            for i, campo in mapa.items():
+                val = linha[i] if i < len(linha) else None
+                if campo in _CAMPOS_NUM:
+                    dados[campo] = _num_br(val)
                 else:
-                    db.add(Produto(**dados, usuario_id=user.id))
-                db.flush()
-            if existente:
-                atualizados += 1
+                    dados[campo] = (str(val).strip() if val not in (None, "") else None)
+            desc = dados.get("descricao")
+            if not desc:
+                ignorados += 1
+                continue
+            fone_forn = dados.pop("_fornecedor_telefone", None)
+            if fone_forn:
+                forn = mapa_fone_forn.get(re.sub(r"\D", "", fone_forn))
+                if forn:
+                    dados["fornecedor_id"] = forn.id
+                    if not dados.get("fornecedor_nome"):
+                        dados["fornecedor_nome"] = forn.nome
+                    if not dados.get("fornecedor_contato"):
+                        dados["fornecedor_contato"] = forn.whatsapp or forn.telefone or forn.email
+                    if not dados.get("fornecedor_site"):
+                        dados["fornecedor_site"] = forn.site
+                else:
+                    erros.append(f"linha {n}: nenhum fornecedor cadastrado com o telefone '{fone_forn}'")
+            # id do produto (coluna "id"/"produto_id", presente quando a planilha
+            # veio de /api/produtos/exportar.xlsx): casa por ID quando dá, senão
+            # cai pra descrição -- achado real: casar só por descrição (case-
+            # insensitive) fazia reimportar o catálogo exportado, depois de
+            # corrigir/renomear uma descrição na planilha, CRIAR um produto novo
+            # em vez de atualizar o original (a descrição antiga não batia mais
+            # com nada), duplicando o item no catálogo em vez de corrigi-lo.
+            pid_raw = dados.pop("_produto_id", None)
+            produto_id = None
+            if pid_raw not in (None, ""):
+                try:
+                    produto_id = int(float(pid_raw))
+                except (TypeError, ValueError):
+                    erros.append(f"linha {n}: id de produto '{pid_raw}' inválido, ignorada")
+                    ignorados += 1
+                    continue
+            if produto_id is not None:
+                existente = produtos_por_id.get(produto_id)
+                if not existente:
+                    # id não encontrado (produto apagado nesse meio-tempo, ou id de
+                    # outro usuário) -- não cai pra descrição: criar um produto novo
+                    # "roubando" o id de outra linha seria mais surpreendente que
+                    # simplesmente avisar e pular.
+                    erros.append(f"linha {n}: id de produto '{produto_id}' não encontrado no seu catálogo")
+                    ignorados += 1
+                    continue
             else:
-                criados += 1
-        except Exception as e:
-            erros.append(f"linha {n}: {e}")
-        if (n - 1) % _LOTE_COMMIT_IMPORT == 0:
-            db.commit()
+                # sem id na planilha (import externo, ex.: lista de fornecedor) —
+                # comportamento de sempre: casa pela descrição já cadastrada.
+                existente = produtos_por_desc.get(desc.lower())
+            try:
+                # Achado real (planilha de catálogo externo com ~3600 linhas,
+                # banco em produção): um commit por linha fazia a importação
+                # demorar tempo suficiente pra dar timeout antes de terminar --
+                # cada commit é um round-trip de rede + fsync no Postgres, ao
+                # contrário do SQLite local onde isso passa despercebido. Troca
+                # pra SAVEPOINT (begin_nested): ainda isola o erro de uma linha
+                # (rollback só desfaz o que essa linha tentou, sem perder as
+                # anteriores já flushadas), mas sem pagar o commit de verdade a
+                # cada iteração -- o commit de fato só acontece a cada
+                # _LOTE_COMMIT linhas (e no final).
+                with db.begin_nested():
+                    if existente:
+                        for campo, valor in dados.items():
+                            if valor is not None:       # só sobrescreve o que veio preenchido
+                                setattr(existente, campo, valor)
+                        if existente.descricao:
+                            produtos_por_desc[existente.descricao.lower()] = existente
+                        db.flush()
+                    else:
+                        novo = Produto(**dados, usuario_id=user.id)
+                        db.add(novo)
+                        db.flush()   # preenche novo.id, pra registrar nos dicts acima
+                        produtos_por_id[novo.id] = novo
+                        if novo.descricao:
+                            produtos_por_desc[novo.descricao.lower()] = novo
+                if existente:
+                    atualizados += 1
+                else:
+                    criados += 1
+            except Exception as e:
+                erros.append(f"linha {n}: {e}")
+            if (n - 1) % _LOTE_COMMIT_IMPORT == 0:
+                db.commit()
+    finally:
+        db.expire_on_commit = _expire_on_commit_original
     if criados or atualizados:
         user.versao_catalogo += 1
     db.commit()
