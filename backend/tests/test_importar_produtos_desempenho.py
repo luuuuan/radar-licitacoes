@@ -145,11 +145,14 @@ def test_expire_on_commit_e_restaurado_depois_da_importacao():
 
 
 def test_duas_linhas_com_a_mesma_descricao_nova_nao_duplicam_produto():
-    """Achado real preservado pela correção: antes, a 2ª linha achava a
-    1ª (recém-criada nesta mesma importação) via SELECT, porque o flush já
-    tinha tornado ela visível. Trocar o SELECT por um dict em memória
-    construído ANTES do loop teria perdido isso -- o dict precisa ser
-    atualizado a cada criação dentro do próprio loop pra continuar casando."""
+    """Achado real (ajustado quando a importação passou a processar em
+    lote, não mais linha a linha): a 2ª linha não acha a 1ª em
+    produtos_por_desc -- esse dict só é atualizado depois que o LOTE é
+    processado (ver _processar_lote), e as duas estão no MESMO lote ainda
+    não processado. Em vez de criar produto duplicado, mescla os dados da
+    2ª linha na 1ª (que ainda nem foi criada de verdade) -- só sobrescreve
+    o que veio preenchido, mesma regra de sempre. Resultado: 1 produto só,
+    com os valores da ÚLTIMA linha (5,00/10,00), nunca dois."""
     db = _sessao()[1]
     u = _usuario(db)
 
@@ -160,6 +163,8 @@ def test_duas_linhas_com_a_mesma_descricao_nova_nao_duplicam_produto():
     resultado = asyncio.run(importar_produtos(arquivo=arquivo, user=u, db=db))
 
     assert resultado["criados"] == 1
-    assert resultado["atualizados"] == 1   # a 2ª linha achou a 1ª e atualizou, não duplicou
+    assert resultado["atualizados"] == 0   # mesclada na 1ª, não é uma 2ª linha separada
+    produto = db.execute(select(Produto).where(Produto.usuario_id == u.id)).scalar_one()
+    assert produto.preco_custo == 5.0   # valor da última linha venceu, mesma regra de sempre
     total = db.scalar(select(func.count(Produto.id)).where(Produto.usuario_id == u.id))
     assert total == 1

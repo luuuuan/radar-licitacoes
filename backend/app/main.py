@@ -1463,6 +1463,90 @@ async def importar_produtos(arquivo: UploadFile = File(...),
 
     criados = atualizados = ignorados = 0
     erros = []
+
+    def _processar_lote(lote_linhas: list[tuple[int, dict, Produto | None]]) -> None:
+        """Achado real (usuário reportou erro reimportando o próprio
+        catálogo exportado, ~3600 linhas): mesmo depois de eliminar o
+        SELECT por linha (ver produtos_por_id/produtos_por_desc acima), o
+        SAVEPOINT (begin_nested) + flush POR LINHA ainda eram 2 round-trips
+        de rede por linha contra o Postgres de produção -- confirmado
+        testando a importação real no site, timeout (HTTP 524, Cloudflare)
+        depois de ~127s pras 3600 linhas.
+
+        Caminho rápido (comum, sem erro nenhum): aplica a mutação do LOTE
+        inteiro (setattr/criação) e só 1 flush -- bem menos round-trips que
+        1 savepoint+flush por linha. Caminho lento (só quando o lote
+        falha): refaz CADA linha do zero, mutação+flush DENTRO da própria
+        savepoint -- achado real (testado isoladamente): só rollback de uma
+        savepoint cujo escopo NUNCA viu a mutação (ex.: mutação aplicada
+        ANTES de abrir a savepoint) não desfaz o objeto pendente -- ele
+        continua "sujo" na sessão e envenena toda tentativa de flush
+        seguinte, mesmo de OUTRAS linhas boas. Por isso a mutação só
+        acontece aqui dentro (nunca fora, nem no loop principal) -- ver
+        _lote_tem_descricao_nova_pendente no loop principal pra como o
+        caso "2 linhas com a mesma descrição NOVA no mesmo lote" é tratado
+        sem precisar mutar o ORM antes da hora."""
+        nonlocal criados, atualizados
+        novos_pendentes: list[Produto] = []
+        try:
+            with db.begin_nested():
+                for _n, dados, existente in lote_linhas:
+                    if existente:
+                        for campo, valor in dados.items():
+                            if valor is not None:       # só sobrescreve o que veio preenchido
+                                setattr(existente, campo, valor)
+                        if existente.descricao:
+                            produtos_por_desc[existente.descricao.lower()] = existente
+                    else:
+                        novo = Produto(**dados, usuario_id=user.id)
+                        db.add(novo)
+                        novos_pendentes.append(novo)
+                        if novo.descricao:
+                            produtos_por_desc[novo.descricao.lower()] = novo
+                db.flush()
+        except Exception:
+            for n, dados, existente in lote_linhas:
+                try:
+                    with db.begin_nested():
+                        if existente:
+                            for campo, valor in dados.items():
+                                if valor is not None:
+                                    setattr(existente, campo, valor)
+                            if existente.descricao:
+                                produtos_por_desc[existente.descricao.lower()] = existente
+                            db.flush()
+                        else:
+                            novo = Produto(**dados, usuario_id=user.id)
+                            db.add(novo)
+                            db.flush()   # preenche novo.id, pra registrar no dict abaixo
+                            produtos_por_id[novo.id] = novo
+                            if novo.descricao:
+                                produtos_por_desc[novo.descricao.lower()] = novo
+                    if existente:
+                        atualizados += 1
+                    else:
+                        criados += 1
+                except Exception as e:
+                    erros.append(f"linha {n}: {e}")
+            return
+        for _n, _dados, existente in lote_linhas:
+            if existente:
+                atualizados += 1
+            else:
+                criados += 1
+        for novo in novos_pendentes:
+            produtos_por_id[novo.id] = novo
+
+    lote: list[tuple[int, dict, Produto | None]] = []
+    # descrição NOVA (lower) -> índice em `lote` da 1ª linha deste lote que
+    # vai criar essa descrição -- achado real (usuário testou a 1ª versão
+    # desta correção): uma 2ª linha com a MESMA descrição nova dentro do
+    # MESMO lote (ainda não processado/flushado) não acha nada em
+    # produtos_por_desc (só é preenchido depois que o lote é processado) --
+    # sem isso, as duas criavam produto duplicado. Mescla os dados da 2ª na
+    # 1ª (ainda não criada de verdade) em vez de duplicar -- não precisa
+    # mutar o ORM pra isso, só o dict puro abaixo.
+    criacoes_pendentes_no_lote: dict[str, int] = {}
     _expire_on_commit_original = db.expire_on_commit
     db.expire_on_commit = False
     try:
@@ -1523,40 +1607,25 @@ async def importar_produtos(arquivo: UploadFile = File(...),
                 # sem id na planilha (import externo, ex.: lista de fornecedor) —
                 # comportamento de sempre: casa pela descrição já cadastrada.
                 existente = produtos_por_desc.get(desc.lower())
-            try:
-                # Achado real (planilha de catálogo externo com ~3600 linhas,
-                # banco em produção): um commit por linha fazia a importação
-                # demorar tempo suficiente pra dar timeout antes de terminar --
-                # cada commit é um round-trip de rede + fsync no Postgres, ao
-                # contrário do SQLite local onde isso passa despercebido. Troca
-                # pra SAVEPOINT (begin_nested): ainda isola o erro de uma linha
-                # (rollback só desfaz o que essa linha tentou, sem perder as
-                # anteriores já flushadas), mas sem pagar o commit de verdade a
-                # cada iteração -- o commit de fato só acontece a cada
-                # _LOTE_COMMIT linhas (e no final).
-                with db.begin_nested():
-                    if existente:
-                        for campo, valor in dados.items():
-                            if valor is not None:       # só sobrescreve o que veio preenchido
-                                setattr(existente, campo, valor)
-                        if existente.descricao:
-                            produtos_por_desc[existente.descricao.lower()] = existente
-                        db.flush()
-                    else:
-                        novo = Produto(**dados, usuario_id=user.id)
-                        db.add(novo)
-                        db.flush()   # preenche novo.id, pra registrar nos dicts acima
-                        produtos_por_id[novo.id] = novo
-                        if novo.descricao:
-                            produtos_por_desc[novo.descricao.lower()] = novo
-                if existente:
-                    atualizados += 1
-                else:
-                    criados += 1
-            except Exception as e:
-                erros.append(f"linha {n}: {e}")
-            if (n - 1) % _LOTE_COMMIT_IMPORT == 0:
+                if existente is None:
+                    idx_pendente = criacoes_pendentes_no_lote.get(desc.lower())
+                    if idx_pendente is not None:
+                        # 2ª linha com a MESMA descrição nova, dentro do
+                        # MESMO lote ainda não processado -- mescla nos
+                        # dados da 1ª (só sobrescreve o que veio preenchido,
+                        # mesma regra de sempre) em vez de criar duplicado.
+                        _n0, dados0, _existente0 = lote[idx_pendente]
+                        dados0.update({k: v for k, v in dados.items() if v is not None})
+                        continue
+                    criacoes_pendentes_no_lote[desc.lower()] = len(lote)
+            lote.append((n, dados, existente))
+            if len(lote) >= _LOTE_COMMIT_IMPORT:
+                _processar_lote(lote)
+                lote = []
+                criacoes_pendentes_no_lote = {}
                 db.commit()
+        if lote:
+            _processar_lote(lote)
     finally:
         db.expire_on_commit = _expire_on_commit_original
     if criados or atualizados:
