@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .database import get_session, init_db, SessionLocal
-from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco, ItemEmbalagemOverride, NotificacaoDispensada
+from .models import Produto, Edital, ItemEdital, Match, RegraExclusao, LogColeta, Documento, Proposta, Fornecedor, AnaliseIAExtras, CotacaoPreco, ItemEmbalagemOverride, NotificacaoDispensada, AnexoPipeline
 from .service import processar_coleta, podar_editais_orfaos
 from .catalogo import catmat
 from . import busca as _busca
@@ -2689,6 +2689,22 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
         .where(Match.status.in_(_STATUS_ORDEM_PIPELINE))
         .where(Match.oculto_pipeline.isnot(True))
     ).all()
+    # contagem de anexos (ver AnexoPipeline) carregada de uma vez pra todos
+    # os editais desta tela -- evita 1 SELECT por card (mesmo achado de N+1
+    # já corrigido em outras listagens deste arquivo). Só a CONTAGEM, não a
+    # lista inteira -- pedido do usuário: o card mostra só um botão "Ver
+    # anexos (N)", a lista de verdade (com baixar) fica no modal, carregada
+    # à parte quando o usuário realmente abre (GET .../pipeline/anexos).
+    edital_ids = [ed.id for _m, ed in linhas]
+    anexos_count_por_edital: dict[int, int] = {}
+    if edital_ids:
+        for edital_id_, cnt in db.execute(
+            select(AnexoPipeline.edital_id, func.count(AnexoPipeline.id))
+            .where(AnexoPipeline.usuario_id == user.id)
+            .where(AnexoPipeline.edital_id.in_(edital_ids))
+            .group_by(AnexoPipeline.edital_id)
+        ).all():
+            anexos_count_por_edital[edital_id_] = cnt
     colunas: dict[str, list] = {s: [] for s in _STATUS_ORDEM_PIPELINE}
     for match, ed in linhas:
         colunas[match.status].append({
@@ -2699,10 +2715,104 @@ def pipeline(user: Usuario = Depends(_auth.get_current_user), db: Session = Depe
             "status_prazo": _status_prazo_edital(ed),
             "encerra_hoje": _encerra_hoje_edital(ed),
             "nivel": match.nivel, "score": match.score, "link": ed.link,
+            "anexos_count": anexos_count_por_edital.get(ed.id, 0),
         })
     for itens in colunas.values():
         itens.sort(key=lambda c: (c["dias_restantes"] is None, c["dias_restantes"] or 0))
     return {"colunas": colunas, "ordem": _STATUS_ORDEM_PIPELINE}
+
+
+_TIPOS_UPLOAD_ANEXO_PIPELINE_PERMITIDOS = {
+    "application/pdf", "image/jpeg", "image/png", "image/webp",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",        # .xlsx
+}
+_TAMANHO_MAX_UPLOAD_ANEXO_PIPELINE = 15 * 1024 * 1024  # 15 MB, mesmo teto do Cofre de Documentos
+
+
+async def _ler_upload_anexo_pipeline(arquivo: UploadFile) -> bytes:
+    if not arquivo.filename:
+        raise HTTPException(400, "Envie um arquivo.")
+    if arquivo.content_type not in _TIPOS_UPLOAD_ANEXO_PIPELINE_PERMITIDOS:
+        raise HTTPException(400, "Envie um PDF, imagem (jpg/png/webp) ou Word/Excel (.docx/.xlsx).")
+    return await _ler_upload_limitado(
+        arquivo, _TAMANHO_MAX_UPLOAD_ANEXO_PIPELINE, "Arquivo muito grande (máximo 15 MB).")
+
+
+def _anexo_pipeline_json(a: AnexoPipeline) -> dict:
+    return {"id": a.id, "nome_original": a.nome_original, "tamanho": a.tamanho,
+            "criado_em": a.criado_em.isoformat()}
+
+
+@app.get("/api/editais/{edital_id}/pipeline/anexos")
+def listar_anexos_pipeline(edital_id: int, user: Usuario = Depends(_auth.get_current_user),
+                           db: Session = Depends(get_session)):
+    """Lista os anexos deste edital pro modal "Ver anexos" (pedido do
+    usuário) -- vários por edital, mais antigo primeiro (ordem de quem foi
+    anexando)."""
+    anexos = db.execute(
+        select(AnexoPipeline).where(AnexoPipeline.edital_id == edital_id)
+        .where(AnexoPipeline.usuario_id == user.id)
+        .order_by(AnexoPipeline.criado_em.asc())).scalars().all()
+    return {"anexos": [_anexo_pipeline_json(a) for a in anexos]}
+
+
+@app.post("/api/editais/{edital_id}/pipeline/anexo")
+async def anexar_arquivo_pipeline(edital_id: int, arquivo: UploadFile = File(...),
+                                  user: Usuario = Depends(_auth.get_current_user),
+                                  db: Session = Depends(get_session)):
+    """Anexa um documento ao card do Pipeline deste edital -- pedido do
+    usuário. Diferente do Cofre de Documentos (documentos de habilitação
+    da EMPRESA, reusados em todo edital): este é por EDITAL (proposta
+    assinada, recibo de entrega, certidão pedida na hora...), só aparece
+    naquele card. Vários anexos por edital -- cada upload ADICIONA um novo,
+    não substitui (pedido do usuário: modal "Ver anexos" lista todos)."""
+    ed = db.get(Edital, edital_id)
+    if not ed:
+        raise HTTPException(404, "Edital não encontrado")
+    conteudo = await _ler_upload_anexo_pipeline(arquivo)
+    a = AnexoPipeline(usuario_id=user.id, edital_id=edital_id,
+                      nome_original=arquivo.filename, content_type=arquivo.content_type,
+                      tamanho=len(conteudo),
+                      arquivo_cifrado=_auth.cifrar(base64.b64encode(conteudo).decode("ascii")))
+    db.add(a)
+    db.commit()
+    return _anexo_pipeline_json(a)
+
+
+def _anexo_pipeline_do_usuario(db: Session, edital_id: int, anexo_id: int, user: Usuario) -> AnexoPipeline:
+    a = db.get(AnexoPipeline, anexo_id)
+    if not a or a.usuario_id != user.id or a.edital_id != edital_id:
+        raise HTTPException(404, "Anexo não encontrado")
+    return a
+
+
+@app.get("/api/editais/{edital_id}/pipeline/anexo/{anexo_id}/arquivo")
+def baixar_anexo_pipeline(edital_id: int, anexo_id: int, user: Usuario = Depends(_auth.get_current_user),
+                         db: Session = Depends(get_session)):
+    a = _anexo_pipeline_do_usuario(db, edital_id, anexo_id, user)   # 404 se não for do usuário logado
+    decifrado = _auth.decifrar(a.arquivo_cifrado)
+    if decifrado is None:
+        # mesmo achado real já corrigido pro Cofre de Documentos (auditoria
+        # de segurança): decifrar devolvendo None não pode virar TypeError
+        # sem tratamento (base64.b64decode(None)).
+        raise HTTPException(
+            500, "Não foi possível ler este anexo agora (falha ao decifrar). "
+                 "Fale com o suporte se isso persistir.")
+    conteudo = base64.b64decode(decifrado)
+    return Response(content=conteudo, media_type=a.content_type or "application/octet-stream",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{_nome_arquivo_seguro(a.nome_original)}"'})
+
+
+@app.delete("/api/editais/{edital_id}/pipeline/anexo/{anexo_id}")
+def remover_anexo_pipeline(edital_id: int, anexo_id: int, user: Usuario = Depends(_auth.get_current_user),
+                          db: Session = Depends(get_session)):
+    a = db.get(AnexoPipeline, anexo_id)
+    if a and a.usuario_id == user.id and a.edital_id == edital_id:
+        db.delete(a)
+        db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/editais/{edital_id}/interacao")

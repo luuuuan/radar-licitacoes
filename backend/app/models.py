@@ -547,3 +547,26 @@ class Proposta(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow)
+
+
+class AnexoPipeline(Base):
+    """Documento anexado direto no card do Pipeline (proposta assinada,
+    recibo de entrega, certidão pedida na hora...) -- pedido do usuário.
+    Diferente do Cofre de Documentos (Documento, acima): aquele é por
+    EMPRESA (documentos de habilitação, reusados em todo edital que o
+    usuário participa); este é por EDITAL, só serve pra aquele card
+    específico. Vários anexos por (usuário, edital) -- o card tem um botão
+    "Ver anexos" que abre um modal listando todos (pedido do usuário; v1
+    deixava só 1, substituindo o anterior a cada upload). Mesmo esquema de
+    cifragem (Fernet, ver auth.cifrar) e mesmo raciocínio de v1 do Cofre
+    (bytes em base64 direto no banco -- volume pequeno por edital)."""
+    __tablename__ = "anexos_pipeline"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    edital_id: Mapped[int] = mapped_column(ForeignKey("editais.id"), index=True)
+    nome_original: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100))
+    tamanho: Mapped[int] = mapped_column(Integer)
+    arquivo_cifrado: Mapped[str] = mapped_column(Text)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
