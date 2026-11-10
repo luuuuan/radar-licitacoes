@@ -8,7 +8,7 @@ real: a consulta nunca filtrou por prazo -- editais já encerrados saíam
 misturados com os ainda ativos na mesma planilha. Rode com:
 cd backend && pytest
 """
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -414,3 +414,93 @@ def test_export_xlsx_nao_quebra_com_caractere_de_controle_ilegal_no_objeto():
 
     assert "\x1f" not in objeto_exportado
     assert "apólices" in objeto_exportado and "na modalidade financeira" in objeto_exportado
+
+
+# --------- filtro por fim do recebimento de propostas (pedido do usuário) --------- #
+
+def test_export_csv_filtra_por_data_fim_de():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-fecha-perto", orgao="Orgao Fecha Perto",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=2))
+    _edital_com_match(db, u, "ed-fecha-longe", orgao="Orgao Fecha Longe",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
+
+    corte = (hoje + timedelta(days=10)).date()
+    resp = export_csv(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Fecha Perto" not in conteudo
+    assert "Orgao Fecha Longe" in conteudo
+
+
+def test_export_csv_filtra_por_data_fim_ate():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-fecha-perto", orgao="Orgao Fecha Perto",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=2))
+    _edital_com_match(db, u, "ed-fecha-longe", orgao="Orgao Fecha Longe",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
+
+    corte = (hoje + timedelta(days=10)).date()
+    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=corte, user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Fecha Perto" in conteudo
+    assert "Orgao Fecha Longe" not in conteudo
+
+
+def test_export_csv_data_fim_ate_inclui_o_dia_inteiro():
+    """data_encerramento guarda hora -- "<= data_fim_ate" (meia-noite)
+    excluiria um edital que fecha no FIM do próprio dia data_fim_ate (ex.:
+    23h59). Mesmo ajuste de "dia seguinte" já usado no filtro da aba
+    Editais (_condicoes_edital_comuns)."""
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    fecha_as_23h = hoje.replace(hour=23, minute=0, second=0, microsecond=0) + timedelta(days=5)
+    _edital_com_match(db, u, "ed-fecha-tarde", orgao="Orgao Fecha Tarde",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=fecha_as_23h)
+
+    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=fecha_as_23h.date(), user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Fecha Tarde" in conteudo
+
+
+def test_export_csv_sem_filtro_de_data_exporta_tudo_como_antes():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed1", orgao="Orgao Qualquer",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=100))
+
+    resp = export_csv(nivel=None, itens=None, user=u, db=db)   # sem passar data_fim_de/ate
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao Qualquer" in conteudo
+
+
+def test_export_xlsx_tambem_respeita_filtro_de_data():
+    import openpyxl
+    import io as _io
+
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-fecha-perto", orgao="Orgao Fecha Perto",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=2))
+    _edital_com_match(db, u, "ed-fecha-longe", orgao="Orgao Fecha Longe",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
+
+    corte = (hoje + timedelta(days=10)).date()
+    resp = export_xlsx(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, user=u, db=db)
+    conteudo = _ler_bytes(resp)
+    wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
+    ws = wb.active
+    orgaos = {row[3].value for row in ws.iter_rows(min_row=2)}
+
+    assert "Orgao Fecha Longe" in orgaos
+    assert "Orgao Fecha Perto" not in orgaos

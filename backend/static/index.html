@@ -3474,10 +3474,17 @@ function abrirModalExportarCsv(){
         <input type="checkbox" id="exp-csv-coluna" onchange="if(this.checked) $('#exp-csv-linha').checked=false">
         Numa coluna só
       </label>
-      <label class="chk" style="display:flex;align-items:center;gap:8px;padding:4px 0">
+      <label class="chk" style="display:flex;align-items:center;gap:8px;padding:4px 0 12px">
         <input type="checkbox" id="exp-csv-linha" onchange="if(this.checked) $('#exp-csv-coluna').checked=false">
         Uma linha por item
       </label>
+      <label style="font-size:12px;font-weight:600">Fim do recebimento de propostas
+        <span class="ajuda" onclick="toggleAjuda(this,event)">?<span class="bolha">Filtra pela data em que a janela de propostas fecha no PNCP -- deixe em branco pra exportar sem filtrar por essa data.</span></span>
+      </label>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input type="date" id="exp-csv-data-fim-de" style="width:50%">
+        <input type="date" id="exp-csv-data-fim-ate" style="width:50%">
+      </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn ghost discreto" onclick="fecharModal()">Cancelar</button>
         <button class="btn" onclick="_exportarCsvEditais()">Exportar</button>
@@ -3490,9 +3497,13 @@ function _exportarCsvEditais(){
   const coluna = $('#exp-csv-coluna').checked;
   const linha = $('#exp-csv-linha').checked;
   const formato = document.querySelector('input[name="exp-formato"]:checked').value;
+  const dataFimDe = $('#exp-csv-data-fim-de').value;
+  const dataFimAte = $('#exp-csv-data-fim-ate').value;
   const qs = [];
   if(coluna) qs.push('itens=coluna');
   else if(linha) qs.push('itens=linha');
+  if(dataFimDe) qs.push('data_fim_de='+dataFimDe);
+  if(dataFimAte) qs.push('data_fim_ate='+dataFimAte);
   window.location.href = `/api/export.${formato}` + (qs.length ? '?'+qs.join('&') : '');
   fecharModal();
 }
