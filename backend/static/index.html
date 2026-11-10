@@ -1001,12 +1001,17 @@
   .filtros-lateral .chk{display:flex;gap:6px;align-items:center;color:var(--muted)}
   .filtros-lateral .chk input{width:auto;flex-shrink:0;margin:0}
   .filtros-lateral .btn,.filtros-lateral a.btn{width:100%;text-align:center}
-  .filtros-lateral .uf-checks{display:grid;grid-template-columns:1fr;gap:6px}
-  .filtros-lateral .uf-checks label{display:flex;gap:5px;align-items:center;
+  /* base solta (não presa a .filtros-lateral) -- pedido do usuário: o
+     mesmo grid de checkboxes de UF passou a aparecer também no modal de
+     exportação, fora da barra lateral de filtros. .filtros-lateral
+     .uf-checks (mais específico) continua valendo lá sem mudar nada. */
+  .uf-checks{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .uf-checks label{display:flex;gap:5px;align-items:center;
     font-size:12px;color:var(--txt);margin:0;cursor:pointer;
     border:1px solid var(--line);border-radius:6px;padding:5px 7px;background:var(--panel2)}
-  .filtros-lateral .uf-checks label:has(input:checked){border-color:var(--accent);color:var(--accent)}
-  .filtros-lateral .uf-checks input{width:auto;flex-shrink:0;margin:0}
+  .uf-checks label:has(input:checked){border-color:var(--accent);color:var(--accent)}
+  .uf-checks input{width:auto;flex-shrink:0;margin:0}
+  .filtros-lateral .uf-checks{grid-template-columns:1fr}
   .editais-principal{min-width:0}
   /* Busca por item: no celular mora dentro do painel de Filtros. A partir
      do tablet (mesmo ponto em que a lateral de filtros vira sticky), o
@@ -3450,6 +3455,21 @@ function _aplicarFiltroModalidadesModal(){
   loadEditais();
 }
 
+// Mesma lista/ordem dos checkboxes de UF da barra lateral de filtros
+// (#f-uf-checks, ver HTML) -- duplicada aqui de propósito (não extraída
+// pra uma função/template compartilhada): a lateral já está pronta e
+// funcionando, tocar nela só pra reusar aqui é risco à toa num filtro que
+// já tem o seu próprio dono. Usada só no modal de exportação.
+const _UFS_BRASIL = [
+  ['AC','Acre'], ['AL','Alagoas'], ['AP','Amapá'], ['AM','Amazonas'], ['BA','Bahia'],
+  ['CE','Ceará'], ['DF','Distrito Federal'], ['ES','Espírito Santo'], ['GO','Goiás'],
+  ['MA','Maranhão'], ['MT','Mato Grosso'], ['MS','Mato Grosso do Sul'], ['MG','Minas Gerais'],
+  ['PA','Pará'], ['PB','Paraíba'], ['PR','Paraná'], ['PE','Pernambuco'], ['PI','Piauí'],
+  ['RJ','Rio de Janeiro'], ['RN','Rio Grande do Norte'], ['RS','Rio Grande do Sul'],
+  ['RO','Rondônia'], ['RR','Roraima'], ['SC','Santa Catarina'], ['SP','São Paulo'],
+  ['SE','Sergipe'], ['TO','Tocantins'],
+];
+
 // Pedido do usuário: botão "Exportar" (aba Editais) abre um modal
 // perguntando o formato do arquivo e como os itens pedidos pelo órgão
 // devem aparecer, em vez de baixar direto (CSV antes nunca incluía os
@@ -3485,6 +3505,10 @@ function abrirModalExportarCsv(){
         <input type="date" id="exp-csv-data-fim-de" style="width:50%">
         <input type="date" id="exp-csv-data-fim-ate" style="width:50%">
       </div>
+      <p style="font-size:12px;font-weight:600;margin:14px 0 6px">Estado (UF)</p>
+      <div class="uf-checks" id="exp-csv-uf-checks" style="max-height:170px;overflow-y:auto;padding-right:4px">
+        ${_UFS_BRASIL.map(([sigla,nome])=>`<label><input type="checkbox" value="${sigla}"> ${esc(nome)}</label>`).join('')}
+      </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn ghost discreto" onclick="fecharModal()">Cancelar</button>
         <button class="btn" onclick="_exportarCsvEditais()">Exportar</button>
@@ -3499,11 +3523,13 @@ function _exportarCsvEditais(){
   const formato = document.querySelector('input[name="exp-formato"]:checked').value;
   const dataFimDe = $('#exp-csv-data-fim-de').value;
   const dataFimAte = $('#exp-csv-data-fim-ate').value;
+  const ufs = [...document.querySelectorAll('#exp-csv-uf-checks input:checked')].map(c=>c.value);
   const qs = [];
   if(coluna) qs.push('itens=coluna');
   else if(linha) qs.push('itens=linha');
   if(dataFimDe) qs.push('data_fim_de='+dataFimDe);
   if(dataFimAte) qs.push('data_fim_ate='+dataFimAte);
+  ufs.forEach(u=>qs.push('uf='+u));
   window.location.href = `/api/export.${formato}` + (qs.length ? '?'+qs.join('&') : '');
   fecharModal();
 }

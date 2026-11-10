@@ -5983,6 +5983,7 @@ def _texto_plano_export(texto: str | None) -> str:
 
 def _linhas_export_editais(nivel: str | None, itens: str | None,
                            data_fim_de: date | None, data_fim_ate: date | None,
+                           uf: list[str] | None,
                            user: Usuario, db: Session) -> tuple[list[str], list[list]]:
     """Linhas (cabeçalho + dados) da exportação de editais -- compartilhado
     entre /api/export.csv e /api/export.xlsx, pra não duplicar a consulta e
@@ -5996,12 +5997,13 @@ def _linhas_export_editais(nivel: str | None, itens: str | None,
     as colunas do edital se repetem.
 
     `data_fim_de`/`data_fim_ate` (pedido do usuário): filtra pelo FIM do
-    recebimento de propostas (Edital.data_encerramento), não a abertura --
-    mesmo campo/mesma regra de hora exata já usada no filtro de data da
-    aba Editais (ver _condicoes_edital_comuns); não reusa aquela função
-    direto porque ela também decide uf/plataforma/modalidade/tipo/valor/
-    hoje, nada disso relevante aqui -- só os 2 parâmetros que interessam
-    pra exportação.
+    recebimento de propostas (Edital.data_encerramento), não a abertura.
+    `uf` (pedido do usuário): filtra por estado(s), igual ao filtro de UF
+    da aba Editais -- aceita mais de um (edital de qualquer UF da lista).
+    Mesmos campos/mesma regra já usada no filtro de data/UF da aba Editais
+    (ver _condicoes_edital_comuns); não reusa aquela função direto porque
+    ela também decide plataforma/modalidade/tipo/valor/hoje, nada disso
+    relevante aqui -- só os parâmetros que interessam pra exportação.
 
     Achado real (usuário testou a exportação, 2 correções pedidas):
     (1) a consulta nunca filtrava por prazo -- editais já encerrados
@@ -6028,6 +6030,8 @@ def _linhas_export_editais(nivel: str | None, itens: str | None,
         # data_fim_ate inteiro, não só até meia-noite dele (mesmo ajuste de
         # _condicoes_edital_comuns).
         q = q.where(Edital.data_encerramento < data_fim_ate + timedelta(days=1))
+    if uf:
+        q = q.where(Edital.uf.in_([u.upper() for u in uf]))
     if itens:
         # evita 1 SELECT de ItemEdital por edital dentro do loop abaixo
         # (N+1) -- mesmo achado de outras listagens (ver listar_editais).
@@ -6071,11 +6075,12 @@ def _linhas_export_editais(nivel: str | None, itens: str | None,
 def export_csv(nivel: str | None = None,
                itens: str | None = Query(None, pattern="^(coluna|linha)$"),
                data_fim_de: date | None = None, data_fim_ate: date | None = None,
+               uf: list[str] | None = Query(None),
                user: Usuario = Depends(_auth.get_current_user),
                db: Session = Depends(get_session)):
     """CSV da lista de editais (botão "Exportar" na aba Editais) -- ver
     _linhas_export_editais pros parâmetros e achados reais."""
-    cabecalho, linhas = _linhas_export_editais(nivel, itens, data_fim_de, data_fim_ate, user, db)
+    cabecalho, linhas = _linhas_export_editais(nivel, itens, data_fim_de, data_fim_ate, uf, user, db)
     buf = io.StringIO()
     # BOM UTF-8: achado real (usuário testou a exportação) -- sem ele, o
     # Excel (pt-BR) abre o CSV como ANSI/cp1252 por padrão, e todo acento
@@ -6115,6 +6120,7 @@ def _sanitizar_celula_xlsx(valor):
 def export_xlsx(nivel: str | None = None,
                 itens: str | None = Query(None, pattern="^(coluna|linha)$"),
                 data_fim_de: date | None = None, data_fim_ate: date | None = None,
+                uf: list[str] | None = Query(None),
                 user: Usuario = Depends(_auth.get_current_user),
                 db: Session = Depends(get_session)):
     """Mesmo conteúdo de export_csv, em .xlsx -- pedido do usuário (abre
@@ -6123,7 +6129,7 @@ def export_xlsx(nivel: str | None = None,
     import openpyxl
     from openpyxl.styles import Font
 
-    cabecalho, linhas = _linhas_export_editais(nivel, itens, data_fim_de, data_fim_ate, user, db)
+    cabecalho, linhas = _linhas_export_editais(nivel, itens, data_fim_de, data_fim_ate, uf, user, db)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Editais"

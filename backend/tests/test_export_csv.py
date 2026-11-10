@@ -31,10 +31,10 @@ def _usuario(db):
     return u
 
 
-def _edital_com_match(db, usuario, id_externo, orgao="Orgao Teste", data_abertura=None,
+def _edital_com_match(db, usuario, id_externo, orgao="Orgao Teste", uf="SP", data_abertura=None,
                       data_encerramento=None, nivel="medio", score=0.5, itens_compativeis=0):
     ed = Edital(fonte="PNCP", id_externo=id_externo, orgao=orgao, objeto="Aquisicao",
-                uf="SP", data_abertura=data_abertura, data_encerramento=data_encerramento)
+                uf=uf, data_abertura=data_abertura, data_encerramento=data_encerramento)
     db.add(ed)
     db.commit()
     db.add(Match(usuario_id=usuario.id, edital_id=ed.id, score=score, nivel=nivel,
@@ -78,7 +78,7 @@ def test_export_csv_nao_inclui_edital_com_prazo_encerrado():
                       data_abertura=hoje - timedelta(days=30),
                       data_encerramento=hoje - timedelta(days=5))
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Encerrado" not in conteudo
@@ -92,7 +92,7 @@ def test_export_csv_inclui_edital_ainda_recebendo_proposta():
                       data_abertura=hoje - timedelta(days=5),
                       data_encerramento=hoje + timedelta(days=10))
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Ativo" in conteudo
@@ -107,7 +107,7 @@ def test_export_csv_inclui_edital_ainda_aguardando_abertura():
     _edital_com_match(db, u, "ed-aguardando", orgao="Orgao Aguardando",
                       data_abertura=hoje + timedelta(days=3), data_encerramento=None)
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Aguardando" in conteudo
@@ -123,7 +123,7 @@ def test_export_csv_filtra_prazo_tambem_sem_data_encerramento_cadastrada():
     _edital_com_match(db, u, "ed-sem-fim-velho", orgao="Orgao Sem Fim Velho",
                       data_abertura=hoje - timedelta(days=20), data_encerramento=None)
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Sem Fim Velho" not in conteudo
@@ -141,7 +141,7 @@ def test_export_csv_sem_parametro_itens_nao_muda_colunas_de_antes():
                       quantidade=100, valor_unitario=2.5, unidade_medida="Caixa"))
     db.commit()
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     linhas = conteudo.strip().splitlines()
@@ -164,7 +164,7 @@ def test_export_csv_itens_coluna_concatena_mantendo_uma_linha_por_edital():
                       quantidade=50, valor_unitario=30.0, unidade_medida="Pacote"))
     db.commit()
 
-    resp = export_csv(nivel=None, itens="coluna", user=u, db=db)
+    resp = export_csv(nivel=None, itens="coluna", uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
     linhas = conteudo.strip().splitlines()
 
@@ -187,7 +187,7 @@ def test_export_csv_itens_linha_quebra_uma_linha_por_item():
                       quantidade=50, valor_unitario=30.0, unidade_medida="Pacote"))
     db.commit()
 
-    resp = export_csv(nivel=None, itens="linha", user=u, db=db)
+    resp = export_csv(nivel=None, itens="linha", uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
     linhas = conteudo.strip().splitlines()
 
@@ -208,7 +208,7 @@ def test_export_csv_itens_linha_edital_sem_nenhum_item_ainda_sai_uma_linha():
                       data_abertura=hoje - timedelta(days=1),
                       data_encerramento=hoje + timedelta(days=5))
 
-    resp = export_csv(nivel=None, itens="linha", user=u, db=db)
+    resp = export_csv(nivel=None, itens="linha", uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Sem Item" in conteudo
@@ -225,7 +225,7 @@ def test_export_csv_itens_ordenados_por_numero():
     db.add(ItemEdital(edital_id=ed.id, numero=2, descricao="Segundo", quantidade=1, valor_unitario=1.0))
     db.commit()
 
-    resp = export_csv(nivel=None, itens="linha", user=u, db=db)
+    resp = export_csv(nivel=None, itens="linha", uf=None, user=u, db=db)
     linhas = _ler_csv(resp).strip().splitlines()
 
     assert "Primeiro" in linhas[1]
@@ -242,7 +242,7 @@ def test_export_csv_nivel_continua_filtrando_junto_com_itens():
     _edital_com_match(db, u, "ed-fraco", orgao="Orgao Fraco", nivel="fraco",
                       data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
 
-    resp = export_csv(nivel="forte", itens="coluna", user=u, db=db)
+    resp = export_csv(nivel="forte", itens="coluna", uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Forte" in conteudo
@@ -267,7 +267,7 @@ def test_export_csv_inclui_edital_sem_match_nenhum():
     # nenhum Match criado pra este edital -- igual a um que caiu numa
     # regra de exclusão do usuário, ou um recém-coletado ainda não avaliado.
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Sem Match Nenhum" in conteudo
@@ -283,7 +283,7 @@ def test_export_csv_edital_sem_match_sai_com_nivel_vazio_e_itens_compativeis_zer
     db.add(ed)
     db.commit()
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)
     linhas = _ler_csv(resp).strip().splitlines()
 
     assert linhas[1].startswith(";;0;Orgao X;")
@@ -302,7 +302,7 @@ def test_export_csv_filtro_nivel_continua_excluindo_edital_sem_match():
     db.add(ed)
     db.commit()
 
-    resp = export_csv(nivel="forte", itens=None, user=u, db=db)
+    resp = export_csv(nivel="forte", itens=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Sem Match" not in conteudo
@@ -326,7 +326,7 @@ def test_export_csv_remove_html_e_quebra_de_linha_da_descricao_do_item():
                       quantidade=10, valor_unitario=1.0))
     db.commit()
 
-    resp = export_csv(nivel=None, itens="linha", user=u, db=db)
+    resp = export_csv(nivel=None, itens="linha", uf=None, user=u, db=db)
     linhas = _ler_csv(resp).strip().splitlines()
 
     assert len(linhas) == 2   # cabeçalho + 1 item -- nunca quebra em mais linhas
@@ -350,7 +350,7 @@ def test_export_xlsx_mesmas_linhas_do_csv():
                       quantidade=100, valor_unitario=2.5))
     db.commit()
 
-    resp = export_xlsx(nivel=None, itens="coluna", user=u, db=db)
+    resp = export_xlsx(nivel=None, itens="coluna", uf=None, user=u, db=db)
     conteudo = _ler_bytes(resp)
     wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
     ws = wb.active
@@ -377,7 +377,7 @@ def test_export_xlsx_tambem_inclui_edital_sem_match_e_filtra_prazo():
                   data_abertura=hoje - timedelta(days=30), data_encerramento=hoje - timedelta(days=5)))
     db.commit()
 
-    resp = export_xlsx(nivel=None, itens=None, user=u, db=db)
+    resp = export_xlsx(nivel=None, itens=None, uf=None, user=u, db=db)
     conteudo = _ler_bytes(resp)
     wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
     ws = wb.active
@@ -406,7 +406,7 @@ def test_export_xlsx_nao_quebra_com_caractere_de_controle_ilegal_no_objeto():
     ed.objeto = objeto_com_controle
     db.commit()
 
-    resp = export_xlsx(nivel=None, itens="coluna", user=u, db=db)   # não pode levantar IllegalCharacterError
+    resp = export_xlsx(nivel=None, itens="coluna", uf=None, user=u, db=db)   # não pode levantar IllegalCharacterError
     conteudo = _ler_bytes(resp)
     wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
     ws = wb.active
@@ -428,7 +428,7 @@ def test_export_csv_filtra_por_data_fim_de():
                       data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
 
     corte = (hoje + timedelta(days=10)).date()
-    resp = export_csv(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Fecha Perto" not in conteudo
@@ -445,7 +445,7 @@ def test_export_csv_filtra_por_data_fim_ate():
                       data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
 
     corte = (hoje + timedelta(days=10)).date()
-    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=corte, user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=corte, uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Fecha Perto" in conteudo
@@ -464,7 +464,7 @@ def test_export_csv_data_fim_ate_inclui_o_dia_inteiro():
     _edital_com_match(db, u, "ed-fecha-tarde", orgao="Orgao Fecha Tarde",
                       data_abertura=hoje - timedelta(days=1), data_encerramento=fecha_as_23h)
 
-    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=fecha_as_23h.date(), user=u, db=db)
+    resp = export_csv(nivel=None, itens=None, data_fim_de=None, data_fim_ate=fecha_as_23h.date(), uf=None, user=u, db=db)
     conteudo = _ler_csv(resp)
 
     assert "Orgao Fecha Tarde" in conteudo
@@ -477,7 +477,7 @@ def test_export_csv_sem_filtro_de_data_exporta_tudo_como_antes():
     _edital_com_match(db, u, "ed1", orgao="Orgao Qualquer",
                       data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=100))
 
-    resp = export_csv(nivel=None, itens=None, user=u, db=db)   # sem passar data_fim_de/ate
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)   # sem passar data_fim_de/ate
     conteudo = _ler_csv(resp)
 
     assert "Orgao Qualquer" in conteudo
@@ -496,7 +496,7 @@ def test_export_xlsx_tambem_respeita_filtro_de_data():
                       data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=20))
 
     corte = (hoje + timedelta(days=10)).date()
-    resp = export_xlsx(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, user=u, db=db)
+    resp = export_xlsx(nivel=None, itens=None, data_fim_de=corte, data_fim_ate=None, uf=None, user=u, db=db)
     conteudo = _ler_bytes(resp)
     wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
     ws = wb.active
@@ -504,3 +504,91 @@ def test_export_xlsx_tambem_respeita_filtro_de_data():
 
     assert "Orgao Fecha Longe" in orgaos
     assert "Orgao Fecha Perto" not in orgaos
+
+
+# --------- filtro por estado (UF) (pedido do usuário) --------- #
+
+def test_export_csv_filtra_por_uf():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-sp", orgao="Orgao de SP", uf="SP",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    _edital_com_match(db, u, "ed-rj", orgao="Orgao do RJ", uf="RJ",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+
+    resp = export_csv(nivel=None, itens=None, uf=["SP"], user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao de SP" in conteudo
+    assert "Orgao do RJ" not in conteudo
+
+
+def test_export_csv_filtra_por_mais_de_uma_uf():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-sp", orgao="Orgao de SP", uf="SP",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    _edital_com_match(db, u, "ed-rj", orgao="Orgao do RJ", uf="RJ",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    _edital_com_match(db, u, "ed-mg", orgao="Orgao de MG", uf="MG",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+
+    resp = export_csv(nivel=None, itens=None, uf=["SP", "RJ"], user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao de SP" in conteudo
+    assert "Orgao do RJ" in conteudo
+    assert "Orgao de MG" not in conteudo
+
+
+def test_export_csv_uf_e_insensivel_a_caixa():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-sp", orgao="Orgao de SP", uf="SP",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+
+    resp = export_csv(nivel=None, itens=None, uf=["sp"], user=u, db=db)
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao de SP" in conteudo
+
+
+def test_export_csv_sem_filtro_de_uf_exporta_todas():
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-sp", orgao="Orgao de SP", uf="SP",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    _edital_com_match(db, u, "ed-rj", orgao="Orgao do RJ", uf="RJ",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+
+    resp = export_csv(nivel=None, itens=None, uf=None, user=u, db=db)   # sem filtrar por uf
+    conteudo = _ler_csv(resp)
+
+    assert "Orgao de SP" in conteudo
+    assert "Orgao do RJ" in conteudo
+
+
+def test_export_xlsx_tambem_respeita_filtro_de_uf():
+    import openpyxl
+    import io as _io
+
+    db = _sessao()
+    u = _usuario(db)
+    hoje = datetime.now()
+    _edital_com_match(db, u, "ed-sp", orgao="Orgao de SP", uf="SP",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+    _edital_com_match(db, u, "ed-rj", orgao="Orgao do RJ", uf="RJ",
+                      data_abertura=hoje - timedelta(days=1), data_encerramento=hoje + timedelta(days=5))
+
+    resp = export_xlsx(nivel=None, itens=None, uf=["SP"], user=u, db=db)
+    conteudo = _ler_bytes(resp)
+    wb = openpyxl.load_workbook(_io.BytesIO(conteudo))
+    ws = wb.active
+    orgaos = {row[3].value for row in ws.iter_rows(min_row=2)}
+
+    assert "Orgao de SP" in orgaos
+    assert "Orgao do RJ" not in orgaos
